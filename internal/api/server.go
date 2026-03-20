@@ -16,18 +16,33 @@ import (
 )
 
 type Server struct {
-	auth        *services.AuthService
-	sync        *services.SyncService
-	authLimiter *security.RateLimiter
-	mux         *http.ServeMux
+	auth           *services.AuthService
+	sync           *services.SyncService
+	authLimiter    *security.RateLimiter
+	allowedOrigins map[string]struct{}
+	mux            *http.ServeMux
 }
 
-func NewServer(auth *services.AuthService, sync *services.SyncService) http.Handler {
+func NewServer(
+	auth *services.AuthService,
+	sync *services.SyncService,
+	allowedOrigins []string,
+) http.Handler {
+	originSet := make(map[string]struct{}, len(allowedOrigins))
+	for _, origin := range allowedOrigins {
+		trimmed := strings.TrimSpace(origin)
+		if trimmed == "" {
+			continue
+		}
+		originSet[trimmed] = struct{}{}
+	}
+
 	server := &Server{
-		auth:        auth,
-		sync:        sync,
-		authLimiter: security.NewRateLimiter(10, time.Minute),
-		mux:         http.NewServeMux(),
+		auth:           auth,
+		sync:           sync,
+		authLimiter:    security.NewRateLimiter(10, time.Minute),
+		allowedOrigins: originSet,
+		mux:            http.NewServeMux(),
 	}
 	server.routes()
 	return server
@@ -52,6 +67,23 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Referrer-Policy", "no-referrer")
 	writer.Header().Set("X-Frame-Options", "DENY")
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
+
+	if origin := request.Header.Get("Origin"); origin != "" {
+		writer.Header().Add("Vary", "Origin")
+		if _, ok := s.allowedOrigins[origin]; ok {
+			writer.Header().Set("Access-Control-Allow-Origin", origin)
+			writer.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		} else if request.Method == http.MethodOptions {
+			writeError(writer, http.StatusForbidden, "origin_not_allowed")
+			return
+		}
+	}
+
+	if request.Method == http.MethodOptions {
+		writer.WriteHeader(http.StatusNoContent)
+		return
+	}
 	s.mux.ServeHTTP(writer, request)
 }
 

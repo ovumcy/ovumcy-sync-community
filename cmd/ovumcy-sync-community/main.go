@@ -36,7 +36,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              cfg.BindAddr,
-		Handler:           api.NewServer(authService, syncService),
+		Handler:           api.NewServer(authService, syncService, cfg.AllowedOrigins),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,

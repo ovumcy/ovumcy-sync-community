@@ -26,6 +26,7 @@ Environment variables:
 - `DB_PATH` default `./data/ovumcy-sync-community.sqlite`
 - `SESSION_TTL` default `720h`
 - `MAX_DEVICES` default `5`
+- `ALLOWED_ORIGINS` comma-separated allowlist for browser clients; empty by default
 
 ## Run locally
 
@@ -39,4 +40,3 @@ go run ./cmd/ovumcy-sync-community
 docker build -t ovumcy-sync-community .
 docker run --rm -p 8080:8080 -v $(pwd)/data:/data ovumcy-sync-community
 ```
-

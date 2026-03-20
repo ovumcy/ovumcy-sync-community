@@ -307,7 +307,49 @@ func TestServerRejectsTrailingJSONGarbage(t *testing.T) {
 	}
 }
 
-func newTestServer(t *testing.T) http.Handler {
+func TestServerAllowsConfiguredOriginPreflight(t *testing.T) {
+	handler := newTestServer(t, "http://127.0.0.1:4173")
+
+	request := httptest.NewRequest(http.MethodOptions, "/sync/capabilities", nil)
+	request.Header.Set("Origin", "http://127.0.0.1:4173")
+	request.Header.Set("Access-Control-Request-Method", http.MethodGet)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("unexpected preflight status %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	if recorder.Header().Get("Access-Control-Allow-Origin") != "http://127.0.0.1:4173" {
+		t.Fatalf("expected allowed origin header, got %q", recorder.Header().Get("Access-Control-Allow-Origin"))
+	}
+	if recorder.Header().Get("Access-Control-Allow-Headers") == "" {
+		t.Fatal("expected allow headers on preflight response")
+	}
+}
+
+func TestServerRejectsUnknownOriginPreflight(t *testing.T) {
+	handler := newTestServer(t, "http://127.0.0.1:4173")
+
+	request := httptest.NewRequest(http.MethodOptions, "/sync/capabilities", nil)
+	request.Header.Set("Origin", "http://malicious.invalid")
+	request.Header.Set("Access-Control-Request-Method", http.MethodGet)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("unexpected preflight status %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var payload map[string]string
+	decodeResponse(t, recorder.Body.Bytes(), &payload)
+	if payload["error"] != "origin_not_allowed" {
+		t.Fatalf("unexpected preflight payload: %#v", payload)
+	}
+}
+
+func newTestServer(t *testing.T, allowedOrigins ...string) http.Handler {
 	t.Helper()
 
 	store, err := db.Open(t.TempDir() + "/test.sqlite")
@@ -325,6 +367,7 @@ func newTestServer(t *testing.T) http.Handler {
 	return NewServer(
 		services.NewAuthService(store, 24*time.Hour),
 		services.NewSyncService(store, 5),
+		allowedOrigins,
 	)
 }
 

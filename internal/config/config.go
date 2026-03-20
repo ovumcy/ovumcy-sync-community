@@ -4,14 +4,16 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
 type Config struct {
-	BindAddr   string
-	DBPath     string
-	SessionTTL time.Duration
-	MaxDevices int
+	BindAddr       string
+	DBPath         string
+	SessionTTL     time.Duration
+	MaxDevices     int
+	AllowedOrigins []string
 }
 
 func Load() (Config, error) {
@@ -26,10 +28,11 @@ func Load() (Config, error) {
 	}
 
 	return Config{
-		BindAddr:   stringFromEnv("BIND_ADDR", ":8080"),
-		DBPath:     stringFromEnv("DB_PATH", "./data/ovumcy-sync-community.sqlite"),
-		SessionTTL: sessionTTL,
-		MaxDevices: maxDevices,
+		BindAddr:       stringFromEnv("BIND_ADDR", ":8080"),
+		DBPath:         stringFromEnv("DB_PATH", "./data/ovumcy-sync-community.sqlite"),
+		SessionTTL:     sessionTTL,
+		MaxDevices:     maxDevices,
+		AllowedOrigins: csvListFromEnv("ALLOWED_ORIGINS"),
 	}, nil
 }
 
@@ -68,4 +71,27 @@ func intFromEnv(name string, fallback int) (int, error) {
 		return 0, fmt.Errorf("%s must be positive", name)
 	}
 	return parsed, nil
+}
+
+func csvListFromEnv(name string) []string {
+	value := os.Getenv(name)
+	if value == "" {
+		return nil
+	}
+
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		result = append(result, trimmed)
+	}
+
+	if len(result) == 0 {
+		return nil
+	}
+
+	return result
 }
