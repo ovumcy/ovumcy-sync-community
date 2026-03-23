@@ -258,3 +258,44 @@ func TestSyncServiceRejectsOversizedBlob(t *testing.T) {
 		t.Fatalf("expected ErrInvalidBlob for oversized payload, got %v", err)
 	}
 }
+
+func TestSyncServiceRejectsInvalidDeviceAndMissingReads(t *testing.T) {
+	store := openTestStore(t)
+	auth := NewAuthService(store, 24*time.Hour)
+	syncService := NewSyncService(store, SyncOptions{MaxDevices: 2, MaxBlobBytes: 16 << 20})
+
+	result, err := auth.Register(
+		context.Background(),
+		"owner@example.com",
+		"correct horse battery staple",
+	)
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	if _, err := syncService.AttachDevice(context.Background(), result.AccountID, "short", "P"); err != ErrInvalidDevice {
+		t.Fatalf("expected ErrInvalidDevice, got %v", err)
+	}
+	if _, err := syncService.GetBlob(context.Background(), result.AccountID); err != ErrBlobNotFound {
+		t.Fatalf("expected ErrBlobNotFound, got %v", err)
+	}
+	if _, err := syncService.GetRecoveryKeyPackage(context.Background(), result.AccountID); err != ErrRecoveryPackageNotFound {
+		t.Fatalf("expected ErrRecoveryPackageNotFound, got %v", err)
+	}
+}
+
+func TestSyncServiceManagedInactiveAccountDisablesSync(t *testing.T) {
+	syncService := NewSyncService(nil, SyncOptions{MaxDevices: 5, MaxBlobBytes: 8 << 20})
+
+	capabilities := syncService.CapabilitiesForAccount(models.Account{
+		ID:            "managedacct1234",
+		Mode:          "managed",
+		PremiumActive: false,
+	})
+	if capabilities.Mode != "managed" {
+		t.Fatalf("unexpected managed mode: %#v", capabilities)
+	}
+	if capabilities.SyncEnabled || capabilities.PremiumActive {
+		t.Fatalf("expected inactive managed capabilities, got %#v", capabilities)
+	}
+}

@@ -2,6 +2,8 @@
 /data/
 /bin/
 /dist/
+/coverage
+/coverage.out
 .agents/
 AGENTS.md
 AI_CONTEXT.md

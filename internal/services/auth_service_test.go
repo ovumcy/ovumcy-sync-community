@@ -131,10 +131,44 @@ func TestAuthServiceRevokesSession(t *testing.T) {
 	}
 }
 
+func TestAuthServiceRejectsEmptyAndExpiredSession(t *testing.T) {
+	store := openTestStore(t)
+	service := NewAuthService(store, time.Hour)
+
+	if _, err := service.Authenticate(context.Background(), ""); err != ErrUnauthorized {
+		t.Fatalf("expected ErrUnauthorized for empty token, got %v", err)
+	}
+
+	result, err := service.Register(
+		context.Background(),
+		"owner@example.com",
+		"correct horse battery staple",
+	)
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	service.now = func() time.Time {
+		return result.SessionExpiresAt.Add(time.Second)
+	}
+	if _, err := service.Authenticate(context.Background(), result.SessionToken); err != ErrUnauthorized {
+		t.Fatalf("expected ErrUnauthorized for expired session, got %v", err)
+	}
+}
+
+func TestAuthServiceCreateSessionForMissingAccountIsUnauthorized(t *testing.T) {
+	store := openTestStore(t)
+	service := NewAuthService(store, 24*time.Hour)
+
+	if _, err := service.CreateSessionForAccount(context.Background(), "missing-account"); err != ErrUnauthorized {
+		t.Fatalf("expected ErrUnauthorized for missing account, got %v", err)
+	}
+}
+
 func openTestStore(t *testing.T) *db.Store {
 	t.Helper()
 
-	store, err := db.Open(t.TempDir() + "/test.sqlite")
+	store, err := db.Open(":memory:")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

@@ -9,17 +9,7 @@ import (
 )
 
 func TestMigrationsBootstrapAndRepositories(t *testing.T) {
-	store, err := Open(t.TempDir() + "/bootstrap.sqlite")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
-
-	if err := store.ApplyMigrations(context.Background()); err != nil {
-		t.Fatalf("apply migrations: %v", err)
-	}
+	store := openTestStore(t)
 
 	now := time.Now().UTC()
 	account, err := store.CreateAccount(context.Background(), models.Account{
@@ -96,17 +86,7 @@ func TestMigrationsBootstrapAndRepositories(t *testing.T) {
 }
 
 func TestRepositoriesDoNotShareDeviceOwnershipAcrossAccounts(t *testing.T) {
-	store, err := Open(t.TempDir() + "/isolation.sqlite")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
-
-	if err := store.ApplyMigrations(context.Background()); err != nil {
-		t.Fatalf("apply migrations: %v", err)
-	}
+	store := openTestStore(t)
 
 	now := time.Now().UTC()
 	for _, accountID := range []string{"account-1", "account-2"} {
