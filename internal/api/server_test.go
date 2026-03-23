@@ -581,6 +581,82 @@ func TestServerHealthEndpoint(t *testing.T) {
 	}
 }
 
+func TestServerMetricsEndpointReturnsNotFoundWhenDisabled(t *testing.T) {
+	handler := newTestServer(t)
+
+	response := performJSONRequest(
+		t,
+		handler,
+		http.MethodGet,
+		"/metrics",
+		nil,
+		"",
+		http.StatusNotFound,
+	)
+
+	var payload map[string]string
+	decodeResponse(t, response.Body.Bytes(), &payload)
+	if payload["error"] != "not_found" {
+		t.Fatalf("unexpected disabled metrics payload: %#v", payload)
+	}
+}
+
+func TestServerMetricsEndpointRequiresBearerTokenWhenConfigured(t *testing.T) {
+	handler := newTestServerWithOptions(t, serverTestOptions{
+		enableMetrics:      true,
+		metricsBearerToken: "metrics-secret",
+	})
+
+	response := performJSONRequest(
+		t,
+		handler,
+		http.MethodGet,
+		"/metrics",
+		nil,
+		"",
+		http.StatusUnauthorized,
+	)
+
+	var payload map[string]string
+	decodeResponse(t, response.Body.Bytes(), &payload)
+	if payload["error"] != "unauthorized" {
+		t.Fatalf("unexpected metrics auth payload: %#v", payload)
+	}
+}
+
+func TestServerMetricsEndpointReturnsPrometheusPayload(t *testing.T) {
+	handler := newTestServerWithOptions(t, serverTestOptions{
+		enableMetrics:      true,
+		metricsBearerToken: "metrics-secret",
+	})
+
+	performJSONRequest(
+		t,
+		handler,
+		http.MethodGet,
+		"/healthz",
+		nil,
+		"",
+		http.StatusOK,
+	)
+
+	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	request.Header.Set("Authorization", "Bearer metrics-secret")
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("unexpected metrics status %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Header().Get("Content-Type"), "text/plain") {
+		t.Fatalf("unexpected metrics content type %q", recorder.Header().Get("Content-Type"))
+	}
+	if !strings.Contains(recorder.Body.String(), "ovumcy_sync_community_http_requests_total") {
+		t.Fatal("expected sync community metrics payload")
+	}
+}
+
 func TestServerReadinessEndpointReturnsServiceUnavailableWhenProbeFails(t *testing.T) {
 	handler := newTestServerWithOptions(t, serverTestOptions{
 		readinessCheck: func(context.Context) error {
@@ -663,6 +739,8 @@ type serverTestOptions struct {
 	readinessCheck     func(context.Context) error
 	authRateLimitCount int
 	trustedProxyCIDRs  []string
+	enableMetrics      bool
+	metricsBearerToken string
 	disableManaged     bool
 }
 
@@ -707,6 +785,8 @@ func newTestServerWithOptions(t *testing.T, options serverTestOptions) http.Hand
 		services.NewManagedBridgeService(store, services.NewAuthService(store, 24*time.Hour)),
 		ServerOptions{
 			ManagedBridgeToken:  managedBridgeToken,
+			MetricsEnabled:      options.enableMetrics,
+			MetricsBearerToken:  options.metricsBearerToken,
 			AllowedOrigins:      options.allowedOrigins,
 			AuthRateLimitCount:  authRateLimitCount,
 			AuthRateLimitWindow: time.Minute,

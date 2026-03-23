@@ -30,6 +30,7 @@ Core tracking in the Ovumcy app still remains local-first. This server is for op
 3. Expose the service only through HTTPS on the public internet.
 4. Keep `MANAGED_BRIDGE_TOKEN` empty unless you operate a separate trusted managed-auth service.
 5. Set `TRUSTED_PROXY_CIDRS` if you want auth rate limiting to use real client IPs from a trusted reverse proxy.
+6. Keep `/metrics` internal or protect it with `METRICS_BEARER_TOKEN` if you enable metrics.
 
 ## Example Reverse Proxy Pattern
 
@@ -47,6 +48,8 @@ This service itself does not terminate TLS. Production deployments should not ex
 - `MAX_BLOB_BYTES=16777216`
 - `AUTH_RATE_LIMIT_COUNT=10`
 - `AUTH_RATE_LIMIT_WINDOW=1m`
+- `METRICS_ENABLED=false`
+- `METRICS_BEARER_TOKEN=` optional bearer token for `GET /metrics`
 - `TRUSTED_PROXY_CIDRS=` set this to your reverse-proxy IP or CIDR when you want forwarded client IPs to participate in auth rate limiting
 
 Adjust limits only when you understand the tradeoff between usability and abuse resistance.
@@ -62,6 +65,23 @@ Adjust limits only when you understand the tradeoff between usability and abuse 
 7. Prepare the device and save the recovery phrase somewhere safe.
 8. Create an account on your own server or sign in to an existing one.
 9. Run encrypted sync from the app.
+
+## Optional Caddy Compose Example
+
+The repository also includes `docker-compose.caddy.yml` and `deploy/caddy/Caddyfile` as a reference edge setup.
+
+Use it like this:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.caddy.yml run --rm ovumcy-sync-community migrate
+docker compose -f docker-compose.yml -f docker-compose.caddy.yml up --build
+```
+
+The example is intentionally conservative:
+
+- it reverse-proxies the sync service;
+- it blocks `/metrics` at the public edge by default;
+- it is still only a baseline and must be adapted to your real public hostname and TLS policy.
 
 ## What The Operator Can See
 
@@ -92,6 +112,8 @@ At minimum:
 1. stop writes or use a consistent volume snapshot;
 2. back up the `/data` volume;
 3. protect backups as sensitive operational artifacts.
+
+See [backup-restore.md](backup-restore.md) for a simple restore drill and operator checklist.
 
 ## Managed Bridge Note
 

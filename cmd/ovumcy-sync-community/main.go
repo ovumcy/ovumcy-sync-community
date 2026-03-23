@@ -94,6 +94,8 @@ func runServe(cfg config.Config) error {
 			managedBridgeService,
 			api.ServerOptions{
 				ManagedBridgeToken:  cfg.ManagedBridgeToken,
+				MetricsEnabled:      cfg.MetricsEnabled,
+				MetricsBearerToken:  cfg.MetricsBearerToken,
 				AllowedOrigins:      cfg.AllowedOrigins,
 				AuthRateLimitCount:  cfg.AuthRateLimitCount,
 				AuthRateLimitWindow: cfg.AuthRateLimitWindow,

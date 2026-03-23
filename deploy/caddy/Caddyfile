@@ -1,0 +1,8 @@
+{$SYNC_SITE_ADDRESS} {
+	@metrics path /metrics
+	respond @metrics 403 {
+		body "metrics_not_exposed"
+	}
+
+	reverse_proxy ovumcy-sync-community:8080
+}

@@ -99,6 +99,9 @@ jobs:
       - name: Docker Compose config
         run: docker compose config
 
+      - name: Docker Compose config with Caddy example
+        run: docker compose -f docker-compose.yml -f docker-compose.caddy.yml config
+
       - name: Docker build
         run: docker build -t ovumcy-sync-community-ci:${{ github.sha }} .
 

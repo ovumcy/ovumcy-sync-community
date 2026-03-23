@@ -95,6 +95,8 @@ Environment variables:
 - `MAX_BLOB_BYTES` default `16777216` (16 MiB ciphertext cap)
 - `AUTH_RATE_LIMIT_COUNT` default `10`
 - `AUTH_RATE_LIMIT_WINDOW` default `1m`
+- `METRICS_ENABLED` default `false`; enables `GET /metrics`
+- `METRICS_BEARER_TOKEN` optional bearer token for `GET /metrics`; requires `METRICS_ENABLED=true`
 - `MANAGED_BRIDGE_TOKEN` optional bearer token that enables the machine-to-machine managed bridge endpoint
 - `ALLOWED_ORIGINS` comma-separated allowlist for browser clients; empty by default
 - `TRUSTED_PROXY_CIDRS` optional comma-separated list of trusted reverse-proxy IPs or CIDRs whose forwarded client IP headers may be used for auth rate limiting
@@ -103,6 +105,7 @@ Runtime endpoints:
 
 - `GET /healthz` liveness
 - `GET /readyz` readiness
+- `GET /metrics` optional Prometheus endpoint for operators
 - `POST /auth/register`
 - `POST /auth/login`
 - `DELETE /auth/session`
@@ -137,6 +140,15 @@ docker compose up --build
 
 The compose baseline binds the service to `http://127.0.0.1:8080` and persists SQLite data under `./data`.
 
+For an optional reverse-proxy example with Caddy:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.caddy.yml run --rm ovumcy-sync-community migrate
+docker compose -f docker-compose.yml -f docker-compose.caddy.yml up --build
+```
+
+The bundled Caddy example blocks `/metrics` at the public edge by default. If you enable metrics, prefer scraping the backend container directly from a private network or protect the endpoint with `METRICS_BEARER_TOKEN`.
+
 To use it with the Ovumcy app:
 
 1. start the server with Docker Compose or your own deployment stack;
@@ -150,10 +162,11 @@ For a production-style self-hosted setup:
 - put this service behind HTTPS;
 - persist `/data`;
 - set `TRUSTED_PROXY_CIDRS` to your trusted reverse-proxy addresses if you want auth rate limiting to distinguish real client IPs behind the proxy;
+- enable `METRICS_ENABLED` only when you really need operator metrics, and keep `/metrics` internal or protect it with `METRICS_BEARER_TOKEN`;
 - keep `MANAGED_BRIDGE_TOKEN` unset unless you really run a separate trusted managed-auth service;
 - set `ALLOWED_ORIGINS` only when browser clients need direct CORS access.
 
-See [docs/self-hosting.md](docs/self-hosting.md) for a minimal reverse-proxy, TLS, and backup checklist.
+See [docs/self-hosting.md](docs/self-hosting.md) for a minimal reverse-proxy, TLS, and backup checklist, and [docs/backup-restore.md](docs/backup-restore.md) for an operator restore drill.
 
 ## Advanced: Managed Bridge
 

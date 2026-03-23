@@ -96,6 +96,20 @@ func TestValidateRejectsInvalidFields(t *testing.T) {
 			},
 			want: "AUTH_RATE_LIMIT_WINDOW",
 		},
+		{
+			name: "metrics token without metrics enabled",
+			cfg: Config{
+				BindAddr:            ":8080",
+				DBPath:              "./data.sqlite",
+				SessionTTL:          time.Hour,
+				MaxDevices:          1,
+				MaxBlobBytes:        1,
+				AuthRateLimitCount:  1,
+				AuthRateLimitWindow: time.Minute,
+				MetricsBearerToken:  "secret",
+			},
+			want: "METRICS_BEARER_TOKEN",
+		},
 	}
 
 	for _, test := range tests {
@@ -126,12 +140,18 @@ func TestValidateAcceptsValidConfig(t *testing.T) {
 
 func TestEnvHelperParsers(t *testing.T) {
 	t.Setenv("STRING_ENV", "configured")
+	t.Setenv("BOOL_ENV", "true")
 	t.Setenv("DURATION_ENV", "2h")
 	t.Setenv("INT_ENV", "42")
 	t.Setenv("CSV_ENV", " https://a.example , ,https://b.example ")
 
 	if got := stringFromEnv("STRING_ENV", "fallback"); got != "configured" {
 		t.Fatalf("unexpected string env %q", got)
+	}
+
+	enabled, err := boolFromEnv("BOOL_ENV", false)
+	if err != nil || !enabled {
+		t.Fatalf("unexpected bool env result %t, err=%v", enabled, err)
 	}
 
 	duration, err := durationFromEnv("DURATION_ENV", time.Minute)
@@ -162,12 +182,18 @@ func TestEnvHelperParsers(t *testing.T) {
 
 func TestEnvHelperParsersUseFallbacksAndRejectInvalidInput(t *testing.T) {
 	t.Setenv("STRING_ENV", "")
+	t.Setenv("BOOL_ENV", "")
 	t.Setenv("DURATION_ENV", "")
 	t.Setenv("INT_ENV", "")
 	t.Setenv("CSV_ENV", " , ")
 
 	if got := stringFromEnv("STRING_ENV", "fallback"); got != "fallback" {
 		t.Fatalf("unexpected string fallback %q", got)
+	}
+
+	enabled, err := boolFromEnv("BOOL_ENV", true)
+	if err != nil || !enabled {
+		t.Fatalf("unexpected bool fallback result %t, err=%v", enabled, err)
 	}
 
 	duration, err := durationFromEnv("DURATION_ENV", time.Minute)
@@ -187,6 +213,11 @@ func TestEnvHelperParsersUseFallbacksAndRejectInvalidInput(t *testing.T) {
 	t.Setenv("DURATION_ENV", "nope")
 	if _, err := durationFromEnv("DURATION_ENV", time.Minute); err == nil || !strings.Contains(err.Error(), "DURATION_ENV") {
 		t.Fatalf("expected duration parse error, got %v", err)
+	}
+
+	t.Setenv("BOOL_ENV", "nope")
+	if _, err := boolFromEnv("BOOL_ENV", true); err == nil || !strings.Contains(err.Error(), "BOOL_ENV") {
+		t.Fatalf("expected bool parse error, got %v", err)
 	}
 
 	t.Setenv("INT_ENV", "0")

@@ -23,6 +23,8 @@ type Server struct {
 	sync                *services.SyncService
 	managedBridge       *services.ManagedBridgeService
 	managedBridgeToken  string
+	metrics             *Metrics
+	metricsBearerToken  string
 	authLimiter         *security.RateLimiter
 	allowedOrigins      map[string]struct{}
 	trustedProxyCIDRs   []netip.Prefix
@@ -33,6 +35,8 @@ type Server struct {
 
 type ServerOptions struct {
 	ManagedBridgeToken  string
+	MetricsEnabled      bool
+	MetricsBearerToken  string
 	AllowedOrigins      []string
 	AuthRateLimitCount  int
 	AuthRateLimitWindow time.Duration
@@ -56,11 +60,18 @@ func NewServer(
 		originSet[trimmed] = struct{}{}
 	}
 
+	var metrics *Metrics
+	if options.MetricsEnabled {
+		metrics = NewMetrics()
+	}
+
 	server := &Server{
 		auth:                auth,
 		sync:                sync,
 		managedBridge:       managedBridge,
 		managedBridgeToken:  strings.TrimSpace(options.ManagedBridgeToken),
+		metrics:             metrics,
+		metricsBearerToken:  strings.TrimSpace(options.MetricsBearerToken),
 		authLimiter:         security.NewRateLimiter(options.AuthRateLimitCount, options.AuthRateLimitWindow),
 		allowedOrigins:      originSet,
 		trustedProxyCIDRs:   parseTrustedProxyCIDRs(options.TrustedProxyCIDRs),
@@ -73,22 +84,30 @@ func NewServer(
 }
 
 func (s *Server) routes() {
-	s.mux.HandleFunc("GET /healthz", s.handleHealth)
-	s.mux.HandleFunc("GET /readyz", s.handleReady)
-	s.mux.HandleFunc("POST /auth/register", s.handleRegister)
-	s.mux.HandleFunc("POST /auth/login", s.handleLogin)
-	s.mux.HandleFunc("DELETE /auth/session", s.handleLogout)
-	s.mux.HandleFunc("POST /managed/session", s.withManagedBridge(s.handleManagedSession))
-	s.mux.HandleFunc("GET /sync/capabilities", s.withAuth(s.handleCapabilities))
-	s.mux.HandleFunc("POST /sync/devices", s.withAuth(s.handleAttachDevice))
-	s.mux.HandleFunc("GET /sync/recovery-key", s.withAuth(s.handleGetRecoveryKey))
-	s.mux.HandleFunc("PUT /sync/recovery-key", s.withAuth(s.handlePutRecoveryKey))
-	s.mux.HandleFunc("GET /sync/blob", s.withAuth(s.handleGetBlob))
-	s.mux.HandleFunc("PUT /sync/blob", s.withAuth(s.handlePutBlob))
+	s.handleRoute("GET /healthz", "healthz", http.HandlerFunc(s.handleHealth))
+	s.handleRoute("GET /readyz", "readyz", http.HandlerFunc(s.handleReady))
+	s.handleRoute("GET /metrics", "", http.HandlerFunc(s.handleMetrics))
+	s.handleRoute("POST /auth/register", "auth_register", http.HandlerFunc(s.handleRegister))
+	s.handleRoute("POST /auth/login", "auth_login", http.HandlerFunc(s.handleLogin))
+	s.handleRoute("DELETE /auth/session", "auth_logout", http.HandlerFunc(s.handleLogout))
+	s.handleRoute("POST /managed/session", "managed_session", http.HandlerFunc(s.withManagedBridge(s.handleManagedSession)))
+	s.handleRoute("GET /sync/capabilities", "sync_capabilities", http.HandlerFunc(s.withAuth(s.handleCapabilities)))
+	s.handleRoute("POST /sync/devices", "sync_devices", http.HandlerFunc(s.withAuth(s.handleAttachDevice)))
+	s.handleRoute("GET /sync/recovery-key", "sync_recovery_key_get", http.HandlerFunc(s.withAuth(s.handleGetRecoveryKey)))
+	s.handleRoute("PUT /sync/recovery-key", "sync_recovery_key_put", http.HandlerFunc(s.withAuth(s.handlePutRecoveryKey)))
+	s.handleRoute("GET /sync/blob", "sync_blob_get", http.HandlerFunc(s.withAuth(s.handleGetBlob)))
+	s.handleRoute("PUT /sync/blob", "sync_blob_put", http.HandlerFunc(s.withAuth(s.handlePutBlob)))
+}
+
+func (s *Server) handleRoute(pattern string, metricsRoute string, handler http.Handler) {
+	if s.metrics != nil && metricsRoute != "" {
+		handler = s.metrics.Instrument(metricsRoute, handler)
+	}
+
+	s.mux.Handle(pattern, handler)
 }
 
 func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
-	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 	writer.Header().Set("Permissions-Policy", "accelerometer=(), camera=(), geolocation=(), microphone=(), payment=(), usb=()")
@@ -128,6 +147,23 @@ func (s *Server) handleReady(writer http.ResponseWriter, request *http.Request) 
 	}
 
 	writeJSON(writer, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleMetrics(writer http.ResponseWriter, request *http.Request) {
+	if s.metrics == nil {
+		writeError(writer, http.StatusNotFound, "not_found")
+		return
+	}
+
+	if s.metricsBearerToken != "" {
+		token := bearerTokenFromRequest(request)
+		if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(s.metricsBearerToken)) != 1 {
+			writeError(writer, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+	}
+
+	s.metrics.Handler().ServeHTTP(writer, request)
 }
 
 func (s *Server) handleRegister(writer http.ResponseWriter, request *http.Request) {
@@ -516,6 +552,7 @@ func writeError(writer http.ResponseWriter, status int, key string) {
 }
 
 func writeJSON(writer http.ResponseWriter, status int, payload any) {
+	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(payload)
 }

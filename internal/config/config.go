@@ -18,6 +18,8 @@ type Config struct {
 	AuthRateLimitCount  int
 	AuthRateLimitWindow time.Duration
 	ManagedBridgeToken  string
+	MetricsEnabled      bool
+	MetricsBearerToken  string
 	AllowedOrigins      []string
 	TrustedProxyCIDRs   []string
 }
@@ -48,6 +50,11 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	metricsEnabled, err := boolFromEnv("METRICS_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
 		BindAddr:            stringFromEnv("BIND_ADDR", ":8080"),
 		DBPath:              stringFromEnv("DB_PATH", "./data/ovumcy-sync-community.sqlite"),
@@ -57,6 +64,8 @@ func Load() (Config, error) {
 		AuthRateLimitCount:  authRateLimitCount,
 		AuthRateLimitWindow: authRateLimitWindow,
 		ManagedBridgeToken:  os.Getenv("MANAGED_BRIDGE_TOKEN"),
+		MetricsEnabled:      metricsEnabled,
+		MetricsBearerToken:  os.Getenv("METRICS_BEARER_TOKEN"),
 		AllowedOrigins:      csvListFromEnv("ALLOWED_ORIGINS"),
 		TrustedProxyCIDRs:   csvListFromEnv("TRUSTED_PROXY_CIDRS"),
 	}
@@ -90,6 +99,9 @@ func (c Config) Validate() error {
 	if c.AuthRateLimitWindow <= 0 {
 		return fmt.Errorf("AUTH_RATE_LIMIT_WINDOW must be positive")
 	}
+	if strings.TrimSpace(c.MetricsBearerToken) != "" && !c.MetricsEnabled {
+		return fmt.Errorf("METRICS_BEARER_TOKEN requires METRICS_ENABLED=true")
+	}
 	for _, value := range c.TrustedProxyCIDRs {
 		if _, err := parseTrustedProxyCIDR(value); err != nil {
 			return fmt.Errorf("TRUSTED_PROXY_CIDRS entry %q is invalid: %w", value, err)
@@ -104,6 +116,20 @@ func stringFromEnv(name string, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func boolFromEnv(name string, fallback bool) (bool, error) {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback, nil
+	}
+
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("parse %s: %w", name, err)
+	}
+
+	return parsed, nil
 }
 
 func durationFromEnv(name string, fallback time.Duration) (time.Duration, error) {

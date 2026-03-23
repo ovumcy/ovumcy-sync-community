@@ -16,6 +16,8 @@ func TestConfigLoadReturnsDefaults(t *testing.T) {
 	t.Setenv("MAX_BLOB_BYTES", "")
 	t.Setenv("AUTH_RATE_LIMIT_COUNT", "")
 	t.Setenv("AUTH_RATE_LIMIT_WINDOW", "")
+	t.Setenv("METRICS_ENABLED", "")
+	t.Setenv("METRICS_BEARER_TOKEN", "")
 	t.Setenv("MANAGED_BRIDGE_TOKEN", "")
 	t.Setenv("ALLOWED_ORIGINS", "")
 	t.Setenv("TRUSTED_PROXY_CIDRS", "")
@@ -46,6 +48,12 @@ func TestConfigLoadReturnsDefaults(t *testing.T) {
 	if cfg.AuthRateLimitWindow != time.Minute {
 		t.Fatalf("unexpected auth limit window %s", cfg.AuthRateLimitWindow)
 	}
+	if cfg.MetricsEnabled {
+		t.Fatal("expected metrics to be disabled by default")
+	}
+	if cfg.MetricsBearerToken != "" {
+		t.Fatalf("expected empty metrics bearer token, got %q", cfg.MetricsBearerToken)
+	}
 	if cfg.TrustedProxyCIDRs != nil {
 		t.Fatalf("expected empty trusted proxy cidrs, got %#v", cfg.TrustedProxyCIDRs)
 	}
@@ -68,10 +76,21 @@ func TestConfigLoadRejectsInvalidValues(t *testing.T) {
 	}
 
 	t.Setenv("AUTH_RATE_LIMIT_WINDOW", "")
+	t.Setenv("METRICS_ENABLED", "true")
+	t.Setenv("METRICS_BEARER_TOKEN", "")
 	t.Setenv("TRUSTED_PROXY_CIDRS", "invalid")
 
 	_, err = config.Load()
 	if err == nil || !strings.Contains(err.Error(), "TRUSTED_PROXY_CIDRS") {
 		t.Fatalf("expected trusted proxy validation error, got %v", err)
+	}
+
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	t.Setenv("METRICS_ENABLED", "false")
+	t.Setenv("METRICS_BEARER_TOKEN", "secret")
+
+	_, err = config.Load()
+	if err == nil || !strings.Contains(err.Error(), "METRICS_BEARER_TOKEN") {
+		t.Fatalf("expected metrics bearer token validation error, got %v", err)
 	}
 }

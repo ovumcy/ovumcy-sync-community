@@ -8,6 +8,8 @@ BASE_URL="${BASE_URL:-http://127.0.0.1:${HOST_PORT}}"
 VOLUME_NAME="${CONTAINER_NAME}-data-$(date +%s)"
 LOGIN="selftest-$(date +%s)@example.com"
 PASSWORD="correct horse battery staple"
+METRICS_ENABLED="${METRICS_ENABLED:-true}"
+METRICS_BEARER_TOKEN="${METRICS_BEARER_TOKEN:-runtime-smoke-metrics-token}"
 
 cleanup() {
   docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
@@ -17,7 +19,12 @@ trap cleanup EXIT
 
 docker volume create "${VOLUME_NAME}" >/dev/null
 docker run --rm -v "${VOLUME_NAME}:/data" "${IMAGE}" migrate
-docker run -d --rm --name "${CONTAINER_NAME}" -p "${HOST_PORT}:8080" -v "${VOLUME_NAME}:/data" "${IMAGE}" serve >/dev/null
+docker run -d --rm --name "${CONTAINER_NAME}" \
+  -e "METRICS_ENABLED=${METRICS_ENABLED}" \
+  -e "METRICS_BEARER_TOKEN=${METRICS_BEARER_TOKEN}" \
+  -p "${HOST_PORT}:8080" \
+  -v "${VOLUME_NAME}:/data" \
+  "${IMAGE}" serve >/dev/null
 
 for _ in $(seq 1 30); do
   if curl -fsS "${BASE_URL}/healthz" >/dev/null; then
@@ -27,6 +34,15 @@ for _ in $(seq 1 30); do
 done
 
 curl -fsS "${BASE_URL}/healthz" >/dev/null
+
+metrics_status="$(curl -s -o /dev/null -w '%{http_code}' "${BASE_URL}/metrics")"
+if [[ "${metrics_status}" != "401" ]]; then
+  echo "expected unauthenticated metrics request to return 401, got ${metrics_status}" >&2
+  exit 1
+fi
+
+curl -fsS "${BASE_URL}/metrics" \
+  -H "Authorization: Bearer ${METRICS_BEARER_TOKEN}" >/dev/null
 
 register_response="$(curl -fsS -X POST "${BASE_URL}/auth/register" \
   -H 'Content-Type: application/json' \
