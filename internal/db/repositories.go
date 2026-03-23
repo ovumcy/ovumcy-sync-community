@@ -17,10 +17,12 @@ var ErrConflict = errors.New("conflict")
 func (s *Store) CreateAccount(ctx context.Context, account models.Account) (models.Account, error) {
 	_, err := s.db.ExecContext(
 		ctx,
-		`INSERT INTO accounts (id, login, password_hash, created_at) VALUES (?, ?, ?, ?)`,
+		`INSERT INTO accounts (id, login, password_hash, mode, premium_active, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
 		account.ID,
 		account.Login,
 		account.PasswordHash,
+		account.Mode,
+		boolToInt(account.PremiumActive),
 		account.CreatedAt.UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
@@ -33,10 +35,39 @@ func (s *Store) CreateAccount(ctx context.Context, account models.Account) (mode
 	return account, nil
 }
 
+func (s *Store) UpsertManagedAccount(ctx context.Context, account models.Account) (models.Account, error) {
+	_, err := s.db.ExecContext(
+		ctx,
+		`
+INSERT INTO accounts (id, login, password_hash, mode, premium_active, created_at)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+  login = excluded.login,
+  password_hash = excluded.password_hash,
+  mode = excluded.mode,
+  premium_active = excluded.premium_active
+`,
+		account.ID,
+		account.Login,
+		account.PasswordHash,
+		account.Mode,
+		boolToInt(account.PremiumActive),
+		account.CreatedAt.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		if isUniqueConstraint(err) {
+			return models.Account{}, ErrConflict
+		}
+		return models.Account{}, fmt.Errorf("upsert managed account: %w", err)
+	}
+
+	return account, nil
+}
+
 func (s *Store) FindAccountByLogin(ctx context.Context, login string) (models.Account, error) {
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, login, password_hash, created_at FROM accounts WHERE login = ?`,
+		`SELECT id, login, password_hash, mode, premium_active, created_at FROM accounts WHERE login = ?`,
 		login,
 	)
 
@@ -46,7 +77,7 @@ func (s *Store) FindAccountByLogin(ctx context.Context, login string) (models.Ac
 func (s *Store) FindAccountByID(ctx context.Context, accountID string) (models.Account, error) {
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, login, password_hash, created_at FROM accounts WHERE id = ?`,
+		`SELECT id, login, password_hash, mode, premium_active, created_at FROM accounts WHERE id = ?`,
 		accountID,
 	)
 
@@ -210,15 +241,82 @@ ON CONFLICT(account_id) DO UPDATE SET
 	return blob, nil
 }
 
+func (s *Store) GetRecoveryKeyPackage(
+	ctx context.Context,
+	accountID string,
+) (models.RecoveryKeyPackage, error) {
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT account_id, algorithm, kdf, mnemonic_word_count, wrap_nonce_hex, wrapped_master_key_hex, phrase_fingerprint_hex, updated_at
+		 FROM recovery_key_packages
+		 WHERE account_id = ?`,
+		accountID,
+	)
+
+	return scanRecoveryKeyPackage(row)
+}
+
+func (s *Store) UpsertRecoveryKeyPackage(
+	ctx context.Context,
+	recoveryKeyPackage models.RecoveryKeyPackage,
+) (models.RecoveryKeyPackage, error) {
+	_, err := s.db.ExecContext(
+		ctx,
+		`
+INSERT INTO recovery_key_packages (
+  account_id,
+  algorithm,
+  kdf,
+  mnemonic_word_count,
+  wrap_nonce_hex,
+  wrapped_master_key_hex,
+  phrase_fingerprint_hex,
+  updated_at
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(account_id) DO UPDATE SET
+  algorithm = excluded.algorithm,
+  kdf = excluded.kdf,
+  mnemonic_word_count = excluded.mnemonic_word_count,
+  wrap_nonce_hex = excluded.wrap_nonce_hex,
+  wrapped_master_key_hex = excluded.wrapped_master_key_hex,
+  phrase_fingerprint_hex = excluded.phrase_fingerprint_hex,
+  updated_at = excluded.updated_at
+`,
+		recoveryKeyPackage.AccountID,
+		recoveryKeyPackage.Algorithm,
+		recoveryKeyPackage.KDF,
+		recoveryKeyPackage.MnemonicWordCount,
+		recoveryKeyPackage.WrapNonceHex,
+		recoveryKeyPackage.WrappedMasterKeyHex,
+		recoveryKeyPackage.PhraseFingerprintHex,
+		recoveryKeyPackage.UpdatedAt.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return models.RecoveryKeyPackage{}, fmt.Errorf("upsert recovery key package: %w", err)
+	}
+
+	return recoveryKeyPackage, nil
+}
+
 func scanAccount(row interface{ Scan(dest ...any) error }) (models.Account, error) {
 	var account models.Account
 	var createdAt string
-	if err := row.Scan(&account.ID, &account.Login, &account.PasswordHash, &createdAt); err != nil {
+	var premiumActive int
+	if err := row.Scan(
+		&account.ID,
+		&account.Login,
+		&account.PasswordHash,
+		&account.Mode,
+		&premiumActive,
+		&createdAt,
+	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return models.Account{}, ErrNotFound
 		}
 		return models.Account{}, fmt.Errorf("scan account: %w", err)
 	}
+	account.PremiumActive = premiumActive != 0
 	account.CreatedAt = mustParseTime(createdAt)
 	return account, nil
 }
@@ -289,6 +387,30 @@ func scanBlob(row interface{ Scan(dest ...any) error }) (models.EncryptedBlob, e
 	return blob, nil
 }
 
+func scanRecoveryKeyPackage(
+	row interface{ Scan(dest ...any) error },
+) (models.RecoveryKeyPackage, error) {
+	var recoveryKeyPackage models.RecoveryKeyPackage
+	var updatedAt string
+	if err := row.Scan(
+		&recoveryKeyPackage.AccountID,
+		&recoveryKeyPackage.Algorithm,
+		&recoveryKeyPackage.KDF,
+		&recoveryKeyPackage.MnemonicWordCount,
+		&recoveryKeyPackage.WrapNonceHex,
+		&recoveryKeyPackage.WrappedMasterKeyHex,
+		&recoveryKeyPackage.PhraseFingerprintHex,
+		&updatedAt,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return models.RecoveryKeyPackage{}, ErrNotFound
+		}
+		return models.RecoveryKeyPackage{}, fmt.Errorf("scan recovery key package: %w", err)
+	}
+	recoveryKeyPackage.UpdatedAt = mustParseTime(updatedAt)
+	return recoveryKeyPackage, nil
+}
+
 func mustParseTime(value string) time.Time {
 	parsed, err := time.Parse(time.RFC3339Nano, value)
 	if err == nil {
@@ -305,4 +427,11 @@ func mustParseTime(value string) time.Time {
 
 func isUniqueConstraint(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
+}
+
+func boolToInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }

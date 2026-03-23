@@ -1,0 +1,2 @@
+ALTER TABLE accounts ADD COLUMN mode TEXT NOT NULL DEFAULT 'self_hosted';
+ALTER TABLE accounts ADD COLUMN premium_active INTEGER NOT NULL DEFAULT 0;

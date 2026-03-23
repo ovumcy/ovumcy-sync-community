@@ -5,30 +5,62 @@ on:
     branches:
       - main
   pull_request:
+  release:
+    types:
+      - published
   workflow_dispatch:
 
 permissions:
   contents: read
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Setup Go
-        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
         with:
           go-version-file: go.mod
           cache: true
 
-      - name: Go test
-        run: go test ./...
-
       - name: Install Staticcheck
-        run: go install honnef.co/go/tools/cmd/staticcheck@2025.1.1
+        run: go install honnef.co/go/tools/cmd/staticcheck@v0.6.1
 
       - name: Staticcheck
-        run: "$(go env GOPATH)/bin/staticcheck" ./...
+        run: $(go env GOPATH)/bin/staticcheck ./...
+
+      - name: Go vet
+        run: go vet ./...
+
+      - name: Go test with coverage
+        run: go test ./... -coverprofile=coverage.out -covermode=atomic
+
+      - name: Upload coverage to Codecov
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        id: codecov
+        continue-on-error: ${{ github.event_name == 'push' }}
+        uses: codecov/codecov-action@671740ac38dd9b0130fbe1cec585b89eea48d3de # v5.5.2
+        with:
+          files: coverage.out
+          use_oidc: true
+          fail_ci_if_error: true
+
+      - name: Warn on non-blocking Codecov failure
+        if: ${{ github.event_name == 'push' && steps.codecov.outcome == 'failure' }}
+        run: echo "::warning::Codecov upload failed on push. Coverage was generated locally, but Codecov ingest returned an external error."
+
+      - name: Docker Compose config
+        run: docker compose config
+
+      - name: Docker build
+        run: docker build -t ovumcy-sync-community-ci:${{ github.sha }} .

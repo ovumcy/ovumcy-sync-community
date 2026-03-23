@@ -1,0 +1,123 @@
+name: Security
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  TRIVY_IMAGE: aquasec/trivy:0.68.2@sha256:05d0126976bdedcd0782a0336f77832dbea1c81b9cc5e4b3a5ea5d2ec863aca7
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  schedule:
+    - cron: "41 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  gosec:
+    runs-on: ubuntu-latest
+    env:
+      GOBIN: ${{ github.workspace }}/.bin
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.22.4
+
+      - name: Prepare security artifact directory
+        run: mkdir -p .tmp/security
+
+      - name: Run gosec
+        run: ./.bin/gosec -fmt sarif -out .tmp/security/gosec.sarif ./...
+
+      - name: Upload gosec SARIF
+        if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: github/codeql-action/upload-sarif@0d579ffd059c29b07949a3cce3983f0780820c98 # v4.32.6
+        with:
+          sarif_file: .tmp/security/gosec.sarif
+          category: gosec
+
+      - name: Upload gosec artifacts
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: gosec-results
+          path: .tmp/security/gosec.sarif
+          if-no-files-found: error
+
+  trivy-fs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Prepare security artifact directory
+        run: mkdir -p .tmp/security
+
+      - name: Run Trivy filesystem scan
+        run: docker run --rm -v "${{ github.workspace }}:/work" -w /work "${{ env.TRIVY_IMAGE }}" fs --scanners vuln --skip-version-check --severity HIGH,CRITICAL --ignore-unfixed --format sarif --output .tmp/security/trivy-fs.sarif --exit-code 1 .
+
+      - name: Upload Trivy filesystem SARIF
+        if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: github/codeql-action/upload-sarif@0d579ffd059c29b07949a3cce3983f0780820c98 # v4.32.6
+        with:
+          sarif_file: .tmp/security/trivy-fs.sarif
+          category: trivy-fs
+
+      - name: Upload Trivy filesystem artifacts
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: trivy-fs-results
+          path: .tmp/security/trivy-fs.sarif
+          if-no-files-found: error
+
+  trivy-image:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Build runtime image for scanning
+        run: docker build --tag ovumcy-sync-community-security:${{ github.sha }} .
+
+      - name: Prepare security artifact directory
+        run: mkdir -p .tmp/security
+
+      - name: Run Trivy image scan
+        run: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "${{ github.workspace }}:/work" -w /work "${{ env.TRIVY_IMAGE }}" image --scanners vuln --skip-version-check --severity HIGH,CRITICAL --ignore-unfixed --format sarif --output .tmp/security/trivy-image.sarif --exit-code 1 ovumcy-sync-community-security:${{ github.sha }}
+
+      - name: Generate CycloneDX SBOM
+        if: always()
+        run: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "${{ github.workspace }}:/work" -w /work "${{ env.TRIVY_IMAGE }}" image --skip-version-check --format cyclonedx --output .tmp/security/ovumcy-sync-community-image.cdx.json ovumcy-sync-community-security:${{ github.sha }}
+
+      - name: Upload Trivy image SARIF
+        if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: github/codeql-action/upload-sarif@0d579ffd059c29b07949a3cce3983f0780820c98 # v4.32.6
+        with:
+          sarif_file: .tmp/security/trivy-image.sarif
+          category: trivy-image
+
+      - name: Upload Trivy image artifacts
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: trivy-image-results
+          path: |
+            .tmp/security/trivy-image.sarif
+            .tmp/security/ovumcy-sync-community-image.cdx.json
+          if-no-files-found: error

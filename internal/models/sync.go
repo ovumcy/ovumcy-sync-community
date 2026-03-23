@@ -6,6 +6,8 @@ type Account struct {
 	ID           string
 	Login        string
 	PasswordHash string
+	Mode         string
+	PremiumActive bool
 	CreatedAt    time.Time
 }
 
@@ -34,6 +36,17 @@ type EncryptedBlob struct {
 	Ciphertext     []byte    `json:"-"`
 	CiphertextSize int       `json:"ciphertext_size"`
 	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+type RecoveryKeyPackage struct {
+	AccountID            string    `json:"-"`
+	Algorithm            string    `json:"algorithm"`
+	KDF                  string    `json:"kdf"`
+	MnemonicWordCount    int       `json:"mnemonic_word_count"`
+	WrapNonceHex         string    `json:"wrap_nonce_hex"`
+	WrappedMasterKeyHex  string    `json:"wrapped_master_key_hex"`
+	PhraseFingerprintHex string    `json:"phrase_fingerprint_hex"`
+	UpdatedAt            time.Time `json:"updated_at"`
 }
 
 type CapabilityDocument struct {

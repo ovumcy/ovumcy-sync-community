@@ -32,11 +32,27 @@ func main() {
 	}
 
 	authService := services.NewAuthService(store, cfg.SessionTTL)
-	syncService := services.NewSyncService(store, cfg.MaxDevices)
+	syncService := services.NewSyncService(store, services.SyncOptions{
+		MaxDevices:   cfg.MaxDevices,
+		MaxBlobBytes: cfg.MaxBlobBytes,
+	})
+	managedBridgeService := services.NewManagedBridgeService(store, authService)
 
 	server := &http.Server{
-		Addr:              cfg.BindAddr,
-		Handler:           api.NewServer(authService, syncService, cfg.AllowedOrigins),
+		Addr: cfg.BindAddr,
+		Handler: api.NewServer(
+			authService,
+			syncService,
+			managedBridgeService,
+			api.ServerOptions{
+				ManagedBridgeToken:  cfg.ManagedBridgeToken,
+				AllowedOrigins:      cfg.AllowedOrigins,
+				AuthRateLimitCount:  cfg.AuthRateLimitCount,
+				AuthRateLimitWindow: cfg.AuthRateLimitWindow,
+				MaxBlobBytes:        cfg.MaxBlobBytes,
+				ReadinessCheck:      store.Ping,
+			},
+		),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,

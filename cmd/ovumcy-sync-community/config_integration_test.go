@@ -1,0 +1,65 @@
+package main
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/ovumcy/ovumcy-sync-community/internal/config"
+)
+
+func TestConfigLoadReturnsDefaults(t *testing.T) {
+	t.Setenv("BIND_ADDR", "")
+	t.Setenv("DB_PATH", "")
+	t.Setenv("SESSION_TTL", "")
+	t.Setenv("MAX_DEVICES", "")
+	t.Setenv("MAX_BLOB_BYTES", "")
+	t.Setenv("AUTH_RATE_LIMIT_COUNT", "")
+	t.Setenv("AUTH_RATE_LIMIT_WINDOW", "")
+	t.Setenv("MANAGED_BRIDGE_TOKEN", "")
+	t.Setenv("ALLOWED_ORIGINS", "")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if cfg.BindAddr != ":8080" {
+		t.Fatalf("unexpected bind addr %q", cfg.BindAddr)
+	}
+	if cfg.DBPath != "./data/ovumcy-sync-community.sqlite" {
+		t.Fatalf("unexpected db path %q", cfg.DBPath)
+	}
+	if cfg.SessionTTL != 720*time.Hour {
+		t.Fatalf("unexpected session ttl %s", cfg.SessionTTL)
+	}
+	if cfg.MaxDevices != 5 {
+		t.Fatalf("unexpected max devices %d", cfg.MaxDevices)
+	}
+	if cfg.MaxBlobBytes != 16<<20 {
+		t.Fatalf("unexpected max blob bytes %d", cfg.MaxBlobBytes)
+	}
+	if cfg.AuthRateLimitCount != 10 {
+		t.Fatalf("unexpected auth limit count %d", cfg.AuthRateLimitCount)
+	}
+	if cfg.AuthRateLimitWindow != time.Minute {
+		t.Fatalf("unexpected auth limit window %s", cfg.AuthRateLimitWindow)
+	}
+}
+
+func TestConfigLoadRejectsInvalidValues(t *testing.T) {
+	t.Setenv("MAX_BLOB_BYTES", "0")
+
+	_, err := config.Load()
+	if err == nil || !strings.Contains(err.Error(), "MAX_BLOB_BYTES must be positive") {
+		t.Fatalf("expected max blob validation error, got %v", err)
+	}
+
+	t.Setenv("MAX_BLOB_BYTES", "")
+	t.Setenv("AUTH_RATE_LIMIT_WINDOW", "0s")
+
+	_, err = config.Load()
+	if err == nil || !strings.Contains(err.Error(), "AUTH_RATE_LIMIT_WINDOW must be positive") {
+		t.Fatalf("expected auth rate limit window validation error, got %v", err)
+	}
+}

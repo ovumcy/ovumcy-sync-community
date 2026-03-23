@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -16,20 +18,34 @@ import (
 )
 
 type Server struct {
-	auth           *services.AuthService
-	sync           *services.SyncService
-	authLimiter    *security.RateLimiter
-	allowedOrigins map[string]struct{}
-	mux            *http.ServeMux
+	auth                *services.AuthService
+	sync                *services.SyncService
+	managedBridge       *services.ManagedBridgeService
+	managedBridgeToken  string
+	authLimiter         *security.RateLimiter
+	allowedOrigins      map[string]struct{}
+	maxBlobRequestBytes int64
+	readinessCheck      func(context.Context) error
+	mux                 *http.ServeMux
+}
+
+type ServerOptions struct {
+	ManagedBridgeToken  string
+	AllowedOrigins      []string
+	AuthRateLimitCount  int
+	AuthRateLimitWindow time.Duration
+	MaxBlobBytes        int
+	ReadinessCheck      func(context.Context) error
 }
 
 func NewServer(
 	auth *services.AuthService,
 	sync *services.SyncService,
-	allowedOrigins []string,
+	managedBridge *services.ManagedBridgeService,
+	options ServerOptions,
 ) http.Handler {
-	originSet := make(map[string]struct{}, len(allowedOrigins))
-	for _, origin := range allowedOrigins {
+	originSet := make(map[string]struct{}, len(options.AllowedOrigins))
+	for _, origin := range options.AllowedOrigins {
 		trimmed := strings.TrimSpace(origin)
 		if trimmed == "" {
 			continue
@@ -38,11 +54,15 @@ func NewServer(
 	}
 
 	server := &Server{
-		auth:           auth,
-		sync:           sync,
-		authLimiter:    security.NewRateLimiter(10, time.Minute),
-		allowedOrigins: originSet,
-		mux:            http.NewServeMux(),
+		auth:                auth,
+		sync:                sync,
+		managedBridge:       managedBridge,
+		managedBridgeToken:  strings.TrimSpace(options.ManagedBridgeToken),
+		authLimiter:         security.NewRateLimiter(options.AuthRateLimitCount, options.AuthRateLimitWindow),
+		allowedOrigins:      originSet,
+		maxBlobRequestBytes: encodedBlobRequestLimit(options.MaxBlobBytes),
+		readinessCheck:      options.ReadinessCheck,
+		mux:                 http.NewServeMux(),
 	}
 	server.routes()
 	return server
@@ -50,11 +70,15 @@ func NewServer(
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.handleHealth)
+	s.mux.HandleFunc("GET /readyz", s.handleReady)
 	s.mux.HandleFunc("POST /auth/register", s.handleRegister)
 	s.mux.HandleFunc("POST /auth/login", s.handleLogin)
 	s.mux.HandleFunc("DELETE /auth/session", s.handleLogout)
+	s.mux.HandleFunc("POST /managed/session", s.withManagedBridge(s.handleManagedSession))
 	s.mux.HandleFunc("GET /sync/capabilities", s.withAuth(s.handleCapabilities))
 	s.mux.HandleFunc("POST /sync/devices", s.withAuth(s.handleAttachDevice))
+	s.mux.HandleFunc("GET /sync/recovery-key", s.withAuth(s.handleGetRecoveryKey))
+	s.mux.HandleFunc("PUT /sync/recovery-key", s.withAuth(s.handlePutRecoveryKey))
 	s.mux.HandleFunc("GET /sync/blob", s.withAuth(s.handleGetBlob))
 	s.mux.HandleFunc("PUT /sync/blob", s.withAuth(s.handlePutBlob))
 }
@@ -88,6 +112,17 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) handleHealth(writer http.ResponseWriter, _ *http.Request) {
+	writeJSON(writer, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleReady(writer http.ResponseWriter, request *http.Request) {
+	if s.readinessCheck != nil {
+		if err := s.readinessCheck(request.Context()); err != nil {
+			writeError(writer, http.StatusServiceUnavailable, "not_ready")
+			return
+		}
+	}
+
 	writeJSON(writer, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -150,8 +185,28 @@ func (s *Server) handleLogout(writer http.ResponseWriter, request *http.Request)
 	writeJSON(writer, http.StatusOK, map[string]string{"status": "revoked"})
 }
 
-func (s *Server) handleCapabilities(writer http.ResponseWriter, _ *http.Request, _ models.Account) {
-	writeJSON(writer, http.StatusOK, s.sync.Capabilities())
+func (s *Server) handleManagedSession(writer http.ResponseWriter, request *http.Request) {
+	var payload managedSessionRequest
+	if !decodeJSON(writer, request, &payload, 4<<10) {
+		return
+	}
+
+	result, err := s.managedBridge.CreateManagedSession(request.Context(), payload.AccountID)
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrInvalidManagedAccount):
+			writeError(writer, http.StatusBadRequest, "invalid_managed_account")
+		default:
+			writeError(writer, http.StatusInternalServerError, "internal_error")
+		}
+		return
+	}
+
+	writeJSON(writer, http.StatusOK, result)
+}
+
+func (s *Server) handleCapabilities(writer http.ResponseWriter, _ *http.Request, account models.Account) {
+	writeJSON(writer, http.StatusOK, s.sync.CapabilitiesForAccount(account))
 }
 
 func (s *Server) handleAttachDevice(
@@ -191,7 +246,7 @@ func (s *Server) handlePutBlob(
 	account models.Account,
 ) {
 	var payload blobPutRequest
-	if !decodeJSON(writer, request, &payload, 24<<20) {
+	if !decodeJSON(writer, request, &payload, s.maxBlobRequestBytes) {
 		return
 	}
 
@@ -222,6 +277,41 @@ func (s *Server) handlePutBlob(
 	writeJSON(writer, http.StatusOK, blobResponseFromModel(blob))
 }
 
+func (s *Server) handlePutRecoveryKey(
+	writer http.ResponseWriter,
+	request *http.Request,
+	account models.Account,
+) {
+	var payload recoveryKeyPackageRequest
+	if !decodeJSON(writer, request, &payload, 8<<10) {
+		return
+	}
+
+	recoveryKeyPackage, err := s.sync.PutRecoveryKeyPackage(
+		request.Context(),
+		account.ID,
+		services.PutRecoveryKeyPackageInput{
+			Algorithm:            payload.Algorithm,
+			KDF:                  payload.KDF,
+			MnemonicWordCount:    payload.MnemonicWordCount,
+			WrapNonceHex:         payload.WrapNonceHex,
+			WrappedMasterKeyHex:  payload.WrappedMasterKeyHex,
+			PhraseFingerprintHex: payload.PhraseFingerprintHex,
+		},
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrInvalidRecoveryPackage):
+			writeError(writer, http.StatusBadRequest, "invalid_recovery_package")
+		default:
+			writeError(writer, http.StatusInternalServerError, "internal_error")
+		}
+		return
+	}
+
+	writeJSON(writer, http.StatusOK, recoveryKeyPackageResponseFromModel(recoveryKeyPackage))
+}
+
 func (s *Server) handleGetBlob(
 	writer http.ResponseWriter,
 	request *http.Request,
@@ -241,6 +331,25 @@ func (s *Server) handleGetBlob(
 	writeJSON(writer, http.StatusOK, blobResponseFromModel(blob))
 }
 
+func (s *Server) handleGetRecoveryKey(
+	writer http.ResponseWriter,
+	request *http.Request,
+	account models.Account,
+) {
+	recoveryKeyPackage, err := s.sync.GetRecoveryKeyPackage(request.Context(), account.ID)
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrRecoveryPackageNotFound):
+			writeError(writer, http.StatusNotFound, "recovery_package_not_found")
+		default:
+			writeError(writer, http.StatusInternalServerError, "internal_error")
+		}
+		return
+	}
+
+	writeJSON(writer, http.StatusOK, recoveryKeyPackageResponseFromModel(recoveryKeyPackage))
+}
+
 func (s *Server) withAuth(next func(http.ResponseWriter, *http.Request, models.Account)) http.HandlerFunc {
 	return func(writer http.ResponseWriter, request *http.Request) {
 		account, err := s.auth.Authenticate(request.Context(), bearerTokenFromRequest(request))
@@ -250,6 +359,23 @@ func (s *Server) withAuth(next func(http.ResponseWriter, *http.Request, models.A
 		}
 
 		next(writer, request, account)
+	}
+}
+
+func (s *Server) withManagedBridge(next http.HandlerFunc) http.HandlerFunc {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		if s.managedBridgeToken == "" {
+			writeError(writer, http.StatusServiceUnavailable, "managed_bridge_disabled")
+			return
+		}
+
+		token := bearerTokenFromRequest(request)
+		if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(s.managedBridgeToken)) != 1 {
+			writeError(writer, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		next(writer, request)
 	}
 }
 
@@ -302,9 +428,22 @@ func writeJSON(writer http.ResponseWriter, status int, payload any) {
 	_ = json.NewEncoder(writer).Encode(payload)
 }
 
+func encodedBlobRequestLimit(maxBlobBytes int) int64 {
+	if maxBlobBytes <= 0 {
+		return 24 << 20
+	}
+
+	base64Bytes := ((int64(maxBlobBytes) + 2) / 3) * 4
+	return base64Bytes + 8<<10
+}
+
 type credentialsRequest struct {
 	Login    string `json:"login"`
 	Password string `json:"password"`
+}
+
+type managedSessionRequest struct {
+	AccountID string `json:"account_id"`
 }
 
 type deviceRequest struct {
@@ -328,6 +467,25 @@ type blobResponse struct {
 	UpdatedAt        string `json:"updated_at"`
 }
 
+type recoveryKeyPackageRequest struct {
+	Algorithm            string `json:"algorithm"`
+	KDF                  string `json:"kdf"`
+	MnemonicWordCount    int    `json:"mnemonic_word_count"`
+	WrapNonceHex         string `json:"wrap_nonce_hex"`
+	WrappedMasterKeyHex  string `json:"wrapped_master_key_hex"`
+	PhraseFingerprintHex string `json:"phrase_fingerprint_hex"`
+}
+
+type recoveryKeyPackageResponse struct {
+	Algorithm            string `json:"algorithm"`
+	KDF                  string `json:"kdf"`
+	MnemonicWordCount    int    `json:"mnemonic_word_count"`
+	WrapNonceHex         string `json:"wrap_nonce_hex"`
+	WrappedMasterKeyHex  string `json:"wrapped_master_key_hex"`
+	PhraseFingerprintHex string `json:"phrase_fingerprint_hex"`
+	UpdatedAt            string `json:"updated_at"`
+}
+
 func blobResponseFromModel(blob models.EncryptedBlob) blobResponse {
 	return blobResponse{
 		SchemaVersion:    blob.SchemaVersion,
@@ -336,5 +494,19 @@ func blobResponseFromModel(blob models.EncryptedBlob) blobResponse {
 		CiphertextBase64: base64.StdEncoding.EncodeToString(blob.Ciphertext),
 		CiphertextSize:   blob.CiphertextSize,
 		UpdatedAt:        blob.UpdatedAt.UTC().Format(time.RFC3339Nano),
+	}
+}
+
+func recoveryKeyPackageResponseFromModel(
+	recoveryKeyPackage models.RecoveryKeyPackage,
+) recoveryKeyPackageResponse {
+	return recoveryKeyPackageResponse{
+		Algorithm:            recoveryKeyPackage.Algorithm,
+		KDF:                  recoveryKeyPackage.KDF,
+		MnemonicWordCount:    recoveryKeyPackage.MnemonicWordCount,
+		WrapNonceHex:         recoveryKeyPackage.WrapNonceHex,
+		WrappedMasterKeyHex:  recoveryKeyPackage.WrappedMasterKeyHex,
+		PhraseFingerprintHex: recoveryKeyPackage.PhraseFingerprintHex,
+		UpdatedAt:            recoveryKeyPackage.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	}
 }

@@ -44,7 +44,14 @@ PRAGMA busy_timeout = 5000;
 }
 
 func (s *Store) Close() error {
+	if s.db != nil {
+		_, _ = s.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE);`)
+	}
 	return s.db.Close()
+}
+
+func (s *Store) Ping(ctx context.Context) error {
+	return s.db.PingContext(ctx)
 }
 
 func (s *Store) ApplyMigrations(ctx context.Context) error {

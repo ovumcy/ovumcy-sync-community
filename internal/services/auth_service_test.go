@@ -23,6 +23,16 @@ func TestAuthServiceRegisterAndLogin(t *testing.T) {
 	if result.AccountID == "" || result.SessionToken == "" {
 		t.Fatalf("register result missing fields: %#v", result)
 	}
+	account, err := store.FindAccountByID(context.Background(), result.AccountID)
+	if err != nil {
+		t.Fatalf("find account: %v", err)
+	}
+	if account.Mode != "self_hosted" {
+		t.Fatalf("expected self_hosted account mode, got %#v", account)
+	}
+	if account.PremiumActive {
+		t.Fatalf("expected self-hosted account to stay free, got %#v", account)
+	}
 
 	loginResult, err := service.Login(
 		context.Background(),
@@ -34,6 +44,28 @@ func TestAuthServiceRegisterAndLogin(t *testing.T) {
 	}
 	if loginResult.SessionToken == "" {
 		t.Fatal("expected login session token")
+	}
+}
+
+func TestAuthServiceCreatesManagedSessionForExistingAccount(t *testing.T) {
+	store := openTestStore(t)
+	authService := NewAuthService(store, 24*time.Hour)
+	bridgeService := NewManagedBridgeService(store, authService)
+
+	result, err := bridgeService.CreateManagedSession(context.Background(), "managedacct1234")
+	if err != nil {
+		t.Fatalf("CreateManagedSession returned error: %v", err)
+	}
+	if result.SessionToken == "" {
+		t.Fatal("expected managed session token")
+	}
+
+	account, err := store.FindAccountByID(context.Background(), "managedacct1234")
+	if err != nil {
+		t.Fatalf("FindAccountByID returned error: %v", err)
+	}
+	if account.Mode != "managed" || !account.PremiumActive {
+		t.Fatalf("unexpected managed account flags: %#v", account)
 	}
 }
 

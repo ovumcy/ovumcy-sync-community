@@ -59,6 +59,8 @@ func (s *AuthService) Register(ctx context.Context, login string, password strin
 		ID:           accountID,
 		Login:        normalizedLogin,
 		PasswordHash: passwordHash,
+		Mode:         "self_hosted",
+		PremiumActive: false,
 		CreatedAt:    now,
 	})
 	if err != nil {
@@ -131,6 +133,21 @@ func (s *AuthService) RevokeSession(ctx context.Context, sessionToken string) er
 	}
 
 	return nil
+}
+
+func (s *AuthService) CreateSessionForAccount(
+	ctx context.Context,
+	accountID string,
+) (AuthResult, error) {
+	account, err := s.store.FindAccountByID(ctx, accountID)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return AuthResult{}, ErrUnauthorized
+		}
+		return AuthResult{}, err
+	}
+
+	return s.createSession(ctx, account.ID, s.now().UTC())
 }
 
 func (s *AuthService) createSession(

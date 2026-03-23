@@ -2,4 +2,6 @@
 /data/
 /bin/
 /dist/
-
+.agents/
+AGENTS.md
+AI_CONTEXT.md

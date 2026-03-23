@@ -65,6 +65,19 @@ func TestMigrationsBootstrapAndRepositories(t *testing.T) {
 		t.Fatalf("upsert encrypted blob: %v", err)
 	}
 
+	if _, err := store.UpsertRecoveryKeyPackage(context.Background(), models.RecoveryKeyPackage{
+		AccountID:            account.ID,
+		Algorithm:            "xchacha20poly1305",
+		KDF:                  "bip39_seed_hkdf_sha256",
+		MnemonicWordCount:    12,
+		WrapNonceHex:         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		WrappedMasterKeyHex:  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		PhraseFingerprintHex: "cccccccccccccccc",
+		UpdatedAt:            now,
+	}); err != nil {
+		t.Fatalf("upsert recovery key package: %v", err)
+	}
+
 	if _, err := store.FindAccountByID(context.Background(), account.ID); err != nil {
 		t.Fatalf("find account by id: %v", err)
 	}
@@ -76,6 +89,9 @@ func TestMigrationsBootstrapAndRepositories(t *testing.T) {
 	}
 	if _, err := store.GetEncryptedBlob(context.Background(), account.ID); err != nil {
 		t.Fatalf("get encrypted blob: %v", err)
+	}
+	if _, err := store.GetRecoveryKeyPackage(context.Background(), account.ID); err != nil {
+		t.Fatalf("get recovery key package: %v", err)
 	}
 }
 

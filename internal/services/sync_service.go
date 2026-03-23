@@ -18,13 +18,22 @@ var ErrTooManyDevices = errors.New("too_many_devices")
 var ErrInvalidBlob = errors.New("invalid_blob")
 var ErrBlobNotFound = errors.New("blob_not_found")
 var ErrStaleGeneration = errors.New("stale_generation")
+var ErrInvalidRecoveryPackage = errors.New("invalid_recovery_package")
+var ErrRecoveryPackageNotFound = errors.New("recovery_package_not_found")
 
 var checksumPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
+var lowercaseHexPattern = regexp.MustCompile(`^[a-f0-9]+$`)
 
 type SyncService struct {
-	store      *db.Store
-	maxDevices int
-	now        func() time.Time
+	store        *db.Store
+	maxDevices   int
+	maxBlobBytes int
+	now          func() time.Time
+}
+
+type SyncOptions struct {
+	MaxDevices   int
+	MaxBlobBytes int
 }
 
 type PutBlobInput struct {
@@ -34,11 +43,21 @@ type PutBlobInput struct {
 	Ciphertext     []byte
 }
 
-func NewSyncService(store *db.Store, maxDevices int) *SyncService {
+type PutRecoveryKeyPackageInput struct {
+	Algorithm            string
+	KDF                  string
+	MnemonicWordCount    int
+	WrapNonceHex         string
+	WrappedMasterKeyHex  string
+	PhraseFingerprintHex string
+}
+
+func NewSyncService(store *db.Store, options SyncOptions) *SyncService {
 	return &SyncService{
-		store:      store,
-		maxDevices: maxDevices,
-		now:        time.Now,
+		store:        store,
+		maxDevices:   options.MaxDevices,
+		maxBlobBytes: options.MaxBlobBytes,
+		now:          time.Now,
 	}
 }
 
@@ -47,13 +66,31 @@ func (s *SyncService) Capabilities() models.CapabilityDocument {
 		Mode:              "self_hosted",
 		SyncEnabled:       true,
 		PremiumActive:     false,
-		RecoverySupported: false,
+		RecoverySupported: true,
 		PushSupported:     false,
 		PortalSupported:   false,
 		AdvancedInsights:  false,
 		MaxDevices:        s.maxDevices,
-		MaxBlobBytes:      16 << 20,
+		MaxBlobBytes:      int64(s.maxBlobBytes),
 	}
+}
+
+func (s *SyncService) CapabilitiesForAccount(account models.Account) models.CapabilityDocument {
+	if account.Mode == "managed" {
+		return models.CapabilityDocument{
+			Mode:              "managed",
+			SyncEnabled:       account.PremiumActive,
+			PremiumActive:     account.PremiumActive,
+			RecoverySupported: true,
+			PushSupported:     false,
+			PortalSupported:   false,
+			AdvancedInsights:  false,
+			MaxDevices:        s.maxDevices,
+			MaxBlobBytes:      int64(s.maxBlobBytes),
+		}
+	}
+
+	return s.Capabilities()
 }
 
 func (s *SyncService) AttachDevice(
@@ -103,7 +140,7 @@ func (s *SyncService) PutBlob(
 	if !checksumPattern.MatchString(strings.ToLower(strings.TrimSpace(input.ChecksumSHA256))) {
 		return models.EncryptedBlob{}, ErrInvalidBlob
 	}
-	if int64(len(input.Ciphertext)) > s.Capabilities().MaxBlobBytes {
+	if len(input.Ciphertext) > s.maxBlobBytes {
 		return models.EncryptedBlob{}, ErrInvalidBlob
 	}
 	sum := sha256.Sum256(input.Ciphertext)
@@ -142,4 +179,60 @@ func (s *SyncService) GetBlob(ctx context.Context, accountID string) (models.Enc
 	}
 
 	return blob, nil
+}
+
+func (s *SyncService) PutRecoveryKeyPackage(
+	ctx context.Context,
+	accountID string,
+	input PutRecoveryKeyPackageInput,
+) (models.RecoveryKeyPackage, error) {
+	algorithm := strings.TrimSpace(strings.ToLower(input.Algorithm))
+	kdf := strings.TrimSpace(strings.ToLower(input.KDF))
+	wrapNonceHex := strings.TrimSpace(strings.ToLower(input.WrapNonceHex))
+	wrappedMasterKeyHex := strings.TrimSpace(strings.ToLower(input.WrappedMasterKeyHex))
+	phraseFingerprintHex := strings.TrimSpace(strings.ToLower(input.PhraseFingerprintHex))
+
+	if algorithm != "xchacha20poly1305" || kdf != "bip39_seed_hkdf_sha256" {
+		return models.RecoveryKeyPackage{}, ErrInvalidRecoveryPackage
+	}
+	if input.MnemonicWordCount != 12 {
+		return models.RecoveryKeyPackage{}, ErrInvalidRecoveryPackage
+	}
+	if len(wrapNonceHex) != 48 || !lowercaseHexPattern.MatchString(wrapNonceHex) {
+		return models.RecoveryKeyPackage{}, ErrInvalidRecoveryPackage
+	}
+	if len(wrappedMasterKeyHex) < 64 || len(wrappedMasterKeyHex)%2 != 0 || !lowercaseHexPattern.MatchString(wrappedMasterKeyHex) {
+		return models.RecoveryKeyPackage{}, ErrInvalidRecoveryPackage
+	}
+	if len(phraseFingerprintHex) != 16 || !lowercaseHexPattern.MatchString(phraseFingerprintHex) {
+		return models.RecoveryKeyPackage{}, ErrInvalidRecoveryPackage
+	}
+
+	recoveryKeyPackage := models.RecoveryKeyPackage{
+		AccountID:            accountID,
+		Algorithm:            algorithm,
+		KDF:                  kdf,
+		MnemonicWordCount:    input.MnemonicWordCount,
+		WrapNonceHex:         wrapNonceHex,
+		WrappedMasterKeyHex:  wrappedMasterKeyHex,
+		PhraseFingerprintHex: phraseFingerprintHex,
+		UpdatedAt:            s.now().UTC(),
+	}
+
+	return s.store.UpsertRecoveryKeyPackage(ctx, recoveryKeyPackage)
+}
+
+func (s *SyncService) GetRecoveryKeyPackage(
+	ctx context.Context,
+	accountID string,
+) (models.RecoveryKeyPackage, error) {
+	recoveryKeyPackage, err := s.store.GetRecoveryKeyPackage(ctx, accountID)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return models.RecoveryKeyPackage{}, ErrRecoveryPackageNotFound
+		}
+		return models.RecoveryKeyPackage{}, err
+	}
+
+	return recoveryKeyPackage, nil
 }
