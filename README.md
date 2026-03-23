@@ -138,3 +138,8 @@ If `MANAGED_BRIDGE_TOKEN` is configured, the service also enables:
 This endpoint is intended for a separate trusted managed-auth service. It provisions a managed-mode sync session for an opaque managed `account_id` without sending email/password through the sync endpoint.
 
 The managed bridge is not a public sign-in surface. End users should not send their email or password to `/managed/session`.
+
+## License
+
+Ovumcy Sync Community is licensed under AGPL v3.
+See [LICENSE](LICENSE).
