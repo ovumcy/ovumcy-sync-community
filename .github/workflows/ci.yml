@@ -17,11 +17,9 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  test:
+  staticcheck:
+    name: staticcheck
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
 
     steps:
       - name: Checkout
@@ -39,8 +37,39 @@ jobs:
       - name: Staticcheck
         run: $(go env GOPATH)/bin/staticcheck ./...
 
+  go-vet:
+    name: go-vet
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
       - name: Go vet
         run: go vet ./...
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: go.mod
+          cache: true
 
       - name: Go test with coverage
         run: go test ./... -coverprofile=coverage.out -covermode=atomic
@@ -58,6 +87,14 @@ jobs:
       - name: Warn on non-blocking Codecov failure
         if: ${{ github.event_name == 'push' && steps.codecov.outcome == 'failure' }}
         run: echo "::warning::Codecov upload failed on push. Coverage was generated locally, but Codecov ingest returned an external error."
+
+  docker-smoke:
+    name: docker-smoke
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Docker Compose config
         run: docker compose config
