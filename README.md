@@ -11,15 +11,22 @@
 
 # ovumcy-sync-community
 
-`ovumcy-sync-community` is the self-hosted encrypted sync backend for Ovumcy.
+`ovumcy-sync-community` is the self-hosted encrypted sync backend for the [Ovumcy app](https://github.com/ovumcy/ovumcy-app).
 
-It is built for people who want self-hosted multi-device encrypted sync without turning the sync server into a plaintext health-data processor.
+It is built for people who want to run their own Ovumcy sync server for backup, restore, and multi-device encrypted sync without turning the server into a plaintext health-data processor.
 
 It is designed around a zero-knowledge contract:
 
 - the server knows account identity, device registry, capability metadata, and encrypted blob metadata;
 - the server stores only ciphertext for synced health data;
 - the server never receives recovery phrases or plaintext health records.
+
+With the Ovumcy app, this repository provides the self-hosted server side of:
+
+- account registration and sign-in on your own server;
+- encrypted backup and restore across devices;
+- device registration and recovery-key package storage;
+- a simple, auditable community deployment baseline.
 
 ## What The Server Can See
 
@@ -39,7 +46,7 @@ It must not know:
 - client master keys;
 - decrypted sync payloads.
 
-## Current v1 Baseline
+## What You Get With Ovumcy App
 
 This README describes the current `main` branch.
 
@@ -51,6 +58,12 @@ This repository currently provides:
 - a capability document for the community/self-hosted mode;
 - account-scoped wrapped recovery-key package storage for zero-knowledge recovery setup;
 - encrypted blob upload and download for one account-scoped sync state.
+
+In the Ovumcy app, this is the backend used for the `Self-hosted` backup and sync mode.
+
+The core Ovumcy product remains local-first. This server exists only for optional encrypted sync and recovery transport.
+
+## Current v1 Baseline
 
 The supported deployment baseline is:
 
@@ -120,6 +133,14 @@ docker compose up --build
 
 The compose baseline binds the service to `http://127.0.0.1:8080` and persists SQLite data under `./data`.
 
+To use it with the Ovumcy app:
+
+1. start the server with Docker Compose or your own deployment stack;
+2. open `Backup & sync` in the Ovumcy app;
+3. choose `Self-hosted`;
+4. enter your HTTPS sync endpoint;
+5. prepare the device, save the recovery phrase, then register or sign in on your own server.
+
 For a production-style self-hosted setup:
 
 - put this service behind HTTPS;
@@ -129,15 +150,15 @@ For a production-style self-hosted setup:
 
 See [docs/self-hosting.md](docs/self-hosting.md) for a minimal reverse-proxy, TLS, and backup checklist.
 
-## Optional Managed Bridge
+## Advanced: Managed Bridge
 
 If `MANAGED_BRIDGE_TOKEN` is configured, the service also enables:
 
 - `POST /managed/session`
 
-This endpoint is intended for a separate trusted managed-auth service. It provisions a managed-mode sync session for an opaque managed `account_id` without sending email/password through the sync endpoint.
+This endpoint is intended only for a separate trusted managed-auth service. It provisions a managed-mode sync session for an opaque managed `account_id` without sending email or password through the sync endpoint.
 
-The managed bridge is not a public sign-in surface. End users should not send their email or password to `/managed/session`.
+Most self-hosted operators do not need this. For normal community usage, leave `MANAGED_BRIDGE_TOKEN` unset and ignore this endpoint.
 
 ## License
 

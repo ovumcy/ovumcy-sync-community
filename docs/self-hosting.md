@@ -7,6 +7,22 @@ This repository is designed for a simple self-hosted baseline:
 - one persistent data volume;
 - HTTPS terminated at the edge.
 
+It is intended to be used with the [Ovumcy app](https://github.com/ovumcy/ovumcy-app) in `Self-hosted` sync mode.
+
+## What Self-Hosting Means For Ovumcy App
+
+When you self-host `ovumcy-sync-community`, you are operating the optional encrypted sync server for the Ovumcy app.
+
+In the app, users can:
+
+- prepare a device for encrypted sync;
+- save a recovery phrase locally;
+- register or sign in against their own server;
+- upload encrypted sync state;
+- restore encrypted sync state on another device.
+
+Core tracking in the Ovumcy app still remains local-first. This server is for optional sync and recovery transport, not for normal day-to-day product use.
+
 ## Minimum Deployment Shape
 
 1. Run `ovumcy-sync-community` behind a reverse proxy such as Caddy, Nginx, or Traefik.
@@ -32,6 +48,16 @@ This service itself does not terminate TLS. Production deployments should not ex
 - `AUTH_RATE_LIMIT_WINDOW=1m`
 
 Adjust limits only when you understand the tradeoff between usability and abuse resistance.
+
+## Basic Setup Flow In Ovumcy App
+
+1. Deploy this service and put it behind HTTPS.
+2. Open the Ovumcy app and go to `Backup & sync`.
+3. Choose `Self-hosted`.
+4. Enter your sync endpoint, for example `https://sync.example.com`.
+5. Prepare the device and save the recovery phrase somewhere safe.
+6. Create an account on your own server or sign in to an existing one.
+7. Run encrypted sync from the app.
 
 ## What The Operator Can See
 
