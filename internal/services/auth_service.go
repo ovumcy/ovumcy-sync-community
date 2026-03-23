@@ -56,12 +56,12 @@ func (s *AuthService) Register(ctx context.Context, login string, password strin
 
 	now := s.now().UTC()
 	_, err = s.store.CreateAccount(ctx, models.Account{
-		ID:           accountID,
-		Login:        normalizedLogin,
-		PasswordHash: passwordHash,
-		Mode:         "self_hosted",
+		ID:            accountID,
+		Login:         normalizedLogin,
+		PasswordHash:  passwordHash,
+		Mode:          "self_hosted",
 		PremiumActive: false,
-		CreatedAt:    now,
+		CreatedAt:     now,
 	})
 	if err != nil {
 		if errors.Is(err, db.ErrConflict) {

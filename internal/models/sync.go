@@ -3,12 +3,12 @@ package models
 import "time"
 
 type Account struct {
-	ID           string
-	Login        string
-	PasswordHash string
-	Mode         string
+	ID            string
+	Login         string
+	PasswordHash  string
+	Mode          string
 	PremiumActive bool
-	CreatedAt    time.Time
+	CreatedAt     time.Time
 }
 
 type Session struct {
