@@ -143,3 +143,9 @@ The managed bridge is not a public sign-in surface. End users should not send th
 
 Ovumcy Sync Community is licensed under AGPL v3.
 See [LICENSE](LICENSE).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+If you found a security issue, see [SECURITY.md](SECURITY.md).
