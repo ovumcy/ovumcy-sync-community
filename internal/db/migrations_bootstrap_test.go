@@ -125,3 +125,33 @@ func TestRepositoriesDoNotShareDeviceOwnershipAcrossAccounts(t *testing.T) {
 		t.Fatalf("expected isolated device labels, got %#v and %#v", deviceOne, deviceTwo)
 	}
 }
+
+func TestSchemaReadyReflectsMigrationState(t *testing.T) {
+	store, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	ready, err := store.SchemaReady(context.Background())
+	if err != nil {
+		t.Fatalf("schema ready before migrations: %v", err)
+	}
+	if ready {
+		t.Fatal("expected schema to be uninitialized before migrations")
+	}
+
+	if err := store.ApplyMigrations(context.Background()); err != nil {
+		t.Fatalf("apply migrations: %v", err)
+	}
+
+	ready, err = store.SchemaReady(context.Background())
+	if err != nil {
+		t.Fatalf("schema ready after migrations: %v", err)
+	}
+	if !ready {
+		t.Fatal("expected schema to be initialized after migrations")
+	}
+}

@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ type Config struct {
 	AuthRateLimitWindow time.Duration
 	ManagedBridgeToken  string
 	AllowedOrigins      []string
+	TrustedProxyCIDRs   []string
 }
 
 func Load() (Config, error) {
@@ -56,6 +58,7 @@ func Load() (Config, error) {
 		AuthRateLimitWindow: authRateLimitWindow,
 		ManagedBridgeToken:  os.Getenv("MANAGED_BRIDGE_TOKEN"),
 		AllowedOrigins:      csvListFromEnv("ALLOWED_ORIGINS"),
+		TrustedProxyCIDRs:   csvListFromEnv("TRUSTED_PROXY_CIDRS"),
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -86,6 +89,11 @@ func (c Config) Validate() error {
 	}
 	if c.AuthRateLimitWindow <= 0 {
 		return fmt.Errorf("AUTH_RATE_LIMIT_WINDOW must be positive")
+	}
+	for _, value := range c.TrustedProxyCIDRs {
+		if _, err := parseTrustedProxyCIDR(value); err != nil {
+			return fmt.Errorf("TRUSTED_PROXY_CIDRS entry %q is invalid: %w", value, err)
+		}
 	}
 
 	return nil
@@ -149,4 +157,30 @@ func csvListFromEnv(name string) []string {
 	}
 
 	return result
+}
+
+func parseTrustedProxyCIDR(value string) (netip.Prefix, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return netip.Prefix{}, fmt.Errorf("must not be empty")
+	}
+
+	if strings.Contains(trimmed, "/") {
+		prefix, err := netip.ParsePrefix(trimmed)
+		if err != nil {
+			return netip.Prefix{}, err
+		}
+		return prefix.Masked(), nil
+	}
+
+	addr, err := netip.ParseAddr(trimmed)
+	if err != nil {
+		return netip.Prefix{}, err
+	}
+
+	if addr.Is4() {
+		return netip.PrefixFrom(addr, 32), nil
+	}
+
+	return netip.PrefixFrom(addr, 128), nil
 }

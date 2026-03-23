@@ -29,6 +29,7 @@ Core tracking in the Ovumcy app still remains local-first. This server is for op
 2. Persist `/data` so SQLite survives container restarts.
 3. Expose the service only through HTTPS on the public internet.
 4. Keep `MANAGED_BRIDGE_TOKEN` empty unless you operate a separate trusted managed-auth service.
+5. Set `TRUSTED_PROXY_CIDRS` if you want auth rate limiting to use real client IPs from a trusted reverse proxy.
 
 ## Example Reverse Proxy Pattern
 
@@ -46,18 +47,21 @@ This service itself does not terminate TLS. Production deployments should not ex
 - `MAX_BLOB_BYTES=16777216`
 - `AUTH_RATE_LIMIT_COUNT=10`
 - `AUTH_RATE_LIMIT_WINDOW=1m`
+- `TRUSTED_PROXY_CIDRS=` set this to your reverse-proxy IP or CIDR when you want forwarded client IPs to participate in auth rate limiting
 
 Adjust limits only when you understand the tradeoff between usability and abuse resistance.
 
 ## Basic Setup Flow In Ovumcy App
 
 1. Deploy this service and put it behind HTTPS.
-2. Open the Ovumcy app and go to `Backup & sync`.
-3. Choose `Self-hosted`.
-4. Enter your sync endpoint, for example `https://sync.example.com`.
-5. Prepare the device and save the recovery phrase somewhere safe.
-6. Create an account on your own server or sign in to an existing one.
-7. Run encrypted sync from the app.
+2. Run `ovumcy-sync-community migrate` once for the target database or volume.
+3. Start `ovumcy-sync-community serve`.
+4. Open the Ovumcy app and go to `Backup & sync`.
+5. Choose `Self-hosted`.
+6. Enter your sync endpoint, for example `https://sync.example.com`.
+7. Prepare the device and save the recovery phrase somewhere safe.
+8. Create an account on your own server or sign in to an existing one.
+9. Run encrypted sync from the app.
 
 ## What The Operator Can See
 

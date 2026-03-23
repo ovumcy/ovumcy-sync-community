@@ -88,3 +88,35 @@ func migrationApplied(ctx context.Context, database *sql.DB, version string) (bo
 
 	return exists > 0, nil
 }
+
+func schemaReady(ctx context.Context, database *sql.DB) (bool, error) {
+	var schemaMigrationsExists int
+	if err := database.QueryRowContext(
+		ctx,
+		`SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'`,
+	).Scan(&schemaMigrationsExists); err != nil {
+		return false, fmt.Errorf("check schema_migrations table: %w", err)
+	}
+	if schemaMigrationsExists == 0 {
+		return false, nil
+	}
+
+	entries, err := migrationFiles.ReadDir("migrations")
+	if err != nil {
+		return false, fmt.Errorf("read migrations: %w", err)
+	}
+
+	expected := 0
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			expected++
+		}
+	}
+
+	var applied int
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(1) FROM schema_migrations`).Scan(&applied); err != nil {
+		return false, fmt.Errorf("count applied migrations: %w", err)
+	}
+
+	return applied >= expected, nil
+}

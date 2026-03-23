@@ -101,3 +101,6 @@ jobs:
 
       - name: Docker build
         run: docker build -t ovumcy-sync-community-ci:${{ github.sha }} .
+
+      - name: Runtime smoke
+        run: IMAGE=ovumcy-sync-community-ci:${{ github.sha }} bash ./scripts/runtime-smoke.sh

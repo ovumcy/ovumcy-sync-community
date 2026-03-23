@@ -97,6 +97,7 @@ Environment variables:
 - `AUTH_RATE_LIMIT_WINDOW` default `1m`
 - `MANAGED_BRIDGE_TOKEN` optional bearer token that enables the machine-to-machine managed bridge endpoint
 - `ALLOWED_ORIGINS` comma-separated allowlist for browser clients; empty by default
+- `TRUSTED_PROXY_CIDRS` optional comma-separated list of trusted reverse-proxy IPs or CIDRs whose forwarded client IP headers may be used for auth rate limiting
 
 Runtime endpoints:
 
@@ -115,19 +116,22 @@ Runtime endpoints:
 ## Run locally
 
 ```bash
-go run ./cmd/ovumcy-sync-community
+go run ./cmd/ovumcy-sync-community migrate
+go run ./cmd/ovumcy-sync-community serve
 ```
 
 ## Docker
 
 ```bash
 docker build -t ovumcy-sync-community .
-docker run --rm -p 8080:8080 -v $(pwd)/data:/data ovumcy-sync-community
+docker run --rm -v $(pwd)/data:/data ovumcy-sync-community migrate
+docker run --rm -p 8080:8080 -v $(pwd)/data:/data ovumcy-sync-community serve
 ```
 
 ## Docker Compose
 
 ```bash
+docker compose run --rm ovumcy-sync-community migrate
 docker compose up --build
 ```
 
@@ -145,6 +149,7 @@ For a production-style self-hosted setup:
 
 - put this service behind HTTPS;
 - persist `/data`;
+- set `TRUSTED_PROXY_CIDRS` to your trusted reverse-proxy addresses if you want auth rate limiting to distinguish real client IPs behind the proxy;
 - keep `MANAGED_BRIDGE_TOKEN` unset unless you really run a separate trusted managed-auth service;
 - set `ALLOWED_ORIGINS` only when browser clients need direct CORS access.
 

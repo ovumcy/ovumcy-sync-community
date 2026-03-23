@@ -203,6 +203,65 @@ func TestServerRateLimitsAuthEndpoints(t *testing.T) {
 	}
 }
 
+func TestServerAuthRateLimitUsesForwardedClientFromTrustedProxy(t *testing.T) {
+	handler := newTestServerWithOptions(t, serverTestOptions{
+		authRateLimitCount: 1,
+		trustedProxyCIDRs:  []string{"10.0.0.0/24"},
+	})
+
+	performJSONRequestWithOptions(t, requestOptions{
+		handler:        handler,
+		method:         http.MethodPost,
+		path:           "/auth/login",
+		body:           map[string]string{"login": "owner@example.com", "password": "wrong password"},
+		expectedStatus: http.StatusUnauthorized,
+		remoteAddr:     "10.0.0.2:1234",
+		headers:        map[string]string{"X-Forwarded-For": "203.0.113.10"},
+	})
+
+	performJSONRequestWithOptions(t, requestOptions{
+		handler:        handler,
+		method:         http.MethodPost,
+		path:           "/auth/login",
+		body:           map[string]string{"login": "owner@example.com", "password": "wrong password"},
+		expectedStatus: http.StatusUnauthorized,
+		remoteAddr:     "10.0.0.2:5678",
+		headers:        map[string]string{"X-Forwarded-For": "203.0.113.11"},
+	})
+}
+
+func TestServerIgnoresForwardedClientFromUntrustedRemoteAddr(t *testing.T) {
+	handler := newTestServerWithOptions(t, serverTestOptions{
+		authRateLimitCount: 1,
+	})
+
+	performJSONRequestWithOptions(t, requestOptions{
+		handler:        handler,
+		method:         http.MethodPost,
+		path:           "/auth/login",
+		body:           map[string]string{"login": "owner@example.com", "password": "wrong password"},
+		expectedStatus: http.StatusUnauthorized,
+		remoteAddr:     "10.0.0.2:1234",
+		headers:        map[string]string{"X-Forwarded-For": "203.0.113.10"},
+	})
+
+	response := performJSONRequestWithOptions(t, requestOptions{
+		handler:        handler,
+		method:         http.MethodPost,
+		path:           "/auth/login",
+		body:           map[string]string{"login": "owner@example.com", "password": "wrong password"},
+		expectedStatus: http.StatusTooManyRequests,
+		remoteAddr:     "10.0.0.2:5678",
+		headers:        map[string]string{"X-Forwarded-For": "203.0.113.11"},
+	})
+
+	var payload map[string]string
+	decodeResponse(t, response.Body.Bytes(), &payload)
+	if payload["error"] != "rate_limited" {
+		t.Fatalf("unexpected untrusted-forwarded rate limit payload: %#v", payload)
+	}
+}
+
 func TestServerRejectsStaleBlobGeneration(t *testing.T) {
 	handler := newTestServer(t)
 
@@ -382,6 +441,30 @@ func TestServerIssuesManagedBridgeSession(t *testing.T) {
 	}
 }
 
+func TestServerRejectsManagedBridgeWhenDisabled(t *testing.T) {
+	handler := newTestServerWithOptions(t, serverTestOptions{
+		disableManaged: true,
+	})
+
+	response := performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/managed/session",
+		map[string]string{
+			"account_id": "managedacct1234",
+		},
+		"test-managed-bridge-token",
+		http.StatusServiceUnavailable,
+	)
+
+	var payload map[string]string
+	decodeResponse(t, response.Body.Bytes(), &payload)
+	if payload["error"] != "managed_bridge_disabled" {
+		t.Fatalf("unexpected managed bridge disabled payload: %#v", payload)
+	}
+}
+
 func TestServerRejectsOversizedAuthJSON(t *testing.T) {
 	handler := newTestServer(t)
 
@@ -478,6 +561,26 @@ func TestServerReadinessEndpoint(t *testing.T) {
 	)
 }
 
+func TestServerHealthEndpoint(t *testing.T) {
+	handler := newTestServer(t)
+
+	response := performJSONRequest(
+		t,
+		handler,
+		http.MethodGet,
+		"/healthz",
+		nil,
+		"",
+		http.StatusOK,
+	)
+
+	var payload map[string]string
+	decodeResponse(t, response.Body.Bytes(), &payload)
+	if payload["status"] != "ok" {
+		t.Fatalf("unexpected health payload: %#v", payload)
+	}
+}
+
 func TestServerReadinessEndpointReturnsServiceUnavailableWhenProbeFails(t *testing.T) {
 	handler := newTestServerWithOptions(t, serverTestOptions{
 		readinessCheck: func(context.Context) error {
@@ -554,10 +657,13 @@ func newTestServer(t *testing.T, allowedOrigins ...string) http.Handler {
 }
 
 type serverTestOptions struct {
-	allowedOrigins []string
-	maxDevices     int
-	maxBlobBytes   int
-	readinessCheck func(context.Context) error
+	allowedOrigins     []string
+	maxDevices         int
+	maxBlobBytes       int
+	readinessCheck     func(context.Context) error
+	authRateLimitCount int
+	trustedProxyCIDRs  []string
+	disableManaged     bool
 }
 
 func newTestServerWithOptions(t *testing.T, options serverTestOptions) http.Handler {
@@ -583,6 +689,14 @@ func newTestServerWithOptions(t *testing.T, options serverTestOptions) http.Hand
 	if maxBlobBytes == 0 {
 		maxBlobBytes = 16 << 20
 	}
+	authRateLimitCount := options.authRateLimitCount
+	if authRateLimitCount == 0 {
+		authRateLimitCount = 10
+	}
+	managedBridgeToken := "test-managed-bridge-token"
+	if options.disableManaged {
+		managedBridgeToken = ""
+	}
 
 	return NewServer(
 		services.NewAuthService(store, 24*time.Hour),
@@ -592,12 +706,13 @@ func newTestServerWithOptions(t *testing.T, options serverTestOptions) http.Hand
 		}),
 		services.NewManagedBridgeService(store, services.NewAuthService(store, 24*time.Hour)),
 		ServerOptions{
-			ManagedBridgeToken:  "test-managed-bridge-token",
+			ManagedBridgeToken:  managedBridgeToken,
 			AllowedOrigins:      options.allowedOrigins,
-			AuthRateLimitCount:  10,
+			AuthRateLimitCount:  authRateLimitCount,
 			AuthRateLimitWindow: time.Minute,
 			MaxBlobBytes:        maxBlobBytes,
 			ReadinessCheck:      options.readinessCheck,
+			TrustedProxyCIDRs:   options.trustedProxyCIDRs,
 		},
 	)
 }
@@ -613,25 +728,55 @@ func performJSONRequest(
 ) *httptest.ResponseRecorder {
 	t.Helper()
 
+	return performJSONRequestWithOptions(t, requestOptions{
+		handler:        handler,
+		method:         method,
+		path:           path,
+		body:           body,
+		sessionToken:   sessionToken,
+		expectedStatus: expectedStatus,
+	})
+}
+
+type requestOptions struct {
+	handler        http.Handler
+	method         string
+	path           string
+	body           any
+	sessionToken   string
+	expectedStatus int
+	remoteAddr     string
+	headers        map[string]string
+}
+
+func performJSONRequestWithOptions(t *testing.T, options requestOptions) *httptest.ResponseRecorder {
+	t.Helper()
+
 	var payload []byte
-	if body != nil {
+	if options.body != nil {
 		var err error
-		payload, err = json.Marshal(body)
+		payload, err = json.Marshal(options.body)
 		if err != nil {
 			t.Fatalf("marshal body: %v", err)
 		}
 	}
 
-	request := httptest.NewRequest(method, path, bytes.NewReader(payload))
+	request := httptest.NewRequest(options.method, options.path, bytes.NewReader(payload))
 	request.Header.Set("Content-Type", "application/json")
-	if sessionToken != "" {
-		request.Header.Set("Authorization", "Bearer "+sessionToken)
+	if options.sessionToken != "" {
+		request.Header.Set("Authorization", "Bearer "+options.sessionToken)
+	}
+	for key, value := range options.headers {
+		request.Header.Set(key, value)
+	}
+	if options.remoteAddr != "" {
+		request.RemoteAddr = options.remoteAddr
 	}
 
 	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, request)
+	options.handler.ServeHTTP(recorder, request)
 
-	if recorder.Code != expectedStatus {
+	if recorder.Code != options.expectedStatus {
 		t.Fatalf("unexpected status %d, body=%s", recorder.Code, recorder.Body.String())
 	}
 

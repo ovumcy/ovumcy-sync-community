@@ -57,3 +57,7 @@ func (s *Store) Ping(ctx context.Context) error {
 func (s *Store) ApplyMigrations(ctx context.Context) error {
 	return applyMigrations(ctx, s.db)
 }
+
+func (s *Store) SchemaReady(ctx context.Context) (bool, error) {
+	return schemaReady(ctx, s.db)
+}

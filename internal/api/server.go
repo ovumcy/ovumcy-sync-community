@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -24,6 +25,7 @@ type Server struct {
 	managedBridgeToken  string
 	authLimiter         *security.RateLimiter
 	allowedOrigins      map[string]struct{}
+	trustedProxyCIDRs   []netip.Prefix
 	maxBlobRequestBytes int64
 	readinessCheck      func(context.Context) error
 	mux                 *http.ServeMux
@@ -36,6 +38,7 @@ type ServerOptions struct {
 	AuthRateLimitWindow time.Duration
 	MaxBlobBytes        int
 	ReadinessCheck      func(context.Context) error
+	TrustedProxyCIDRs   []string
 }
 
 func NewServer(
@@ -60,6 +63,7 @@ func NewServer(
 		managedBridgeToken:  strings.TrimSpace(options.ManagedBridgeToken),
 		authLimiter:         security.NewRateLimiter(options.AuthRateLimitCount, options.AuthRateLimitWindow),
 		allowedOrigins:      originSet,
+		trustedProxyCIDRs:   parseTrustedProxyCIDRs(options.TrustedProxyCIDRs),
 		maxBlobRequestBytes: encodedBlobRequestLimit(options.MaxBlobBytes),
 		readinessCheck:      options.ReadinessCheck,
 		mux:                 http.NewServeMux(),
@@ -404,12 +408,7 @@ func decodeJSON(writer http.ResponseWriter, request *http.Request, target any, m
 }
 
 func (s *Server) allowAuthRequest(writer http.ResponseWriter, request *http.Request) bool {
-	host, _, err := net.SplitHostPort(request.RemoteAddr)
-	if err != nil {
-		host = request.RemoteAddr
-	}
-
-	key := request.URL.Path + ":" + host
+	key := request.URL.Path + ":" + s.clientIPForRateLimit(request)
 	if s.authLimiter.Allow(key) {
 		return true
 	}
@@ -417,6 +416,99 @@ func (s *Server) allowAuthRequest(writer http.ResponseWriter, request *http.Requ
 	writer.Header().Set("Retry-After", "60")
 	writeError(writer, http.StatusTooManyRequests, "rate_limited")
 	return false
+}
+
+func (s *Server) clientIPForRateLimit(request *http.Request) string {
+	remoteAddr, ok := parseClientIP(strings.TrimSpace(request.RemoteAddr))
+	if !ok {
+		return strings.TrimSpace(request.RemoteAddr)
+	}
+
+	if !s.isTrustedProxy(remoteAddr) {
+		return remoteAddr.String()
+	}
+
+	if forwarded, ok := forwardedClientIP(request.Header.Get("X-Forwarded-For")); ok {
+		return forwarded.String()
+	}
+
+	if realIP, ok := parseClientIP(request.Header.Get("X-Real-IP")); ok {
+		return realIP.String()
+	}
+
+	return remoteAddr.String()
+}
+
+func (s *Server) isTrustedProxy(addr netip.Addr) bool {
+	for _, prefix := range s.trustedProxyCIDRs {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseTrustedProxyCIDRs(values []string) []netip.Prefix {
+	result := make([]netip.Prefix, 0, len(values))
+	for _, value := range values {
+		prefix, ok := parseTrustedProxyCIDR(value)
+		if ok {
+			result = append(result, prefix)
+		}
+	}
+	return result
+}
+
+func parseTrustedProxyCIDR(value string) (netip.Prefix, bool) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return netip.Prefix{}, false
+	}
+
+	if strings.Contains(trimmed, "/") {
+		prefix, err := netip.ParsePrefix(trimmed)
+		if err != nil {
+			return netip.Prefix{}, false
+		}
+		return prefix.Masked(), true
+	}
+
+	addr, ok := parseClientIP(trimmed)
+	if !ok {
+		return netip.Prefix{}, false
+	}
+	if addr.Is4() {
+		return netip.PrefixFrom(addr, 32), true
+	}
+	return netip.PrefixFrom(addr, 128), true
+}
+
+func forwardedClientIP(value string) (netip.Addr, bool) {
+	for _, part := range strings.Split(value, ",") {
+		if addr, ok := parseClientIP(part); ok {
+			return addr, true
+		}
+	}
+	return netip.Addr{}, false
+}
+
+func parseClientIP(value string) (netip.Addr, bool) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return netip.Addr{}, false
+	}
+
+	if host, _, err := net.SplitHostPort(trimmed); err == nil {
+		trimmed = host
+	}
+	trimmed = strings.Trim(trimmed, "[]")
+
+	addr, err := netip.ParseAddr(trimmed)
+	if err != nil {
+		return netip.Addr{}, false
+	}
+
+	return addr.Unmap(), true
 }
 
 func writeError(writer http.ResponseWriter, status int, key string) {

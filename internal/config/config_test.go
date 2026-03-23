@@ -148,6 +148,16 @@ func TestEnvHelperParsers(t *testing.T) {
 	if len(origins) != 2 || origins[0] != "https://a.example" || origins[1] != "https://b.example" {
 		t.Fatalf("unexpected csv env result %#v", origins)
 	}
+
+	prefix, err := parseTrustedProxyCIDR("127.0.0.1")
+	if err != nil || prefix.String() != "127.0.0.1/32" {
+		t.Fatalf("unexpected trusted proxy ip parse result %q, err=%v", prefix.String(), err)
+	}
+
+	prefix, err = parseTrustedProxyCIDR("10.0.0.0/24")
+	if err != nil || prefix.String() != "10.0.0.0/24" {
+		t.Fatalf("unexpected trusted proxy cidr parse result %q, err=%v", prefix.String(), err)
+	}
 }
 
 func TestEnvHelperParsersUseFallbacksAndRejectInvalidInput(t *testing.T) {
@@ -182,5 +192,9 @@ func TestEnvHelperParsersUseFallbacksAndRejectInvalidInput(t *testing.T) {
 	t.Setenv("INT_ENV", "0")
 	if _, err := intFromEnv("INT_ENV", 7); err == nil || !strings.Contains(err.Error(), "INT_ENV") {
 		t.Fatalf("expected int validation error, got %v", err)
+	}
+
+	if _, err := parseTrustedProxyCIDR("invalid-cidr"); err == nil {
+		t.Fatal("expected trusted proxy parser to reject invalid input")
 	}
 }

@@ -18,6 +18,7 @@ func TestConfigLoadReturnsDefaults(t *testing.T) {
 	t.Setenv("AUTH_RATE_LIMIT_WINDOW", "")
 	t.Setenv("MANAGED_BRIDGE_TOKEN", "")
 	t.Setenv("ALLOWED_ORIGINS", "")
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -45,6 +46,9 @@ func TestConfigLoadReturnsDefaults(t *testing.T) {
 	if cfg.AuthRateLimitWindow != time.Minute {
 		t.Fatalf("unexpected auth limit window %s", cfg.AuthRateLimitWindow)
 	}
+	if cfg.TrustedProxyCIDRs != nil {
+		t.Fatalf("expected empty trusted proxy cidrs, got %#v", cfg.TrustedProxyCIDRs)
+	}
 }
 
 func TestConfigLoadRejectsInvalidValues(t *testing.T) {
@@ -61,5 +65,13 @@ func TestConfigLoadRejectsInvalidValues(t *testing.T) {
 	_, err = config.Load()
 	if err == nil || !strings.Contains(err.Error(), "AUTH_RATE_LIMIT_WINDOW must be positive") {
 		t.Fatalf("expected auth rate limit window validation error, got %v", err)
+	}
+
+	t.Setenv("AUTH_RATE_LIMIT_WINDOW", "")
+	t.Setenv("TRUSTED_PROXY_CIDRS", "invalid")
+
+	_, err = config.Load()
+	if err == nil || !strings.Contains(err.Error(), "TRUSTED_PROXY_CIDRS") {
+		t.Fatalf("expected trusted proxy validation error, got %v", err)
 	}
 }
