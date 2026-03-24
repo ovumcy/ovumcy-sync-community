@@ -141,6 +141,20 @@ docker compose up --build
 
 The compose baseline binds the service to `http://127.0.0.1:8080` and persists SQLite data under `./data`.
 
+For local browser-preview work with `ovumcy-app`, use the dedicated override:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.browser.yml run --rm ovumcy-sync-community migrate
+docker compose -f docker-compose.yml -f docker-compose.browser.yml up --build
+```
+
+That override allows only:
+
+- `http://127.0.0.1:4173`
+- `http://localhost:4173`
+
+Keep the base compose file unchanged for the default self-hosted security posture.
+
 For an optional reverse-proxy example with Caddy:
 
 ```bash
