@@ -17,10 +17,11 @@ var ErrConflict = errors.New("conflict")
 func (s *Store) CreateAccount(ctx context.Context, account models.Account) (models.Account, error) {
 	_, err := s.db.ExecContext(
 		ctx,
-		`INSERT INTO accounts (id, login, password_hash, mode, premium_active, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO accounts (id, login, password_hash, recovery_code_hash, mode, premium_active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		account.ID,
 		account.Login,
 		account.PasswordHash,
+		account.RecoveryCodeHash,
 		account.Mode,
 		boolToInt(account.PremiumActive),
 		account.CreatedAt.UTC().Format(time.RFC3339Nano),
@@ -39,8 +40,8 @@ func (s *Store) UpsertManagedAccount(ctx context.Context, account models.Account
 	_, err := s.db.ExecContext(
 		ctx,
 		`
-INSERT INTO accounts (id, login, password_hash, mode, premium_active, created_at)
-VALUES (?, ?, ?, ?, ?, ?)
+INSERT INTO accounts (id, login, password_hash, recovery_code_hash, mode, premium_active, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
   login = excluded.login,
   password_hash = excluded.password_hash,
@@ -50,6 +51,7 @@ ON CONFLICT(id) DO UPDATE SET
 		account.ID,
 		account.Login,
 		account.PasswordHash,
+		account.RecoveryCodeHash,
 		account.Mode,
 		boolToInt(account.PremiumActive),
 		account.CreatedAt.UTC().Format(time.RFC3339Nano),
@@ -67,7 +69,7 @@ ON CONFLICT(id) DO UPDATE SET
 func (s *Store) FindAccountByLogin(ctx context.Context, login string) (models.Account, error) {
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, login, password_hash, mode, premium_active, created_at FROM accounts WHERE login = ?`,
+		`SELECT id, login, password_hash, recovery_code_hash, mode, premium_active, created_at FROM accounts WHERE login = ?`,
 		login,
 	)
 
@@ -77,11 +79,87 @@ func (s *Store) FindAccountByLogin(ctx context.Context, login string) (models.Ac
 func (s *Store) FindAccountByID(ctx context.Context, accountID string) (models.Account, error) {
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, login, password_hash, mode, premium_active, created_at FROM accounts WHERE id = ?`,
+		`SELECT id, login, password_hash, recovery_code_hash, mode, premium_active, created_at FROM accounts WHERE id = ?`,
 		accountID,
 	)
 
 	return scanAccount(row)
+}
+
+func (s *Store) UpdateAccountPasswordHash(ctx context.Context, accountID string, passwordHash string) error {
+	result, err := s.db.ExecContext(
+		ctx,
+		`UPDATE accounts SET password_hash = ? WHERE id = ?`,
+		passwordHash,
+		accountID,
+	)
+	if err != nil {
+		return fmt.Errorf("update account password: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("update account password rows: %w", err)
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+
+	return nil
+}
+
+func (s *Store) UpdateAccountPasswordAndRecoveryHash(
+	ctx context.Context,
+	accountID string,
+	passwordHash string,
+	recoveryCodeHash string,
+) error {
+	result, err := s.db.ExecContext(
+		ctx,
+		`UPDATE accounts SET password_hash = ?, recovery_code_hash = ? WHERE id = ?`,
+		passwordHash,
+		recoveryCodeHash,
+		accountID,
+	)
+	if err != nil {
+		return fmt.Errorf("update account password and recovery: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("update account password and recovery rows: %w", err)
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+
+	return nil
+}
+
+func (s *Store) UpdateAccountRecoveryCodeHash(
+	ctx context.Context,
+	accountID string,
+	recoveryCodeHash string,
+) error {
+	result, err := s.db.ExecContext(
+		ctx,
+		`UPDATE accounts SET recovery_code_hash = ? WHERE id = ?`,
+		recoveryCodeHash,
+		accountID,
+	)
+	if err != nil {
+		return fmt.Errorf("update account recovery code: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("update account recovery code rows: %w", err)
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+
+	return nil
 }
 
 func (s *Store) CreateSession(ctx context.Context, session models.Session) (models.Session, error) {
@@ -129,6 +207,104 @@ func (s *Store) TouchSession(ctx context.Context, sessionID string, lastSeenAt t
 	}
 	if affected == 0 {
 		return ErrNotFound
+	}
+
+	return nil
+}
+
+func (s *Store) UpsertPasswordResetToken(
+	ctx context.Context,
+	resetToken models.PasswordResetToken,
+) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`
+INSERT INTO password_reset_tokens (account_id, token_hash, created_at, expires_at)
+VALUES (?, ?, ?, ?)
+ON CONFLICT(account_id) DO UPDATE SET
+  token_hash = excluded.token_hash,
+  created_at = excluded.created_at,
+  expires_at = excluded.expires_at
+`,
+		resetToken.AccountID,
+		resetToken.TokenHash,
+		resetToken.CreatedAt.UTC().Format(time.RFC3339Nano),
+		resetToken.ExpiresAt.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return fmt.Errorf("upsert password reset token: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Store) FindPasswordResetTokenByHash(
+	ctx context.Context,
+	tokenHash string,
+) (models.PasswordResetToken, error) {
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT account_id, token_hash, created_at, expires_at FROM password_reset_tokens WHERE token_hash = ?`,
+		tokenHash,
+	)
+
+	var resetToken models.PasswordResetToken
+	var createdAt string
+	var expiresAt string
+	if err := row.Scan(
+		&resetToken.AccountID,
+		&resetToken.TokenHash,
+		&createdAt,
+		&expiresAt,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return models.PasswordResetToken{}, ErrNotFound
+		}
+		return models.PasswordResetToken{}, fmt.Errorf("scan password reset token: %w", err)
+	}
+	resetToken.CreatedAt = mustParseTime(createdAt)
+	resetToken.ExpiresAt = mustParseTime(expiresAt)
+	return resetToken, nil
+}
+
+func (s *Store) DeletePasswordResetTokensForAccount(
+	ctx context.Context,
+	accountID string,
+) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`DELETE FROM password_reset_tokens WHERE account_id = ?`,
+		accountID,
+	)
+	if err != nil {
+		return fmt.Errorf("delete password reset tokens: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Store) DeleteSessionsForAccountExcept(ctx context.Context, accountID string, keepTokenHash string) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`DELETE FROM sessions WHERE account_id = ? AND token_hash != ?`,
+		accountID,
+		keepTokenHash,
+	)
+	if err != nil {
+		return fmt.Errorf("delete other sessions: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Store) DeleteAllSessionsForAccount(ctx context.Context, accountID string) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`DELETE FROM sessions WHERE account_id = ?`,
+		accountID,
+	)
+	if err != nil {
+		return fmt.Errorf("delete all sessions: %w", err)
 	}
 
 	return nil
@@ -307,6 +483,7 @@ func scanAccount(row interface{ Scan(dest ...any) error }) (models.Account, erro
 		&account.ID,
 		&account.Login,
 		&account.PasswordHash,
+		&account.RecoveryCodeHash,
 		&account.Mode,
 		&premiumActive,
 		&createdAt,

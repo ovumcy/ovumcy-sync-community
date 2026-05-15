@@ -89,6 +89,10 @@ func (s *Server) routes() {
 	s.handleRoute("GET /metrics", "", http.HandlerFunc(s.handleMetrics))
 	s.handleRoute("POST /auth/register", "auth_register", http.HandlerFunc(s.handleRegister))
 	s.handleRoute("POST /auth/login", "auth_login", http.HandlerFunc(s.handleLogin))
+	s.handleRoute("POST /auth/change-password", "auth_change_password", http.HandlerFunc(s.withAuth(s.handleChangePassword)))
+	s.handleRoute("POST /auth/forgot-password", "auth_forgot_password", http.HandlerFunc(s.handleForgotPassword))
+	s.handleRoute("POST /auth/reset-password", "auth_reset_password", http.HandlerFunc(s.handleResetPassword))
+	s.handleRoute("POST /auth/recovery-code/regenerate", "auth_recovery_code_regenerate", http.HandlerFunc(s.withAuth(s.handleRegenerateRecoveryCode)))
 	s.handleRoute("DELETE /auth/session", "auth_logout", http.HandlerFunc(s.handleLogout))
 	s.handleRoute("POST /managed/session", "managed_session", http.HandlerFunc(s.withManagedBridge(s.handleManagedSession)))
 	s.handleRoute("GET /sync/capabilities", "sync_capabilities", http.HandlerFunc(s.withAuth(s.handleCapabilities)))
@@ -214,6 +218,128 @@ func (s *Server) handleLogin(writer http.ResponseWriter, request *http.Request) 
 	}
 
 	writeJSON(writer, http.StatusOK, result)
+}
+
+func (s *Server) handleChangePassword(
+	writer http.ResponseWriter,
+	request *http.Request,
+	account models.Account,
+) {
+	if !s.allowAuthRequestForAccount(writer, request, account.ID) {
+		return
+	}
+
+	var payload changePasswordRequest
+	if !decodeJSON(writer, request, &payload, 4<<10) {
+		return
+	}
+
+	currentSessionTokenHash := security.HashToken(bearerTokenFromRequest(request))
+
+	err := s.auth.ChangePassword(
+		request.Context(),
+		account.ID,
+		currentSessionTokenHash,
+		payload.CurrentPassword,
+		payload.NewPassword,
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrInvalidCurrentPassword):
+			writeError(writer, http.StatusUnauthorized, "invalid_current_password")
+		case errors.Is(err, services.ErrNewPasswordMustDiffer):
+			writeError(writer, http.StatusBadRequest, "new_password_must_differ")
+		case errors.Is(err, services.ErrWeakNewPassword):
+			writeError(writer, http.StatusBadRequest, "weak_new_password")
+		case errors.Is(err, services.ErrUnauthorized):
+			writeError(writer, http.StatusUnauthorized, "unauthorized")
+		default:
+			writeError(writer, http.StatusInternalServerError, "internal_error")
+		}
+		return
+	}
+
+	writeJSON(writer, http.StatusOK, map[string]string{"status": "password_changed"})
+}
+
+func (s *Server) handleForgotPassword(writer http.ResponseWriter, request *http.Request) {
+	if !s.allowAuthRequest(writer, request) {
+		return
+	}
+
+	var payload forgotPasswordRequest
+	if !decodeJSON(writer, request, &payload, 4<<10) {
+		return
+	}
+
+	result, err := s.auth.ForgotPassword(request.Context(), payload.Login, payload.RecoveryCode)
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrInvalidRecoveryCredentials):
+			writeError(writer, http.StatusUnauthorized, "invalid_recovery_credentials")
+		default:
+			writeError(writer, http.StatusInternalServerError, "internal_error")
+		}
+		return
+	}
+
+	writeJSON(writer, http.StatusOK, result)
+}
+
+func (s *Server) handleResetPassword(writer http.ResponseWriter, request *http.Request) {
+	if !s.allowAuthRequest(writer, request) {
+		return
+	}
+
+	var payload resetPasswordRequest
+	if !decodeJSON(writer, request, &payload, 4<<10) {
+		return
+	}
+
+	result, err := s.auth.ResetPassword(request.Context(), payload.ResetToken, payload.NewPassword)
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrInvalidResetToken):
+			writeError(writer, http.StatusUnauthorized, "invalid_reset_token")
+		case errors.Is(err, services.ErrWeakNewPassword):
+			writeError(writer, http.StatusBadRequest, "weak_new_password")
+		default:
+			writeError(writer, http.StatusInternalServerError, "internal_error")
+		}
+		return
+	}
+
+	writeJSON(writer, http.StatusOK, result)
+}
+
+func (s *Server) handleRegenerateRecoveryCode(
+	writer http.ResponseWriter,
+	request *http.Request,
+	account models.Account,
+) {
+	if !s.allowAuthRequestForAccount(writer, request, account.ID) {
+		return
+	}
+
+	var payload regenerateRecoveryCodeRequest
+	if !decodeJSON(writer, request, &payload, 4<<10) {
+		return
+	}
+
+	recoveryCode, err := s.auth.RegenerateRecoveryCode(request.Context(), account.ID, payload.CurrentPassword)
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrInvalidCurrentPassword):
+			writeError(writer, http.StatusUnauthorized, "invalid_current_password")
+		case errors.Is(err, services.ErrUnauthorized):
+			writeError(writer, http.StatusUnauthorized, "unauthorized")
+		default:
+			writeError(writer, http.StatusInternalServerError, "internal_error")
+		}
+		return
+	}
+
+	writeJSON(writer, http.StatusOK, map[string]string{"recovery_code": recoveryCode})
 }
 
 func (s *Server) handleLogout(writer http.ResponseWriter, request *http.Request) {
@@ -454,6 +580,21 @@ func (s *Server) allowAuthRequest(writer http.ResponseWriter, request *http.Requ
 	return false
 }
 
+func (s *Server) allowAuthRequestForAccount(
+	writer http.ResponseWriter,
+	request *http.Request,
+	accountID string,
+) bool {
+	key := request.URL.Path + ":" + accountID
+	if s.authLimiter.Allow(key) {
+		return true
+	}
+
+	writer.Header().Set("Retry-After", "60")
+	writeError(writer, http.StatusTooManyRequests, "rate_limited")
+	return false
+}
+
 func (s *Server) clientIPForRateLimit(request *http.Request) string {
 	remoteAddr, ok := parseClientIP(strings.TrimSpace(request.RemoteAddr))
 	if !ok {
@@ -569,6 +710,25 @@ func encodedBlobRequestLimit(maxBlobBytes int) int64 {
 type credentialsRequest struct {
 	Login    string `json:"login"`
 	Password string `json:"password"`
+}
+
+type changePasswordRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
+type forgotPasswordRequest struct {
+	Login        string `json:"login"`
+	RecoveryCode string `json:"recovery_code"`
+}
+
+type resetPasswordRequest struct {
+	ResetToken  string `json:"reset_token"`
+	NewPassword string `json:"new_password"`
+}
+
+type regenerateRecoveryCodeRequest struct {
+	CurrentPassword string `json:"current_password"`
 }
 
 type managedSessionRequest struct {
