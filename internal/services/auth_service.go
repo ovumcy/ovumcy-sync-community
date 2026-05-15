@@ -119,6 +119,9 @@ func (s *AuthService) Login(ctx context.Context, login string, password string) 
 	account, err := s.store.FindAccountByLogin(ctx, security.NormalizeLogin(login))
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
+			// Equalize timing so an attacker cannot distinguish an unknown
+			// login from a wrong password by measuring response latency.
+			equalizePasswordTiming(password)
 			return AuthResult{}, ErrInvalidCredentials
 		}
 		return AuthResult{}, err
@@ -237,9 +240,20 @@ func (s *AuthService) ForgotPassword(
 	account, err := s.store.FindAccountByLogin(ctx, normalizedLogin)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
+			// Equalize timing so an attacker cannot tell an unknown login
+			// apart from a wrong recovery code by measuring response latency.
+			equalizePasswordTiming(normalizedCode)
 			return ForgotPasswordResult{}, ErrInvalidRecoveryCredentials
 		}
 		return ForgotPasswordResult{}, err
+	}
+
+	if account.RecoveryCodeHash == "" {
+		// Pre-migration accounts have no recovery code set. Burn the same
+		// bcrypt cost so the surface stays indistinguishable from "wrong
+		// recovery code on an account that does have one".
+		equalizePasswordTiming(normalizedCode)
+		return ForgotPasswordResult{}, ErrInvalidRecoveryCredentials
 	}
 
 	if err := security.CompareRecoveryCodeHash(account.RecoveryCodeHash, normalizedCode); err != nil {
