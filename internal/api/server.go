@@ -22,6 +22,7 @@ type Server struct {
 	auth                *services.AuthService
 	sync                *services.SyncService
 	managedBridge       *services.ManagedBridgeService
+	totp                *services.TOTPService
 	managedBridgeToken  string
 	metrics             *Metrics
 	metricsBearerToken  string
@@ -49,6 +50,7 @@ func NewServer(
 	auth *services.AuthService,
 	sync *services.SyncService,
 	managedBridge *services.ManagedBridgeService,
+	totp *services.TOTPService,
 	options ServerOptions,
 ) http.Handler {
 	originSet := make(map[string]struct{}, len(options.AllowedOrigins))
@@ -69,6 +71,7 @@ func NewServer(
 		auth:                auth,
 		sync:                sync,
 		managedBridge:       managedBridge,
+		totp:                totp,
 		managedBridgeToken:  strings.TrimSpace(options.ManagedBridgeToken),
 		metrics:             metrics,
 		metricsBearerToken:  strings.TrimSpace(options.MetricsBearerToken),
@@ -93,6 +96,10 @@ func (s *Server) routes() {
 	s.handleRoute("POST /auth/forgot-password", "auth_forgot_password", http.HandlerFunc(s.handleForgotPassword))
 	s.handleRoute("POST /auth/reset-password", "auth_reset_password", http.HandlerFunc(s.handleResetPassword))
 	s.handleRoute("POST /auth/recovery-code/regenerate", "auth_recovery_code_regenerate", http.HandlerFunc(s.withAuth(s.handleRegenerateRecoveryCode)))
+	s.handleRoute("POST /auth/totp/enroll", "auth_totp_enroll", http.HandlerFunc(s.withAuth(s.handleTOTPEnroll)))
+	s.handleRoute("POST /auth/totp/verify", "auth_totp_verify", http.HandlerFunc(s.withAuth(s.handleTOTPVerifyEnrollment)))
+	s.handleRoute("POST /auth/totp/disable", "auth_totp_disable", http.HandlerFunc(s.withAuth(s.handleTOTPDisable)))
+	s.handleRoute("POST /auth/totp/challenge", "auth_totp_challenge", http.HandlerFunc(s.handleTOTPChallenge))
 	s.handleRoute("DELETE /auth/session", "auth_logout", http.HandlerFunc(s.handleLogout))
 	s.handleRoute("POST /managed/session", "managed_session", http.HandlerFunc(s.withManagedBridge(s.handleManagedSession)))
 	s.handleRoute("GET /sync/capabilities", "sync_capabilities", http.HandlerFunc(s.withAuth(s.handleCapabilities)))
@@ -340,6 +347,144 @@ func (s *Server) handleRegenerateRecoveryCode(
 	}
 
 	writeJSON(writer, http.StatusOK, map[string]string{"recovery_code": recoveryCode})
+}
+
+func (s *Server) handleTOTPEnroll(
+	writer http.ResponseWriter,
+	request *http.Request,
+	account models.Account,
+) {
+	if s.totp == nil {
+		writeError(writer, http.StatusServiceUnavailable, "totp_not_configured")
+		return
+	}
+	if !s.allowAuthRequestForAccount(writer, request, account.ID) {
+		return
+	}
+
+	var payload totpEnrollRequest
+	if !decodeJSON(writer, request, &payload, 4<<10) {
+		return
+	}
+
+	result, err := s.totp.StartEnrollment(request.Context(), account.ID, payload.CurrentPassword)
+	if err != nil {
+		mapTOTPError(writer, err)
+		return
+	}
+
+	writeJSON(writer, http.StatusOK, result)
+}
+
+func (s *Server) handleTOTPVerifyEnrollment(
+	writer http.ResponseWriter,
+	request *http.Request,
+	account models.Account,
+) {
+	if s.totp == nil {
+		writeError(writer, http.StatusServiceUnavailable, "totp_not_configured")
+		return
+	}
+	if !s.allowAuthRequestForAccount(writer, request, account.ID) {
+		return
+	}
+
+	var payload totpVerifyRequest
+	if !decodeJSON(writer, request, &payload, 4<<10) {
+		return
+	}
+
+	currentSessionTokenHash := security.HashToken(bearerTokenFromRequest(request))
+
+	if err := s.totp.CompleteEnrollment(
+		request.Context(),
+		account.ID,
+		currentSessionTokenHash,
+		payload.Code,
+	); err != nil {
+		mapTOTPError(writer, err)
+		return
+	}
+
+	writeJSON(writer, http.StatusOK, map[string]string{"status": "totp_enabled"})
+}
+
+func (s *Server) handleTOTPDisable(
+	writer http.ResponseWriter,
+	request *http.Request,
+	account models.Account,
+) {
+	if s.totp == nil {
+		writeError(writer, http.StatusServiceUnavailable, "totp_not_configured")
+		return
+	}
+	if !s.allowAuthRequestForAccount(writer, request, account.ID) {
+		return
+	}
+
+	var payload totpDisableRequest
+	if !decodeJSON(writer, request, &payload, 4<<10) {
+		return
+	}
+
+	if err := s.totp.Disable(
+		request.Context(),
+		account.ID,
+		payload.CurrentPassword,
+		payload.Code,
+	); err != nil {
+		mapTOTPError(writer, err)
+		return
+	}
+
+	writeJSON(writer, http.StatusOK, map[string]string{"status": "totp_disabled"})
+}
+
+func (s *Server) handleTOTPChallenge(writer http.ResponseWriter, request *http.Request) {
+	if s.totp == nil {
+		writeError(writer, http.StatusServiceUnavailable, "totp_not_configured")
+		return
+	}
+	if !s.allowAuthRequest(writer, request) {
+		return
+	}
+
+	var payload totpChallengeRequest
+	if !decodeJSON(writer, request, &payload, 4<<10) {
+		return
+	}
+
+	result, err := s.totp.VerifyChallenge(request.Context(), payload.ChallengeID, payload.Code)
+	if err != nil {
+		mapTOTPError(writer, err)
+		return
+	}
+
+	writeJSON(writer, http.StatusOK, result)
+}
+
+func mapTOTPError(writer http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, services.ErrTOTPNotConfigured):
+		writeError(writer, http.StatusServiceUnavailable, "totp_not_configured")
+	case errors.Is(err, services.ErrTOTPAlreadyEnabled):
+		writeError(writer, http.StatusConflict, "totp_already_enabled")
+	case errors.Is(err, services.ErrInvalidCurrentPassword):
+		writeError(writer, http.StatusUnauthorized, "invalid_current_password")
+	case errors.Is(err, services.ErrTOTPInvalidCode):
+		writeError(writer, http.StatusUnauthorized, "totp_invalid_code")
+	case errors.Is(err, services.ErrTOTPReplayed):
+		writeError(writer, http.StatusUnauthorized, "totp_replayed")
+	case errors.Is(err, services.ErrTOTPChallengeInvalid):
+		writeError(writer, http.StatusUnauthorized, "totp_challenge_invalid")
+	case errors.Is(err, services.ErrTOTPSecretEncrypt),
+		errors.Is(err, services.ErrTOTPSecretDecrypt):
+		writeError(writer, http.StatusInternalServerError, "totp_secret_failed")
+	case errors.Is(err, services.ErrUnauthorized):
+		writeError(writer, http.StatusUnauthorized, "unauthorized")
+	default:
+		writeError(writer, http.StatusInternalServerError, "internal_error")
+	}
 }
 
 func (s *Server) handleLogout(writer http.ResponseWriter, request *http.Request) {
@@ -729,6 +874,24 @@ type resetPasswordRequest struct {
 
 type regenerateRecoveryCodeRequest struct {
 	CurrentPassword string `json:"current_password"`
+}
+
+type totpEnrollRequest struct {
+	CurrentPassword string `json:"current_password"`
+}
+
+type totpVerifyRequest struct {
+	Code string `json:"code"`
+}
+
+type totpDisableRequest struct {
+	CurrentPassword string `json:"current_password"`
+	Code            string `json:"code"`
+}
+
+type totpChallengeRequest struct {
+	ChallengeID string `json:"challenge_id"`
+	Code        string `json:"code"`
 }
 
 type managedSessionRequest struct {

@@ -86,12 +86,24 @@ func runServe(cfg config.Config) error {
 	})
 	managedBridgeService := services.NewManagedBridgeService(store, authService)
 
+	var totpService *services.TOTPService
+	if len(cfg.FieldEncryptionKey) > 0 {
+		totpService = services.NewTOTPService(
+			store,
+			authService,
+			cfg.FieldEncryptionKey,
+			cfg.TOTPIssuer,
+		)
+		authService.AttachTOTPChallengeIssuer(totpService)
+	}
+
 	server := &http.Server{
 		Addr: cfg.BindAddr,
 		Handler: api.NewServer(
 			authService,
 			syncService,
 			managedBridgeService,
+			totpService,
 			api.ServerOptions{
 				ManagedBridgeToken:  cfg.ManagedBridgeToken,
 				MetricsEnabled:      cfg.MetricsEnabled,

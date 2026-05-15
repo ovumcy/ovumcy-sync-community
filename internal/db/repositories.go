@@ -69,7 +69,7 @@ ON CONFLICT(id) DO UPDATE SET
 func (s *Store) FindAccountByLogin(ctx context.Context, login string) (models.Account, error) {
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, login, password_hash, recovery_code_hash, mode, premium_active, created_at FROM accounts WHERE login = ?`,
+		`SELECT id, login, password_hash, recovery_code_hash, mode, premium_active, created_at, totp_secret_encrypted, totp_enabled, totp_last_used_step FROM accounts WHERE login = ?`,
 		login,
 	)
 
@@ -79,7 +79,7 @@ func (s *Store) FindAccountByLogin(ctx context.Context, login string) (models.Ac
 func (s *Store) FindAccountByID(ctx context.Context, accountID string) (models.Account, error) {
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, login, password_hash, recovery_code_hash, mode, premium_active, created_at FROM accounts WHERE id = ?`,
+		`SELECT id, login, password_hash, recovery_code_hash, mode, premium_active, created_at, totp_secret_encrypted, totp_enabled, totp_last_used_step FROM accounts WHERE id = ?`,
 		accountID,
 	)
 
@@ -209,6 +209,147 @@ func (s *Store) TouchSession(ctx context.Context, sessionID string, lastSeenAt t
 		return ErrNotFound
 	}
 
+	return nil
+}
+
+// UpdateTOTPSecretAndEnabled writes the new TOTP secret ciphertext alongside
+// the totp_enabled flag in one statement. Called when enrolling (set secret +
+// enable) and when disabling (clear secret + disable). totp_last_used_step
+// is reset on every transition so a previously consumed step does not block
+// a fresh enrollment.
+func (s *Store) UpdateTOTPSecretAndEnabled(
+	ctx context.Context,
+	accountID string,
+	encryptedSecret string,
+	enabled bool,
+) error {
+	result, err := s.db.ExecContext(
+		ctx,
+		`UPDATE accounts SET totp_secret_encrypted = ?, totp_enabled = ?, totp_last_used_step = 0 WHERE id = ?`,
+		encryptedSecret,
+		boolToInt(enabled),
+		accountID,
+	)
+	if err != nil {
+		return fmt.Errorf("update totp secret: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("update totp secret rows: %w", err)
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+
+	return nil
+}
+
+// ClaimTOTPStep atomically advances totp_last_used_step to step iff it is
+// strictly greater than the persisted value. Returns true when the row was
+// updated (the step is now consumed by this caller) and false when the step
+// was already at or beyond `step` — a replay or concurrent loser.
+func (s *Store) ClaimTOTPStep(
+	ctx context.Context,
+	accountID string,
+	step int64,
+) (bool, error) {
+	result, err := s.db.ExecContext(
+		ctx,
+		`UPDATE accounts SET totp_last_used_step = ? WHERE id = ? AND totp_last_used_step < ?`,
+		step,
+		accountID,
+		step,
+	)
+	if err != nil {
+		return false, fmt.Errorf("claim totp step: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("claim totp step rows: %w", err)
+	}
+	return affected == 1, nil
+}
+
+func (s *Store) UpsertTOTPChallenge(
+	ctx context.Context,
+	challenge models.TOTPChallenge,
+) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`
+INSERT INTO totp_challenges (challenge_id_hash, account_id, created_at, expires_at)
+VALUES (?, ?, ?, ?)
+`,
+		challenge.ChallengeIDHash,
+		challenge.AccountID,
+		challenge.CreatedAt.UTC().Format(time.RFC3339Nano),
+		challenge.ExpiresAt.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return fmt.Errorf("insert totp challenge: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Store) FindTOTPChallengeByHash(
+	ctx context.Context,
+	challengeIDHash string,
+) (models.TOTPChallenge, error) {
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT challenge_id_hash, account_id, created_at, expires_at FROM totp_challenges WHERE challenge_id_hash = ?`,
+		challengeIDHash,
+	)
+
+	var challenge models.TOTPChallenge
+	var createdAt string
+	var expiresAt string
+	if err := row.Scan(
+		&challenge.ChallengeIDHash,
+		&challenge.AccountID,
+		&createdAt,
+		&expiresAt,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return models.TOTPChallenge{}, ErrNotFound
+		}
+		return models.TOTPChallenge{}, fmt.Errorf("scan totp challenge: %w", err)
+	}
+	challenge.CreatedAt = mustParseTime(createdAt)
+	challenge.ExpiresAt = mustParseTime(expiresAt)
+	return challenge, nil
+}
+
+func (s *Store) DeleteTOTPChallengeByHash(
+	ctx context.Context,
+	challengeIDHash string,
+) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`DELETE FROM totp_challenges WHERE challenge_id_hash = ?`,
+		challengeIDHash,
+	)
+	if err != nil {
+		return fmt.Errorf("delete totp challenge: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) DeleteTOTPChallengesForAccount(
+	ctx context.Context,
+	accountID string,
+) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`DELETE FROM totp_challenges WHERE account_id = ?`,
+		accountID,
+	)
+	if err != nil {
+		return fmt.Errorf("delete totp challenges for account: %w", err)
+	}
 	return nil
 }
 
@@ -479,6 +620,7 @@ func scanAccount(row interface{ Scan(dest ...any) error }) (models.Account, erro
 	var account models.Account
 	var createdAt string
 	var premiumActive int
+	var totpEnabled int
 	if err := row.Scan(
 		&account.ID,
 		&account.Login,
@@ -487,6 +629,9 @@ func scanAccount(row interface{ Scan(dest ...any) error }) (models.Account, erro
 		&account.Mode,
 		&premiumActive,
 		&createdAt,
+		&account.TOTPSecretEncrypted,
+		&totpEnabled,
+		&account.TOTPLastUsedStep,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return models.Account{}, ErrNotFound
@@ -494,6 +639,7 @@ func scanAccount(row interface{ Scan(dest ...any) error }) (models.Account, erro
 		return models.Account{}, fmt.Errorf("scan account: %w", err)
 	}
 	account.PremiumActive = premiumActive != 0
+	account.TOTPEnabled = totpEnabled != 0
 	account.CreatedAt = mustParseTime(createdAt)
 	return account, nil
 }

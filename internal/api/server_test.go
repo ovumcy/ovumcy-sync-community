@@ -742,6 +742,7 @@ type serverTestOptions struct {
 	enableMetrics      bool
 	metricsBearerToken string
 	disableManaged     bool
+	enableTOTP         bool
 }
 
 func newTestServerWithOptions(t *testing.T, options serverTestOptions) http.Handler {
@@ -776,13 +777,36 @@ func newTestServerWithOptions(t *testing.T, options serverTestOptions) http.Hand
 		managedBridgeToken = ""
 	}
 
-	return NewServer(
+	authService := services.NewAuthService(store, 24*time.Hour)
+	syncService := services.NewSyncService(store, services.SyncOptions{
+		MaxDevices:   maxDevices,
+		MaxBlobBytes: maxBlobBytes,
+	})
+	managedBridgeService := services.NewManagedBridgeService(
+		store,
 		services.NewAuthService(store, 24*time.Hour),
-		services.NewSyncService(store, services.SyncOptions{
-			MaxDevices:   maxDevices,
-			MaxBlobBytes: maxBlobBytes,
-		}),
-		services.NewManagedBridgeService(store, services.NewAuthService(store, 24*time.Hour)),
+	)
+
+	var totpService *services.TOTPService
+	if options.enableTOTP {
+		key := make([]byte, 32)
+		for i := range key {
+			key[i] = byte(i + 1)
+		}
+		totpService = services.NewTOTPService(
+			store,
+			authService,
+			key,
+			"ovumcy-sync-community-test",
+		)
+		authService.AttachTOTPChallengeIssuer(totpService)
+	}
+
+	return NewServer(
+		authService,
+		syncService,
+		managedBridgeService,
+		totpService,
 		ServerOptions{
 			ManagedBridgeToken:  managedBridgeToken,
 			MetricsEnabled:      options.enableMetrics,

@@ -27,10 +27,19 @@ var ErrInvalidResetToken = errors.New("invalid_reset_token")
 // operator-provided out-of-band channel) and the new-password screen.
 const PasswordResetTokenTTL = 30 * time.Minute
 
+// TOTPChallengeIssuer is implemented by services that can mint a TOTP login
+// challenge after a successful password verification. AuthService delegates
+// to it instead of importing the TOTPService directly so the dependency
+// graph stays one-directional (totp -> auth -> store).
+type TOTPChallengeIssuer interface {
+	IssueChallenge(ctx context.Context, accountID string) (challengeID string, expiresAt time.Time, err error)
+}
+
 type AuthService struct {
-	store      *db.Store
-	sessionTTL time.Duration
-	now        func() time.Time
+	store          *db.Store
+	sessionTTL     time.Duration
+	now            func() time.Time
+	totpChallenges TOTPChallengeIssuer
 }
 
 type AuthResult struct {
@@ -41,6 +50,18 @@ type AuthResult struct {
 	// only on `Register` responses (the single moment we surface it). Login
 	// and managed-bridge sessions leave this field empty.
 	RecoveryCode string `json:"recovery_code,omitempty"`
+	// TOTPChallenge is non-nil ONLY when password verification succeeded but
+	// the account has TOTP enabled. In that case the session token fields are
+	// empty and the caller must complete `POST /auth/totp/challenge` with
+	// this challenge id before any session is issued.
+	TOTPChallenge *AuthTOTPChallenge `json:"totp_challenge,omitempty"`
+}
+
+// AuthTOTPChallenge is the wire shape of a pending TOTP login second factor.
+// The challenge id is single-use and short-lived (`TOTPChallengeTTL`).
+type AuthTOTPChallenge struct {
+	ChallengeID        string    `json:"challenge_id"`
+	ChallengeExpiresAt time.Time `json:"challenge_expires_at"`
 }
 
 // PasswordResetResult is returned from ResetPassword. It carries the newly
@@ -64,6 +85,15 @@ func NewAuthService(store *db.Store, sessionTTL time.Duration) *AuthService {
 		sessionTTL: sessionTTL,
 		now:        time.Now,
 	}
+}
+
+// AttachTOTPChallengeIssuer wires the TOTP login second-factor flow. When
+// non-nil and the account has TOTP enabled, Login returns a TOTP challenge
+// instead of a session token. Pass nil (the default) to disable 2FA-aware
+// login entirely — useful for tests and for servers built without a field
+// encryption key configured.
+func (s *AuthService) AttachTOTPChallengeIssuer(issuer TOTPChallengeIssuer) {
+	s.totpChallenges = issuer
 }
 
 func (s *AuthService) Register(ctx context.Context, login string, password string) (AuthResult, error) {
@@ -129,6 +159,20 @@ func (s *AuthService) Login(ctx context.Context, login string, password string) 
 
 	if err := security.ComparePasswordHash(account.PasswordHash, password); err != nil {
 		return AuthResult{}, ErrInvalidCredentials
+	}
+
+	if account.TOTPEnabled && s.totpChallenges != nil {
+		challengeID, expiresAt, issueErr := s.totpChallenges.IssueChallenge(ctx, account.ID)
+		if issueErr != nil {
+			return AuthResult{}, issueErr
+		}
+		return AuthResult{
+			AccountID: account.ID,
+			TOTPChallenge: &AuthTOTPChallenge{
+				ChallengeID:        challengeID,
+				ChallengeExpiresAt: expiresAt,
+			},
+		}, nil
 	}
 
 	return s.createSession(ctx, account.ID, s.now().UTC())

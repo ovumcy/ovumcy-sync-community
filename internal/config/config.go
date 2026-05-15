@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/hex"
 	"fmt"
 	"net/netip"
 	"os"
@@ -22,6 +23,16 @@ type Config struct {
 	MetricsBearerToken  string
 	AllowedOrigins      []string
 	TrustedProxyCIDRs   []string
+	// FieldEncryptionKey holds the 32-byte master key used to encrypt
+	// privacy-sensitive account-row fields (currently the TOTP secret). The
+	// server REQUIRES it to be set when any account has TOTP enabled. The env
+	// var FIELD_ENCRYPTION_KEY must carry a 64-char hex string (32 bytes).
+	FieldEncryptionKey []byte
+	// TOTPIssuer is the issuer label embedded in TOTP otpauth:// provisioning
+	// URIs. It controls how authenticator apps label the account in the user's
+	// vault. Defaults to "ovumcy-sync-community" but operators with custom
+	// branding can override via TOTP_ISSUER.
+	TOTPIssuer string
 }
 
 func Load() (Config, error) {
@@ -55,6 +66,11 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	fieldKey, err := fieldEncryptionKeyFromEnv("FIELD_ENCRYPTION_KEY")
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
 		BindAddr:            stringFromEnv("BIND_ADDR", ":8080"),
 		DBPath:              stringFromEnv("DB_PATH", "./data/ovumcy-sync-community.sqlite"),
@@ -68,6 +84,8 @@ func Load() (Config, error) {
 		MetricsBearerToken:  os.Getenv("METRICS_BEARER_TOKEN"),
 		AllowedOrigins:      csvListFromEnv("ALLOWED_ORIGINS"),
 		TrustedProxyCIDRs:   csvListFromEnv("TRUSTED_PROXY_CIDRS"),
+		FieldEncryptionKey:  fieldKey,
+		TOTPIssuer:          stringFromEnv("TOTP_ISSUER", "ovumcy-sync-community"),
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -75,6 +93,25 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func fieldEncryptionKeyFromEnv(name string) ([]byte, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return nil, nil
+	}
+	decoded, err := hex.DecodeString(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s must be a hex-encoded byte string: %w", name, err)
+	}
+	if len(decoded) < 32 {
+		return nil, fmt.Errorf(
+			"%s must decode to at least 32 bytes (got %d); generate one with `openssl rand -hex 32`",
+			name,
+			len(decoded),
+		)
+	}
+	return decoded, nil
 }
 
 func (c Config) Validate() error {
