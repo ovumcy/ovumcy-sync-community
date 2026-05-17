@@ -323,6 +323,33 @@ func (s *Store) FindTOTPChallengeByHash(
 	return challenge, nil
 }
 
+// IncrementTOTPChallengeFailedAttempts atomically increments the per-row
+// counter and returns the new value. Used by VerifyChallenge to enforce a
+// finite number of guesses per challenge id so an attacker cannot brute-force
+// the 6-digit code through the challenge's 5-minute lifetime.
+//
+// Returns ErrNotFound when the challenge no longer exists (e.g. already
+// consumed or expired).
+func (s *Store) IncrementTOTPChallengeFailedAttempts(
+	ctx context.Context,
+	challengeIDHash string,
+) (int, error) {
+	row := s.db.QueryRowContext(
+		ctx,
+		`UPDATE totp_challenges SET failed_attempts = failed_attempts + 1 WHERE challenge_id_hash = ? RETURNING failed_attempts`,
+		challengeIDHash,
+	)
+
+	var failedAttempts int
+	if err := row.Scan(&failedAttempts); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, ErrNotFound
+		}
+		return 0, fmt.Errorf("increment totp challenge attempts: %w", err)
+	}
+	return failedAttempts, nil
+}
+
 func (s *Store) DeleteTOTPChallengeByHash(
 	ctx context.Context,
 	challengeIDHash string,

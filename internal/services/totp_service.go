@@ -28,16 +28,35 @@ var (
 // challenge ID is bounded.
 const TOTPChallengeTTL = 5 * time.Minute
 
+// maxTOTPChallengeFailedAttempts is the per-challenge brute-force ceiling.
+// A 6-digit TOTP code has 1e6 possibilities (and 3e6 across the ±1 skew
+// window). Allowing 5 guesses keeps a wrong-fingered owner happy while
+// making a 5-minute online brute force essentially impossible. Past the
+// ceiling the challenge id is burnt and the caller must restart from
+// password login.
+const maxTOTPChallengeFailedAttempts = 5
+
+// TOTPMetricsObserver is the optional observability hook TOTPService uses to
+// report enrollment-verify and login-challenge outcomes. It exists as an
+// interface so the service does not import `internal/api` (the package that
+// owns the Prometheus registry). Servers running without metrics pass nil
+// and the calls are no-ops.
+type TOTPMetricsObserver interface {
+	ObserveTOTPEnrollmentCompletion(result string)
+	ObserveTOTPChallengeCompletion(result string)
+}
+
 // TOTPService owns enrollment, verification, disable, and the login
 // second-factor challenge flow. The encrypted secret is stored on the
 // account row; the AEAD key comes from the server config.
 type TOTPService struct {
-	store      *db.Store
-	auth       *AuthService
-	secretKey  []byte
-	issuer     string
-	now        func() time.Time
-	newSecret  func() ([]byte, error)
+	store     *db.Store
+	auth      *AuthService
+	secretKey []byte
+	issuer    string
+	now       func() time.Time
+	newSecret func() ([]byte, error)
+	metrics   TOTPMetricsObserver
 }
 
 func NewTOTPService(
@@ -53,6 +72,24 @@ func NewTOTPService(
 		issuer:    issuer,
 		now:       time.Now,
 		newSecret: security.NewTOTPSecret,
+	}
+}
+
+// AttachMetricsObserver wires an observability hook for enrollment-verify and
+// login-challenge outcomes. nil disables metrics for this service.
+func (s *TOTPService) AttachMetricsObserver(observer TOTPMetricsObserver) {
+	s.metrics = observer
+}
+
+func (s *TOTPService) observeEnrollmentCompletion(result string) {
+	if s.metrics != nil {
+		s.metrics.ObserveTOTPEnrollmentCompletion(result)
+	}
+}
+
+func (s *TOTPService) observeChallengeCompletion(result string) {
+	if s.metrics != nil {
+		s.metrics.ObserveTOTPChallengeCompletion(result)
 	}
 }
 
@@ -164,11 +201,13 @@ func (s *TOTPService) CompleteEnrollment(
 		aadForTOTPSecret(accountID),
 	)
 	if err != nil {
+		s.observeEnrollmentCompletion("secret_failed")
 		return fmt.Errorf("%w: %v", ErrTOTPSecretDecrypt, err)
 	}
 
 	step, ok := security.VerifyTOTPCode([]byte(rawSecret), code, s.now().UTC().Unix())
 	if !ok {
+		s.observeEnrollmentCompletion("invalid_code")
 		return ErrTOTPInvalidCode
 	}
 
@@ -177,6 +216,7 @@ func (s *TOTPService) CompleteEnrollment(
 		return err
 	}
 	if !claimed {
+		s.observeEnrollmentCompletion("replayed")
 		return ErrTOTPReplayed
 	}
 
@@ -198,6 +238,7 @@ func (s *TOTPService) CompleteEnrollment(
 		return err
 	}
 
+	s.observeEnrollmentCompletion("ok")
 	return nil
 }
 
@@ -316,6 +357,7 @@ func (s *TOTPService) VerifyChallenge(
 	challenge, err := s.store.FindTOTPChallengeByHash(ctx, security.HashToken(challengeID))
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
+			s.observeChallengeCompletion("challenge_invalid")
 			return AuthResult{}, ErrTOTPChallengeInvalid
 		}
 		return AuthResult{}, err
@@ -324,12 +366,14 @@ func (s *TOTPService) VerifyChallenge(
 	now := s.now().UTC()
 	if !challenge.ExpiresAt.After(now) {
 		_ = s.store.DeleteTOTPChallengeByHash(ctx, security.HashToken(challengeID))
+		s.observeChallengeCompletion("challenge_invalid")
 		return AuthResult{}, ErrTOTPChallengeInvalid
 	}
 
 	account, err := s.store.FindAccountByID(ctx, challenge.AccountID)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
+			s.observeChallengeCompletion("challenge_invalid")
 			return AuthResult{}, ErrTOTPChallengeInvalid
 		}
 		return AuthResult{}, err
@@ -337,6 +381,7 @@ func (s *TOTPService) VerifyChallenge(
 	if !account.TOTPEnabled || account.TOTPSecretEncrypted == "" {
 		// Challenge stale: 2FA was disabled between Login and this call.
 		_ = s.store.DeleteTOTPChallengeByHash(ctx, security.HashToken(challengeID))
+		s.observeChallengeCompletion("challenge_invalid")
 		return AuthResult{}, ErrTOTPChallengeInvalid
 	}
 
@@ -346,11 +391,33 @@ func (s *TOTPService) VerifyChallenge(
 		aadForTOTPSecret(account.ID),
 	)
 	if err != nil {
+		s.observeChallengeCompletion("secret_failed")
 		return AuthResult{}, fmt.Errorf("%w: %v", ErrTOTPSecretDecrypt, err)
 	}
 
 	step, ok := security.VerifyTOTPCode([]byte(rawSecret), code, now.Unix())
 	if !ok {
+		// Per-challenge attempt counter caps online brute force at
+		// `maxTOTPChallengeFailedAttempts` guesses for the lifetime of a
+		// single challenge id. Once the ceiling is crossed we burn the
+		// challenge — the caller must restart from password login.
+		failedAttempts, incrErr := s.store.IncrementTOTPChallengeFailedAttempts(
+			ctx,
+			security.HashToken(challengeID),
+		)
+		if incrErr != nil {
+			if errors.Is(incrErr, db.ErrNotFound) {
+				s.observeChallengeCompletion("challenge_invalid")
+				return AuthResult{}, ErrTOTPChallengeInvalid
+			}
+			return AuthResult{}, incrErr
+		}
+		if failedAttempts >= maxTOTPChallengeFailedAttempts {
+			_ = s.store.DeleteTOTPChallengeByHash(ctx, security.HashToken(challengeID))
+			s.observeChallengeCompletion("burnt")
+			return AuthResult{}, ErrTOTPChallengeInvalid
+		}
+		s.observeChallengeCompletion("invalid_code")
 		return AuthResult{}, ErrTOTPInvalidCode
 	}
 
@@ -359,6 +426,7 @@ func (s *TOTPService) VerifyChallenge(
 		return AuthResult{}, err
 	}
 	if !claimed {
+		s.observeChallengeCompletion("replayed")
 		return AuthResult{}, ErrTOTPReplayed
 	}
 
@@ -366,6 +434,7 @@ func (s *TOTPService) VerifyChallenge(
 		return AuthResult{}, err
 	}
 
+	s.observeChallengeCompletion("ok")
 	return s.auth.CreateSessionForAccount(ctx, account.ID)
 }
 

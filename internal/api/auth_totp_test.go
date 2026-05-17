@@ -2,6 +2,8 @@ package api
 
 import (
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -332,5 +334,229 @@ func TestTOTPChallengeWithInvalidIDReturnsGenericError(t *testing.T) {
 	decodeResponse(t, resp.Body.Bytes(), &body)
 	if body["error"] != "totp_challenge_invalid" {
 		t.Fatalf("unexpected error key: %#v", body)
+	}
+}
+
+func TestTOTPChallengeBurnsAfterFiveWrongCodes(t *testing.T) {
+	handler := newTestServerWithOptions(t, serverTestOptions{enableTOTP: true})
+	token := registerOwnerWithTOTP(t, handler)
+
+	// Enroll TOTP so login goes through the challenge path.
+	enrollResp := performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/auth/totp/enroll",
+		map[string]string{"current_password": totpTestPassword},
+		token,
+		http.StatusOK,
+	)
+	var enrollBody struct {
+		SecretBase32 string `json:"secret_base32"`
+	}
+	decodeResponse(t, enrollResp.Body.Bytes(), &enrollBody)
+	secret, err := security.DecodeTOTPSecretBase32(enrollBody.SecretBase32)
+	if err != nil {
+		t.Fatalf("decode secret: %v", err)
+	}
+	code := security.GenerateTOTPCode(secret, time.Now().Unix()/security.TOTPStepSeconds)
+	performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/auth/totp/verify",
+		map[string]string{"code": code},
+		token,
+		http.StatusOK,
+	)
+
+	// Trigger a login challenge.
+	loginResp := performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/auth/login",
+		map[string]string{
+			"login":    "owner@example.com",
+			"password": totpTestPassword,
+		},
+		"",
+		http.StatusOK,
+	)
+	var loginBody struct {
+		TOTPChallenge *struct {
+			ChallengeID string `json:"challenge_id"`
+		} `json:"totp_challenge"`
+	}
+	decodeResponse(t, loginResp.Body.Bytes(), &loginBody)
+	if loginBody.TOTPChallenge == nil {
+		t.Fatalf("expected totp challenge, got %#v", loginBody)
+	}
+	challengeID := loginBody.TOTPChallenge.ChallengeID
+
+	// First four wrong attempts must stay retryable (totp_invalid_code).
+	for i := 0; i < 4; i++ {
+		resp := performJSONRequest(
+			t,
+			handler,
+			http.MethodPost,
+			"/auth/totp/challenge",
+			map[string]string{
+				"challenge_id": challengeID,
+				"code":         "000000",
+			},
+			"",
+			http.StatusUnauthorized,
+		)
+		var body map[string]string
+		decodeResponse(t, resp.Body.Bytes(), &body)
+		if body["error"] != "totp_invalid_code" {
+			t.Fatalf("attempt %d: expected totp_invalid_code, got %#v", i+1, body)
+		}
+	}
+
+	// Fifth wrong attempt burns the challenge.
+	resp := performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/auth/totp/challenge",
+		map[string]string{
+			"challenge_id": challengeID,
+			"code":         "000000",
+		},
+		"",
+		http.StatusUnauthorized,
+	)
+	var burnBody map[string]string
+	decodeResponse(t, resp.Body.Bytes(), &burnBody)
+	if burnBody["error"] != "totp_challenge_invalid" {
+		t.Fatalf("expected totp_challenge_invalid on burn, got %#v", burnBody)
+	}
+
+	// Even the correct code does not bring it back — the challenge is gone.
+	correctCode := security.GenerateTOTPCode(
+		secret,
+		time.Now().Unix()/security.TOTPStepSeconds,
+	)
+	resp = performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/auth/totp/challenge",
+		map[string]string{
+			"challenge_id": challengeID,
+			"code":         correctCode,
+		},
+		"",
+		http.StatusUnauthorized,
+	)
+	var afterBody map[string]string
+	decodeResponse(t, resp.Body.Bytes(), &afterBody)
+	if afterBody["error"] != "totp_challenge_invalid" {
+		t.Fatalf("expected challenge to stay burnt, got %#v", afterBody)
+	}
+}
+
+func TestTOTPMetricsExposeChallengeAndEnrollmentResults(t *testing.T) {
+	handler := newTestServerWithOptions(t, serverTestOptions{
+		enableTOTP:    true,
+		enableMetrics: true,
+	})
+	token := registerOwnerWithTOTP(t, handler)
+
+	enrollResp := performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/auth/totp/enroll",
+		map[string]string{"current_password": totpTestPassword},
+		token,
+		http.StatusOK,
+	)
+	var enrollBody struct {
+		SecretBase32 string `json:"secret_base32"`
+	}
+	decodeResponse(t, enrollResp.Body.Bytes(), &enrollBody)
+	secret, err := security.DecodeTOTPSecretBase32(enrollBody.SecretBase32)
+	if err != nil {
+		t.Fatalf("decode secret: %v", err)
+	}
+
+	// One invalid_code enrollment outcome.
+	performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/auth/totp/verify",
+		map[string]string{"code": "000000"},
+		token,
+		http.StatusUnauthorized,
+	)
+	// One ok enrollment outcome.
+	performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/auth/totp/verify",
+		map[string]string{"code": security.GenerateTOTPCode(secret, time.Now().Unix()/security.TOTPStepSeconds)},
+		token,
+		http.StatusOK,
+	)
+
+	// Trigger a login challenge and burn it through 5 wrong attempts.
+	loginResp := performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/auth/login",
+		map[string]string{
+			"login":    "owner@example.com",
+			"password": totpTestPassword,
+		},
+		"",
+		http.StatusOK,
+	)
+	var loginBody struct {
+		TOTPChallenge *struct {
+			ChallengeID string `json:"challenge_id"`
+		} `json:"totp_challenge"`
+	}
+	decodeResponse(t, loginResp.Body.Bytes(), &loginBody)
+	if loginBody.TOTPChallenge == nil {
+		t.Fatalf("expected challenge, got %#v", loginBody)
+	}
+	for i := 0; i < 5; i++ {
+		performJSONRequest(
+			t,
+			handler,
+			http.MethodPost,
+			"/auth/totp/challenge",
+			map[string]string{
+				"challenge_id": loginBody.TOTPChallenge.ChallengeID,
+				"code":         "000000",
+			},
+			"",
+			http.StatusUnauthorized,
+		)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("metrics status %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	payload := recorder.Body.String()
+
+	for _, expected := range []string{
+		`ovumcy_sync_community_totp_enrollment_completion_total{result="invalid_code"} 1`,
+		`ovumcy_sync_community_totp_enrollment_completion_total{result="ok"} 1`,
+		`ovumcy_sync_community_totp_challenge_completion_total{result="invalid_code"} 4`,
+		`ovumcy_sync_community_totp_challenge_completion_total{result="burnt"} 1`,
+	} {
+		if !strings.Contains(payload, expected) {
+			t.Fatalf("missing metric line %q in payload:\n%s", expected, payload)
+		}
 	}
 }

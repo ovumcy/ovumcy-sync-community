@@ -286,3 +286,78 @@ func TestRegenerateRecoveryCodeRejectsWrongPassword(t *testing.T) {
 		t.Fatalf("expected ErrInvalidCurrentPassword, got %v", err)
 	}
 }
+
+func TestResetPasswordClearsTOTPAndPendingChallenges(t *testing.T) {
+	store := openTestStore(t)
+	authService := NewAuthService(store, 24*time.Hour)
+
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 1)
+	}
+	totpService := NewTOTPService(store, authService, key, "ovumcy-sync-community-test")
+	authService.AttachTOTPChallengeIssuer(totpService)
+
+	ctx := context.Background()
+	registered, err := authService.Register(ctx, "owner@example.com", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	// Enable TOTP.
+	start, err := totpService.StartEnrollment(ctx, registered.AccountID, "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("StartEnrollment: %v", err)
+	}
+	secret, err := security.DecodeTOTPSecretBase32(start.SecretBase32)
+	if err != nil {
+		t.Fatalf("decode secret: %v", err)
+	}
+	enrollStep := time.Now().UTC().Unix() / security.TOTPStepSeconds
+	if err := totpService.CompleteEnrollment(
+		ctx,
+		registered.AccountID,
+		security.HashToken(registered.SessionToken),
+		security.GenerateTOTPCode(secret, enrollStep),
+	); err != nil {
+		t.Fatalf("CompleteEnrollment: %v", err)
+	}
+
+	// Mint a pending login challenge that should be wiped by reset.
+	if _, _, err := totpService.IssueChallenge(ctx, registered.AccountID); err != nil {
+		t.Fatalf("IssueChallenge: %v", err)
+	}
+
+	// Use the recovery code to reset.
+	forgot, err := authService.ForgotPassword(ctx, "owner@example.com", registered.RecoveryCode)
+	if err != nil {
+		t.Fatalf("ForgotPassword: %v", err)
+	}
+	if _, err := authService.ResetPassword(ctx, forgot.ResetToken, "fresh secret password!"); err != nil {
+		t.Fatalf("ResetPassword: %v", err)
+	}
+
+	// Stored account no longer has TOTP enabled.
+	account, err := store.FindAccountByID(ctx, registered.AccountID)
+	if err != nil {
+		t.Fatalf("FindAccountByID: %v", err)
+	}
+	if account.TOTPEnabled {
+		t.Fatal("expected TOTP to be disabled after recovery reset")
+	}
+	if account.TOTPSecretEncrypted != "" {
+		t.Fatalf("expected empty TOTP secret, got %q", account.TOTPSecretEncrypted)
+	}
+
+	// Login with the new password is regular (no challenge).
+	loginResult, err := authService.Login(ctx, "owner@example.com", "fresh secret password!")
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	if loginResult.SessionToken == "" {
+		t.Fatal("expected session token, got empty")
+	}
+	if loginResult.TOTPChallenge != nil {
+		t.Fatal("expected no TOTP challenge after recovery reset")
+	}
+}

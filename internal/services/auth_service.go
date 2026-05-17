@@ -376,6 +376,24 @@ func (s *AuthService) ResetPassword(
 		return PasswordResetResult{}, err
 	}
 
+	// Recovery-code-driven reset is also the documented fallback for a lost
+	// authenticator app: proving control of the account-level recovery code
+	// disables 2FA so the owner is not permanently locked out. The recovery
+	// code is the catch-all credential — anyone who can prove possession of
+	// it already has full account control, so keeping TOTP enabled past
+	// reset would only convert a recoverable situation into a lock-out.
+	if err := s.store.UpdateTOTPSecretAndEnabled(
+		ctx,
+		tokenRecord.AccountID,
+		"",
+		false,
+	); err != nil && !errors.Is(err, db.ErrNotFound) {
+		return PasswordResetResult{}, err
+	}
+	if err := s.store.DeleteTOTPChallengesForAccount(ctx, tokenRecord.AccountID); err != nil {
+		return PasswordResetResult{}, err
+	}
+
 	if err := s.store.DeleteAllSessionsForAccount(ctx, tokenRecord.AccountID); err != nil {
 		return PasswordResetResult{}, err
 	}

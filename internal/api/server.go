@@ -82,6 +82,12 @@ func NewServer(
 		readinessCheck:      options.ReadinessCheck,
 		mux:                 http.NewServeMux(),
 	}
+	// Wire the domain-level TOTP metrics observer onto the service. The
+	// service ignores nil observers, so disabling metrics simply skips the
+	// extra counters.
+	if totp != nil && metrics != nil {
+		totp.AttachMetricsObserver(metrics)
+	}
 	server.routes()
 	return server
 }
