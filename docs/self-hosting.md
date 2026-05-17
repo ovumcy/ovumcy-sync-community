@@ -51,6 +51,8 @@ This service itself does not terminate TLS. Production deployments should not ex
 - `METRICS_ENABLED=false`
 - `METRICS_BEARER_TOKEN=` optional bearer token for `GET /metrics`
 - `TRUSTED_PROXY_CIDRS=` set this to your reverse-proxy IP or CIDR when you want forwarded client IPs to participate in auth rate limiting
+- `FIELD_ENCRYPTION_KEY=` optional hex-encoded master key (>=32 bytes / 64 hex chars) that enables the TOTP second-factor surface; leave unset to disable 2FA entirely (see *Optional Two-Factor Authentication* below)
+- `TOTP_ISSUER=ovumcy-sync-community` optional label embedded in `otpauth://` provisioning URIs so authenticator apps know which instance the secret belongs to
 
 Adjust limits only when you understand the tradeoff between usability and abuse resistance.
 
@@ -83,6 +85,37 @@ The example is intentionally conservative:
 - it blocks `/metrics` at the public edge by default;
 - it is still only a baseline and must be adapted to your real public hostname and TLS policy.
 
+## Optional Two-Factor Authentication
+
+`ovumcy-sync-community` supports optional TOTP (RFC 6238) as a second factor on top of the account password. 2FA is **off by default**: the relevant endpoints all return `503 totp_not_configured` until you set a server-wide master key.
+
+### Enabling
+
+1. Generate a 32-byte master key and place it in the environment as 64 hex characters:
+
+   ```bash
+   openssl rand -hex 32
+   ```
+
+2. Set `FIELD_ENCRYPTION_KEY` to that hex string. Optionally override `TOTP_ISSUER` (default `ovumcy-sync-community`); the issuer label is what authenticator apps display next to the account.
+
+3. Restart the server. The TOTP endpoints (`/auth/totp/{enroll,verify,disable,challenge}`) become live; password-only login still works for accounts that have not opted in.
+
+After that, any owner who opens *Account Security* in the Ovumcy app can enroll an authenticator app. Login on a 2FA-enabled account returns a short-lived challenge handoff instead of a session; the app drives the 6-digit prompt and completes the challenge to receive a real session.
+
+### What The Server Stores
+
+- TOTP secrets are AES-256-GCM encrypted with an HKDF-SHA256-derived key. The ciphertext lives in `accounts.totp_secret_encrypted` and is AEAD-bound to the account id, so a database-level row swap cannot decrypt one account's secret into another.
+- Each successful verification advances `accounts.totp_last_used_step` atomically; the same step cannot be replayed inside its 30-second window.
+- Login second-factor challenges are persisted only as SHA-256 hashes in `totp_challenges`, expire after 5 minutes, and are single-use.
+
+### Operational Notes
+
+- **Treat `FIELD_ENCRYPTION_KEY` as a long-lived secret.** Back it up alongside your database. Rotation is *not* transparent: changing the key invalidates every stored TOTP secret and forces every 2FA-enabled owner to re-enroll. There is no in-place key rotation.
+- **Never log the key, the otpauth provisioning URIs, raw codes, or raw challenge ids.** The server already redacts these; if you add custom logging, keep them out.
+- **2FA is per account, not server-wide.** Even after you set the env var, individual owners must explicitly enroll. Existing accounts continue to log in with password only until they opt in.
+- **Disabling the server-wide key after some accounts enrolled is destructive.** The TOTP endpoints will start returning `503 totp_not_configured` and those owners cannot complete login. Either keep the key set or have owners disable 2FA on their accounts first.
+
 ## What The Operator Can See
 
 The server operator can see:
@@ -91,7 +124,8 @@ The server operator can see:
 - the existence of accounts and sessions;
 - device labels and device count;
 - blob generation, size, checksum, and timestamps;
-- wrapped recovery-key package metadata.
+- wrapped recovery-key package metadata;
+- whether an account has 2FA enabled, the encrypted TOTP secret blob, and hashes of any in-flight TOTP login challenges (never the secret in plaintext, never raw codes).
 
 The operator cannot read from this server alone:
 
