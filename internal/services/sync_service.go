@@ -148,14 +148,6 @@ func (s *SyncService) PutBlob(
 		return models.EncryptedBlob{}, ErrInvalidBlob
 	}
 
-	existingBlob, err := s.store.GetEncryptedBlob(ctx, accountID)
-	if err == nil && input.Generation <= existingBlob.Generation {
-		return models.EncryptedBlob{}, ErrStaleGeneration
-	}
-	if err != nil && !errors.Is(err, db.ErrNotFound) {
-		return models.EncryptedBlob{}, err
-	}
-
 	blob := models.EncryptedBlob{
 		AccountID:      accountID,
 		SchemaVersion:  input.SchemaVersion,
@@ -166,7 +158,17 @@ func (s *SyncService) PutBlob(
 		UpdatedAt:      s.now().UTC(),
 	}
 
-	return s.store.UpsertEncryptedBlob(ctx, blob)
+	// Atomic CAS in the repository: the WHERE excluded.generation >
+	// encrypted_blobs.generation guard rejects concurrent writers that
+	// passed the same baseline, so we don't read-then-write here.
+	stored, err := s.store.UpsertEncryptedBlob(ctx, blob)
+	if err != nil {
+		if errors.Is(err, db.ErrStaleGeneration) {
+			return models.EncryptedBlob{}, ErrStaleGeneration
+		}
+		return models.EncryptedBlob{}, err
+	}
+	return stored, nil
 }
 
 func (s *SyncService) GetBlob(ctx context.Context, accountID string) (models.EncryptedBlob, error) {
