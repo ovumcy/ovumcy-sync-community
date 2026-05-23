@@ -338,17 +338,12 @@ func (s *AuthService) ResetPassword(
 		return PasswordResetResult{}, ErrInvalidResetToken
 	}
 
-	tokenRecord, err := s.store.FindPasswordResetTokenByHash(ctx, security.HashToken(resetToken))
+	tokenRecord, err := s.store.ConsumePasswordResetToken(ctx, security.HashToken(resetToken), s.now().UTC())
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			return PasswordResetResult{}, ErrInvalidResetToken
 		}
 		return PasswordResetResult{}, err
-	}
-
-	if !tokenRecord.ExpiresAt.After(s.now().UTC()) {
-		_ = s.store.DeletePasswordResetTokensForAccount(ctx, tokenRecord.AccountID)
-		return PasswordResetResult{}, ErrInvalidResetToken
 	}
 
 	newPasswordHash, err := security.HashPassword(newPassword)

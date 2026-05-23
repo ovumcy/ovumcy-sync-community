@@ -2,6 +2,9 @@ package services
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -359,5 +362,60 @@ func TestResetPasswordClearsTOTPAndPendingChallenges(t *testing.T) {
 	}
 	if loginResult.TOTPChallenge != nil {
 		t.Fatal("expected no TOTP challenge after recovery reset")
+	}
+}
+
+// TestResetPasswordConcurrentReuseRejectsAllButOne is the regression for
+// HIGH-1: see the matching test in ovumcy-managed. Before the consumed_at
+// CAS, N concurrent POST /auth/reset-password with the same plaintext token
+// could all succeed and return N divergent recovery codes. The atomic
+// UPDATE ... SET consumed_at=? WHERE consumed_at IS NULL must collapse that
+// to exactly one winner regardless of fanout.
+func TestResetPasswordConcurrentReuseRejectsAllButOne(t *testing.T) {
+	store := openTestStore(t)
+	service := NewAuthService(store, 24*time.Hour)
+	ctx := context.Background()
+
+	registerResult, err := service.Register(ctx, "owner@example.com", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	forgot, err := service.ForgotPassword(ctx, "owner@example.com", registerResult.RecoveryCode)
+	if err != nil {
+		t.Fatalf("forgot password: %v", err)
+	}
+
+	const fanout = 8
+	results := make([]error, fanout)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < fanout; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			_, err := service.ResetPassword(ctx, forgot.ResetToken, fmt.Sprintf("rotated horse battery staple %d", i))
+			results[i] = err
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	successes := 0
+	for _, err := range results {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrInvalidResetToken):
+		default:
+			t.Errorf("unexpected error from concurrent reset: %v", err)
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("expected exactly 1 successful reset across %d concurrent attempts, got %d", fanout, successes)
+	}
+
+	if _, err := service.ResetPassword(ctx, forgot.ResetToken, "rotated horse battery staple final"); !errors.Is(err, ErrInvalidResetToken) {
+		t.Fatalf("expected sequential reuse after concurrent winner to fail, got %v", err)
 	}
 }

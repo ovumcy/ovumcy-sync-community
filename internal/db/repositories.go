@@ -14,6 +14,13 @@ import (
 var ErrNotFound = errors.New("not_found")
 var ErrConflict = errors.New("conflict")
 
+// ErrStaleGeneration is returned by UpsertEncryptedBlob when the incoming
+// generation is not strictly greater than the persisted generation. The CAS
+// lives in the SQL statement; service code must surface this to the API as
+// the public stale-generation error and never pre-check via GetEncryptedBlob
+// (TOCTOU).
+var ErrStaleGeneration = errors.New("stale_generation")
+
 func (s *Store) CreateAccount(ctx context.Context, account models.Account) (models.Account, error) {
 	_, err := s.db.ExecContext(
 		ctx,
@@ -387,12 +394,13 @@ func (s *Store) UpsertPasswordResetToken(
 	_, err := s.db.ExecContext(
 		ctx,
 		`
-INSERT INTO password_reset_tokens (account_id, token_hash, created_at, expires_at)
-VALUES (?, ?, ?, ?)
+INSERT INTO password_reset_tokens (account_id, token_hash, created_at, expires_at, consumed_at)
+VALUES (?, ?, ?, ?, NULL)
 ON CONFLICT(account_id) DO UPDATE SET
   token_hash = excluded.token_hash,
   created_at = excluded.created_at,
-  expires_at = excluded.expires_at
+  expires_at = excluded.expires_at,
+  consumed_at = NULL
 `,
 		resetToken.AccountID,
 		resetToken.TokenHash,
@@ -406,14 +414,29 @@ ON CONFLICT(account_id) DO UPDATE SET
 	return nil
 }
 
-func (s *Store) FindPasswordResetTokenByHash(
+// ConsumePasswordResetToken atomically claims the matching token via a single
+// UPDATE ... WHERE consumed_at IS NULL AND expires_at > now CAS. Returns the
+// claimed row only when RowsAffected == 1; ErrNotFound otherwise (unknown
+// token, already consumed, or expired). This is the single source of truth
+// for "is this reset token still actionable" — callers must not pre-check
+// expiry or pre-load the token, or the race the CAS prevents reopens.
+func (s *Store) ConsumePasswordResetToken(
 	ctx context.Context,
 	tokenHash string,
+	now time.Time,
 ) (models.PasswordResetToken, error) {
+	nowFormatted := now.UTC().Format(time.RFC3339Nano)
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT account_id, token_hash, created_at, expires_at FROM password_reset_tokens WHERE token_hash = ?`,
+		`UPDATE password_reset_tokens
+		 SET consumed_at = ?
+		 WHERE token_hash = ?
+		   AND consumed_at IS NULL
+		   AND expires_at > ?
+		 RETURNING account_id, token_hash, created_at, expires_at`,
+		nowFormatted,
 		tokenHash,
+		nowFormatted,
 	)
 
 	var resetToken models.PasswordResetToken
@@ -556,8 +579,20 @@ func (s *Store) GetEncryptedBlob(ctx context.Context, accountID string) (models.
 	return scanBlob(row)
 }
 
+// UpsertEncryptedBlob inserts a new blob row or atomically advances an existing
+// one when the incoming generation strictly exceeds the persisted generation.
+// The "if newer" CAS lives in the WHERE clause of the ON CONFLICT DO UPDATE
+// branch so that a concurrent loser (older or equal generation reaching the
+// statement after a higher generation has already committed) is rejected as
+// ErrStaleGeneration instead of overwriting fresher data. Callers must not
+// pre-load existingBlob.Generation and compare in service code — the TOCTOU
+// window between read and write reopens the race the CAS prevents.
+//
+// Returns ErrStaleGeneration when an existing row already has
+// generation >= blob.Generation (RowsAffected == 0 on the conflict-update
+// branch); the caller should map this to its public stale-generation error.
 func (s *Store) UpsertEncryptedBlob(ctx context.Context, blob models.EncryptedBlob) (models.EncryptedBlob, error) {
-	_, err := s.db.ExecContext(
+	result, err := s.db.ExecContext(
 		ctx,
 		`
 INSERT INTO encrypted_blobs (account_id, schema_version, generation, checksum_sha256, ciphertext, ciphertext_size, created_at, updated_at)
@@ -569,6 +604,7 @@ ON CONFLICT(account_id) DO UPDATE SET
   ciphertext = excluded.ciphertext,
   ciphertext_size = excluded.ciphertext_size,
   updated_at = excluded.updated_at
+WHERE excluded.generation > encrypted_blobs.generation
 `,
 		blob.AccountID,
 		blob.SchemaVersion,
@@ -580,6 +616,14 @@ ON CONFLICT(account_id) DO UPDATE SET
 	)
 	if err != nil {
 		return models.EncryptedBlob{}, fmt.Errorf("upsert blob: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return models.EncryptedBlob{}, fmt.Errorf("upsert blob rows: %w", err)
+	}
+	if affected == 0 {
+		return models.EncryptedBlob{}, ErrStaleGeneration
 	}
 
 	return blob, nil
