@@ -209,11 +209,17 @@ func TestServerAuthRateLimitUsesForwardedClientFromTrustedProxy(t *testing.T) {
 		trustedProxyCIDRs:  []string{"10.0.0.0/24"},
 	})
 
+	// Two requests share a trusted proxy peer (10.0.0.2) but carry
+	// different forwarded client IPs. With per-IP keying on the
+	// forwarded value, both should pass. Use distinct login strings so
+	// the per-login-identifier limiter (a second gate added to defeat
+	// distributed-bot brute) is not the side that fires first; the test
+	// is asserting the IP-keying path specifically.
 	performJSONRequestWithOptions(t, requestOptions{
 		handler:        handler,
 		method:         http.MethodPost,
 		path:           "/auth/login",
-		body:           map[string]string{"login": "owner@example.com", "password": "wrong password"},
+		body:           map[string]string{"login": "owner-a@example.com", "password": "wrong password"},
 		expectedStatus: http.StatusUnauthorized,
 		remoteAddr:     "10.0.0.2:1234",
 		headers:        map[string]string{"X-Forwarded-For": "203.0.113.10"},
@@ -223,7 +229,7 @@ func TestServerAuthRateLimitUsesForwardedClientFromTrustedProxy(t *testing.T) {
 		handler:        handler,
 		method:         http.MethodPost,
 		path:           "/auth/login",
-		body:           map[string]string{"login": "owner@example.com", "password": "wrong password"},
+		body:           map[string]string{"login": "owner-b@example.com", "password": "wrong password"},
 		expectedStatus: http.StatusUnauthorized,
 		remoteAddr:     "10.0.0.2:5678",
 		headers:        map[string]string{"X-Forwarded-For": "203.0.113.11"},
