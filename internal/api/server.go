@@ -219,6 +219,18 @@ func (s *Server) handleLogin(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 
+	// Per-identifier ceiling layered on top of per-IP. The per-IP limit
+	// alone is bypassable by a distributed attacker (bot-net) brute-forcing
+	// one victim's password / 2FA across many source IPs. Keying the
+	// secondary bucket on the normalized login string forces all those IPs
+	// to share one quota for that identifier, capping practical brute
+	// throughput against a single account. Trade-off: an attacker can lock
+	// out a known victim's login by spamming bad credentials; rate-limit
+	// burns out on its own window, and recovery-code is the unblock path.
+	if !s.allowLoginRequestForIdentifier(writer, request, payload.Login) {
+		return
+	}
+
 	result, err := s.auth.Login(request.Context(), payload.Login, payload.Password)
 	if err != nil {
 		switch {
@@ -531,6 +543,13 @@ func (s *Server) handleAttachDevice(
 	request *http.Request,
 	account models.Account,
 ) {
+	// Per-account ceiling: even though MaxDevices caps the row count,
+	// unbounded attach attempts thrash the CountDevicesForAccount SELECT
+	// and UpsertDevice path under contention.
+	if !s.allowAuthRequestForAccount(writer, request, account.ID) {
+		return
+	}
+
 	var payload deviceRequest
 	if !decodeJSON(writer, request, &payload, 4<<10) {
 		return
@@ -562,6 +581,14 @@ func (s *Server) handlePutBlob(
 	request *http.Request,
 	account models.Account,
 ) {
+	// Per-account ceiling: each upload runs a base64 decode and SHA-256
+	// over up to MaxBlobBytes (16 MB default) plus two DB queries. Without
+	// a per-account limit, a captured session can flood CPU/IO regardless
+	// of the per-IP gate.
+	if !s.allowAuthRequestForAccount(writer, request, account.ID) {
+		return
+	}
+
 	var payload blobPutRequest
 	if !decodeJSON(writer, request, &payload, s.maxBlobRequestBytes) {
 		return
@@ -599,6 +626,12 @@ func (s *Server) handlePutRecoveryKey(
 	request *http.Request,
 	account models.Account,
 ) {
+	// Per-account ceiling: single-row UPSERT per account, but unbounded
+	// calls thrash DB writers under contention.
+	if !s.allowAuthRequestForAccount(writer, request, account.ID) {
+		return
+	}
+
 	var payload recoveryKeyPackageRequest
 	if !decodeJSON(writer, request, &payload, 8<<10) {
 		return
@@ -737,6 +770,35 @@ func (s *Server) allowAuthRequestForAccount(
 	accountID string,
 ) bool {
 	key := request.URL.Path + ":" + accountID
+	if s.authLimiter.Allow(key) {
+		return true
+	}
+
+	writer.Header().Set("Retry-After", "60")
+	writeError(writer, http.StatusTooManyRequests, "rate_limited")
+	return false
+}
+
+// allowLoginRequestForIdentifier enforces a per-login-identifier ceiling on
+// top of the per-IP allowAuthRequest gate. Without this layer, a distributed
+// attacker with a stolen password can brute-force the TOTP second factor
+// across many source IPs (per-IP limiter stops one source; identifier-keyed
+// limiter caps total per-account throughput, which is what matters for
+// account brute-force).
+//
+// Empty/whitespace identifiers are accepted without consuming a slot so the
+// downstream credential-validation path can return its canonical
+// invalid-credentials response instead of an unrelated 429.
+func (s *Server) allowLoginRequestForIdentifier(
+	writer http.ResponseWriter,
+	_ *http.Request,
+	login string,
+) bool {
+	normalized := security.NormalizeLogin(login)
+	if normalized == "" {
+		return true
+	}
+	key := "login_identifier:" + normalized
 	if s.authLimiter.Allow(key) {
 		return true
 	}
