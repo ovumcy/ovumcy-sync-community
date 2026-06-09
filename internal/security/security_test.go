@@ -17,6 +17,14 @@ func TestNormalizeLoginAndValidateLogin(t *testing.T) {
 	if !ValidateLogin("abc") {
 		t.Fatal("expected three-character login to be valid")
 	}
+	// The "managed:" namespace is reserved for bridge-provisioned accounts;
+	// public registration must not be able to claim it (in any case).
+	if ValidateLogin("managed:abc123") {
+		t.Fatal("expected reserved managed: login prefix to be invalid")
+	}
+	if ValidateLogin("MANAGED:abc123") {
+		t.Fatal("expected reserved managed: login prefix to be invalid regardless of case")
+	}
 }
 
 func TestHashPasswordRejectsWeakPassword(t *testing.T) {

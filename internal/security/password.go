@@ -15,8 +15,23 @@ func NormalizeLogin(login string) string {
 	return strings.ToLower(strings.TrimSpace(login))
 }
 
+// reservedManagedLoginPrefix is the login namespace the managed-cloud bridge
+// uses when it provisions bridged accounts (login = "managed:" + accountID, see
+// managed_bridge_service.go). Public self-hosted registration must not be able
+// to claim a login in this namespace, or a self-hosted user could squat a
+// managed account's login and permanently block the bridge from provisioning
+// that account (the bridge's upsert would collide on the login UNIQUE index).
+const reservedManagedLoginPrefix = "managed:"
+
 func ValidateLogin(login string) bool {
-	return len(NormalizeLogin(login)) >= 3
+	normalized := NormalizeLogin(login)
+	if len(normalized) < 3 {
+		return false
+	}
+	if strings.HasPrefix(normalized, reservedManagedLoginPrefix) {
+		return false
+	}
+	return true
 }
 
 func HashPassword(password string) (string, error) {
