@@ -106,6 +106,7 @@ func (s *Server) routes() {
 	s.handleRoute("POST /auth/totp/verify", "auth_totp_verify", http.HandlerFunc(s.withAuth(s.handleTOTPVerifyEnrollment)))
 	s.handleRoute("POST /auth/totp/disable", "auth_totp_disable", http.HandlerFunc(s.withAuth(s.handleTOTPDisable)))
 	s.handleRoute("POST /auth/totp/challenge", "auth_totp_challenge", http.HandlerFunc(s.handleTOTPChallenge))
+	s.handleRoute("GET /auth/session", "auth_session", http.HandlerFunc(s.withAuth(s.handleCurrentSession)))
 	s.handleRoute("DELETE /auth/session", "auth_logout", http.HandlerFunc(s.handleLogout))
 	s.handleRoute("POST /managed/session", "managed_session", http.HandlerFunc(s.withManagedBridge(s.handleManagedSession)))
 	s.handleRoute("GET /sync/capabilities", "sync_capabilities", http.HandlerFunc(s.withAuth(s.handleCapabilities)))
@@ -541,6 +542,24 @@ func (s *Server) handleManagedSession(writer http.ResponseWriter, request *http.
 
 func (s *Server) handleCapabilities(writer http.ResponseWriter, _ *http.Request, account models.Account) {
 	writeJSON(writer, http.StatusOK, s.sync.CapabilitiesForAccount(account))
+}
+
+// accountSessionView is the GET /auth/session response: the minimal
+// account-scoped state a client needs to show live status — notably whether
+// TOTP two-factor is currently enabled — without inferring it from a login
+// challenge.
+type accountSessionView struct {
+	AccountID   string `json:"account_id"`
+	Login       string `json:"login"`
+	TOTPEnabled bool   `json:"totp_enabled"`
+}
+
+func (s *Server) handleCurrentSession(writer http.ResponseWriter, _ *http.Request, account models.Account) {
+	writeJSON(writer, http.StatusOK, accountSessionView{
+		AccountID:   account.ID,
+		Login:       account.Login,
+		TOTPEnabled: account.TOTPEnabled,
+	})
 }
 
 func (s *Server) handleAttachDevice(
