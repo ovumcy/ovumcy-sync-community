@@ -23,10 +23,12 @@ type Config struct {
 	MetricsBearerToken  string
 	AllowedOrigins      []string
 	TrustedProxyCIDRs   []string
-	// FieldEncryptionKey holds the 32-byte master key used to encrypt
-	// privacy-sensitive account-row fields (currently the TOTP secret). The
-	// server REQUIRES it to be set when any account has TOTP enabled. The env
-	// var FIELD_ENCRYPTION_KEY must carry a 64-char hex string (32 bytes).
+	// FieldEncryptionKey holds the master key used to encrypt privacy-sensitive
+	// account-row fields (currently the TOTP secret); HKDF derives the per-field
+	// 32-byte key from it, so any length >= 32 bytes is accepted. The server
+	// REQUIRES it to be set when any account has TOTP enabled. The env var
+	// FIELD_ENCRYPTION_KEY must carry a hex string of at least 32 bytes
+	// (>= 64 hex chars).
 	FieldEncryptionKey []byte
 	// TOTPIssuer is the issuer label embedded in TOTP otpauth:// provisioning
 	// URIs. It controls how authenticator apps label the account in the user's

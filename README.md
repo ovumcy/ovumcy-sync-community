@@ -4,7 +4,7 @@
 [![Coverage](https://codecov.io/gh/ovumcy/ovumcy-sync-community/graph/badge.svg)](https://app.codecov.io/gh/ovumcy/ovumcy-sync-community)
 [![Go Report Card](https://goreportcard.com/badge/github.com/ovumcy/ovumcy-sync-community)](https://goreportcard.com/report/github.com/ovumcy/ovumcy-sync-community)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
-[![Go Version](https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go)](https://go.dev/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker)](https://github.com/ovumcy/ovumcy-sync-community/actions/workflows/docker-image.yml)
 [![Release](https://img.shields.io/github/v/release/ovumcy/ovumcy-sync-community?display_name=tag&sort=semver)](https://github.com/ovumcy/ovumcy-sync-community/releases)
 [![Self-hosted](https://img.shields.io/badge/Self--hosted-yes-2ea44f)](https://github.com/ovumcy/ovumcy-sync-community/blob/main/docs/self-hosting.md)
@@ -101,6 +101,8 @@ Environment variables:
 - `MANAGED_BRIDGE_TOKEN` optional bearer token that enables the machine-to-machine managed bridge endpoint
 - `ALLOWED_ORIGINS` comma-separated allowlist for browser clients; empty by default
 - `TRUSTED_PROXY_CIDRS` optional comma-separated list of trusted reverse-proxy IPs or CIDRs whose forwarded client IP headers may be used for auth rate limiting
+- `FIELD_ENCRYPTION_KEY` optional hex-encoded master key (>=32 bytes / 64 hex chars) that enables the optional TOTP second-factor surface; leave unset to disable 2FA entirely
+- `TOTP_ISSUER` default `ovumcy-sync-community`; issuer label embedded in `otpauth://` provisioning URIs so authenticator apps show which instance a secret belongs to
 
 Runtime endpoints:
 
@@ -109,6 +111,14 @@ Runtime endpoints:
 - `GET /metrics` optional Prometheus endpoint for operators
 - `POST /auth/register`
 - `POST /auth/login`
+- `POST /auth/change-password` (authenticated) change the account password
+- `POST /auth/forgot-password` start a recovery-code-based password reset
+- `POST /auth/reset-password` complete a password reset and rotate the recovery code
+- `POST /auth/recovery-code/regenerate` (authenticated) rotate the account recovery code
+- `POST /auth/totp/enroll` (authenticated) begin optional TOTP 2FA enrollment
+- `POST /auth/totp/verify` (authenticated) confirm TOTP enrollment
+- `POST /auth/totp/disable` (authenticated) turn off TOTP 2FA
+- `POST /auth/totp/challenge` complete the TOTP second factor after login
 - `DELETE /auth/session`
 - `GET /sync/capabilities`
 - `POST /sync/devices`
@@ -116,6 +126,8 @@ Runtime endpoints:
 - `PUT /sync/recovery-key`
 - `GET /sync/blob`
 - `PUT /sync/blob`
+
+The TOTP endpoints stay inactive (`503 totp_not_configured`) until `FIELD_ENCRYPTION_KEY` is set; see [docs/self-hosting.md](docs/self-hosting.md#optional-two-factor-authentication) for the 2FA and account-recovery flows.
 
 ## Run locally
 
@@ -139,7 +151,7 @@ docker compose run --rm ovumcy-sync-community migrate
 docker compose up --build
 ```
 
-The compose baseline binds the service to `http://127.0.0.1:8080` and persists SQLite data under `./data`.
+The compose baseline publishes the service on `0.0.0.0:8080` (all host interfaces, via `ports: ["8080:8080"]`) and persists SQLite data under `./data`. Keep it behind a reverse proxy or firewall — or change the mapping to `"127.0.0.1:8080:8080"` to publish on loopback only.
 
 For local browser-preview work with `ovumcy-app`, use the dedicated override:
 

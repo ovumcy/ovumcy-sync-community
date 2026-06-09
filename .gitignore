@@ -4,8 +4,3 @@
 /dist/
 /coverage
 /coverage.out
-.agents/
-.codex/
-AGENTS.md
-AI_CONTEXT.md
-.claude/

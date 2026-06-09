@@ -15,10 +15,11 @@ docker compose config
 docker build -t ovumcy-sync-community-local .
 ```
 
-3. Run the server locally:
+3. Run the server locally. The schema must exist first, so run `migrate` once before `serve`:
 
 ```bash
-go run ./cmd/ovumcy-sync-community
+go run ./cmd/ovumcy-sync-community migrate
+go run ./cmd/ovumcy-sync-community serve
 ```
 
 ## Reporting Bugs
