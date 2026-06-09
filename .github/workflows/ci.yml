@@ -77,7 +77,13 @@ jobs:
       - name: Upload coverage to Codecov
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         id: codecov
-        continue-on-error: ${{ github.event_name == 'push' }}
+        # Coverage upload is reporting, not a merge gate: the tests already ran
+        # and passed before this step. A Codecov ingest/OIDC hiccup must never
+        # fail CI. This was advisory on push only; the pull_request OIDC upload
+        # path is unreliable (and was never exercised while the repo pushed
+        # straight to main), so make it non-blocking on every event. The
+        # follow-up step still surfaces a warning.
+        continue-on-error: true
         uses: codecov/codecov-action@671740ac38dd9b0130fbe1cec585b89eea48d3de # v5.5.2
         with:
           files: coverage.out
@@ -85,8 +91,8 @@ jobs:
           fail_ci_if_error: true
 
       - name: Warn on non-blocking Codecov failure
-        if: ${{ github.event_name == 'push' && steps.codecov.outcome == 'failure' }}
-        run: echo "::warning::Codecov upload failed on push. Coverage was generated locally, but Codecov ingest returned an external error."
+        if: ${{ steps.codecov.outcome == 'failure' }}
+        run: echo "::warning::Codecov upload failed. Tests ran and passed; Codecov ingest returned an external error (non-blocking)."
 
   docker-smoke:
     name: docker-smoke
