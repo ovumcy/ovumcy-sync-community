@@ -18,6 +18,54 @@ import (
 	"github.com/ovumcy/ovumcy-sync-community/internal/services"
 )
 
+func TestCurrentSessionReportsTOTPState(t *testing.T) {
+	handler := newTestServer(t)
+
+	registerResponse := performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/auth/register",
+		map[string]string{
+			"login":    "owner@example.com",
+			"password": "correct horse battery staple",
+		},
+		"",
+		http.StatusCreated,
+	)
+	var registerPayload struct {
+		AccountID    string `json:"account_id"`
+		SessionToken string `json:"session_token"`
+	}
+	decodeResponse(t, registerResponse.Body.Bytes(), &registerPayload)
+
+	sessionResponse := performJSONRequest(
+		t,
+		handler,
+		http.MethodGet,
+		"/auth/session",
+		nil,
+		registerPayload.SessionToken,
+		http.StatusOK,
+	)
+	var sessionPayload struct {
+		AccountID   string `json:"account_id"`
+		Login       string `json:"login"`
+		TOTPEnabled bool   `json:"totp_enabled"`
+	}
+	decodeResponse(t, sessionResponse.Body.Bytes(), &sessionPayload)
+
+	if sessionPayload.AccountID != registerPayload.AccountID {
+		t.Fatalf("expected account id %q, got %q", registerPayload.AccountID, sessionPayload.AccountID)
+	}
+	if sessionPayload.Login == "" {
+		t.Fatal("expected a login in the session view")
+	}
+	if sessionPayload.TOTPEnabled {
+		t.Fatal("expected TOTP disabled for a fresh account")
+	}
+}
+
 func TestServerRegisterLoginAndSyncFlow(t *testing.T) {
 	handler := newTestServer(t)
 
