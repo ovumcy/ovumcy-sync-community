@@ -165,6 +165,44 @@ func TestAuthServiceCreateSessionForMissingAccountIsUnauthorized(t *testing.T) {
 	}
 }
 
+func TestAuthServiceLoginFailsClosedWhenTOTPEnabledButNoIssuer(t *testing.T) {
+	store := openTestStore(t)
+	service := NewAuthService(store, 24*time.Hour)
+
+	// Enroll an account, then mark it TOTP-enabled while leaving the challenge
+	// issuer unattached. This is the shape of a server that had
+	// FIELD_ENCRYPTION_KEY set when the owner enrolled but is now running
+	// without it: account.TOTPEnabled is true, s.totpChallenges is nil.
+	result, err := service.Register(
+		context.Background(),
+		"owner@example.com",
+		"correct horse battery staple",
+	)
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if err := store.UpdateTOTPSecretAndEnabled(
+		context.Background(),
+		result.AccountID,
+		"ciphertext-placeholder",
+		true,
+	); err != nil {
+		t.Fatalf("enable totp: %v", err)
+	}
+
+	loginResult, err := service.Login(
+		context.Background(),
+		"owner@example.com",
+		"correct horse battery staple",
+	)
+	if err != ErrTOTPNotConfigured {
+		t.Fatalf("expected ErrTOTPNotConfigured (fail closed), got %v", err)
+	}
+	if loginResult.SessionToken != "" {
+		t.Fatalf("expected no session token on fail-closed login, got %#v", loginResult)
+	}
+}
+
 func openTestStore(t *testing.T) *db.Store {
 	t.Helper()
 

@@ -89,9 +89,11 @@ func NewAuthService(store *db.Store, sessionTTL time.Duration) *AuthService {
 
 // AttachTOTPChallengeIssuer wires the TOTP login second-factor flow. When
 // non-nil and the account has TOTP enabled, Login returns a TOTP challenge
-// instead of a session token. Pass nil (the default) to disable 2FA-aware
-// login entirely — useful for tests and for servers built without a field
-// encryption key configured.
+// instead of a session token. When nil (the default), Login on a TOTP-enabled
+// account fails closed with ErrTOTPNotConfigured instead of issuing a
+// password-only session, so an enrolled account is never silently downgraded
+// to single-factor auth on a server with no field encryption key configured.
+// Accounts without TOTP enabled are unaffected and log in normally.
 func (s *AuthService) AttachTOTPChallengeIssuer(issuer TOTPChallengeIssuer) {
 	s.totpChallenges = issuer
 }
@@ -161,7 +163,17 @@ func (s *AuthService) Login(ctx context.Context, login string, password string) 
 		return AuthResult{}, ErrInvalidCredentials
 	}
 
-	if account.TOTPEnabled && s.totpChallenges != nil {
+	if account.TOTPEnabled {
+		if s.totpChallenges == nil {
+			// Fail closed. The account opted into TOTP 2FA, but this server has
+			// no field encryption key configured, so the second factor cannot
+			// be issued or verified. Refuse the login instead of silently
+			// downgrading an enrolled account to password-only auth. A
+			// locked-out owner recovers through the recovery-code password
+			// reset, which clears TOTP (see ResetPassword), or the operator
+			// restores the key.
+			return AuthResult{}, ErrTOTPNotConfigured
+		}
 		challengeID, expiresAt, issueErr := s.totpChallenges.IssueChallenge(ctx, account.ID)
 		if issueErr != nil {
 			return AuthResult{}, issueErr

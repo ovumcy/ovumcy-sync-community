@@ -236,6 +236,11 @@ func (s *Server) handleLogin(writer http.ResponseWriter, request *http.Request) 
 		switch {
 		case errors.Is(err, services.ErrInvalidCredentials):
 			writeError(writer, http.StatusUnauthorized, "invalid_credentials")
+		case errors.Is(err, services.ErrTOTPNotConfigured):
+			// An enrolled 2FA account on a server whose field encryption key is
+			// no longer configured: fail closed instead of issuing a
+			// password-only session. Mirrors the 503 the TOTP endpoints return.
+			writeError(writer, http.StatusServiceUnavailable, "totp_not_configured")
 		default:
 			writeError(writer, http.StatusInternalServerError, "internal_error")
 		}
