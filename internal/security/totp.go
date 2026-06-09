@@ -3,7 +3,7 @@ package security
 import (
 	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha1"
+	"crypto/sha1" // #nosec G505 -- RFC 6238 TOTP is defined over HMAC-SHA1; authenticator apps interoperate on SHA1 and HMAC-SHA1 is unaffected by SHA1 collision attacks
 	"crypto/subtle"
 	"encoding/base32"
 	"encoding/binary"
@@ -76,7 +76,7 @@ func GenerateTOTPCode(secret []byte, step int64) string {
 		step = 0
 	}
 	counter := make([]byte, 8)
-	binary.BigEndian.PutUint64(counter, uint64(step))
+	binary.BigEndian.PutUint64(counter, uint64(step)) // #nosec G115 -- step is clamped to >= 0 just above, so the int64->uint64 conversion cannot overflow
 
 	mac := hmac.New(sha1.New, secret)
 	mac.Write(counter)
