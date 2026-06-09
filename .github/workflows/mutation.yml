@@ -1,0 +1,52 @@
+name: Mutation
+
+# Advisory mutation testing. It never fails the build — a low score is a signal
+# to review test strength, not a merge gate. It runs on a weekly schedule to
+# track test efficacy over time, plus on demand via workflow_dispatch. Fast
+# local iteration is done with scripts/mutation.sh (baseline | diff <ref>).
+
+on:
+  schedule:
+    - cron: "23 4 * * 1" # weekly, Monday 04:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mutation-baseline:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      GOBIN: ${{ github.workspace }}/.bin
+      MUTATION_WORKERS: "2"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install gremlins
+        run: go install github.com/go-gremlins/gremlins/cmd/gremlins@v0.6.0
+
+      - name: Run mutation baseline
+        # Advisory: gremlins runs without thresholds, so it exits 0 regardless of
+        # score. continue-on-error guards against infrastructure hiccups too.
+        continue-on-error: true
+        env:
+          GREMLINS: ${{ github.workspace }}/.bin/gremlins
+        run: bash scripts/mutation.sh baseline
+
+      - name: Upload mutation results
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: mutation-baseline-results
+          path: .tmp/mutation/
+          if-no-files-found: ignore

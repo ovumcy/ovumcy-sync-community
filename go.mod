@@ -6,6 +6,7 @@ require (
 	github.com/prometheus/client_golang v1.23.2
 	golang.org/x/crypto v0.49.0
 	modernc.org/sqlite v1.47.0
+	pgregory.net/rapid v1.3.0
 )
 
 require (
