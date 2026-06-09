@@ -23,6 +23,11 @@ LOGIN="selftest-$(date +%s)@example.com"
 PASSWORD="correct horse battery staple"
 METRICS_ENABLED="${METRICS_ENABLED:-true}"
 METRICS_BEARER_TOKEN="${METRICS_BEARER_TOKEN:-runtime-smoke-metrics-token}"
+# Field-encryption key gates the TOTP 2FA surface. Set it so the smoke exercises
+# /auth/totp/* instead of the key-absent 503 path; this also guards against the
+# "2FA silently unavailable because the key never reached the container" deploy
+# drift. Ephemeral test value only — never a real key.
+FIELD_ENCRYPTION_KEY="${FIELD_ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}"
 
 cleanup() {
   docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
@@ -35,6 +40,7 @@ docker run --rm -v "${VOLUME_NAME}:/data" "${IMAGE}" migrate
 docker run -d --rm --name "${CONTAINER_NAME}" \
   -e "METRICS_ENABLED=${METRICS_ENABLED}" \
   -e "METRICS_BEARER_TOKEN=${METRICS_BEARER_TOKEN}" \
+  -e "FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY}" \
   -p "${HOST_PORT}:8080" \
   -v "${VOLUME_NAME}:/data" \
   "${IMAGE}" serve >/dev/null
@@ -244,3 +250,99 @@ fi
 curl -fsS -X POST "${BASE_URL}/auth/forgot-password" \
   -H 'Content-Type: application/json' \
   -d "{\"login\":\"${LOGIN}\",\"recovery_code\":\"${regenerated_recovery_code}\"}" >/dev/null
+
+# === Phase 3: TOTP 2FA enroll / verify / login challenge ===
+# Uses a fresh account so it is independent of the password rotation above. This
+# phase doubles as a deploy-wiring guard: if FIELD_ENCRYPTION_KEY had not reached
+# the container, enrollment would return 503 here instead of a secret.
+
+totp_code() {
+  "${PYTHON}" - "$1" <<'PY'
+import base64, hashlib, hmac, struct, sys, time
+secret = sys.argv[1].upper()
+key = base64.b32decode(secret + "=" * ((8 - len(secret) % 8) % 8))
+counter = int(time.time()) // 30
+digest = hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
+offset = digest[-1] & 0x0F
+binary = struct.unpack(">I", digest[offset:offset + 4])[0] & 0x7FFFFFFF
+print("%06d" % (binary % 1000000))
+PY
+}
+
+TOTP_LOGIN="totp-selftest-$(date +%s)@example.com"
+TOTP_PASSWORD="totp runtime smoke password"
+
+totp_register_response="$(curl -fsS -X POST "${BASE_URL}/auth/register" \
+  -H 'Content-Type: application/json' \
+  -d "{\"login\":\"${TOTP_LOGIN}\",\"password\":\"${TOTP_PASSWORD}\"}")"
+totp_session_token="$("${PYTHON}" -c 'import json,sys; print(json.load(sys.stdin)["session_token"])' <<<"${totp_register_response}")"
+if [[ -z "${totp_session_token}" ]]; then
+  echo "missing session token from totp account register response" >&2
+  exit 1
+fi
+
+# Enrollment requires the current password.
+enroll_wrong_status="$(curl -s -o /dev/null -w '%{http_code}' -X POST "${BASE_URL}/auth/totp/enroll" \
+  -H "Authorization: Bearer ${totp_session_token}" \
+  -H 'Content-Type: application/json' \
+  -d '{"current_password":"wrong password value 12345"}')"
+if [[ "${enroll_wrong_status}" != "401" ]]; then
+  echo "expected totp enroll with wrong password to return 401, got ${enroll_wrong_status}" >&2
+  exit 1
+fi
+
+enroll_response="$(curl -fsS -X POST "${BASE_URL}/auth/totp/enroll" \
+  -H "Authorization: Bearer ${totp_session_token}" \
+  -H 'Content-Type: application/json' \
+  -d "{\"current_password\":\"${TOTP_PASSWORD}\"}")"
+totp_secret="$("${PYTHON}" -c 'import json,sys; print(json.load(sys.stdin)["secret_base32"])' <<<"${enroll_response}")"
+if [[ -z "${totp_secret}" ]]; then
+  echo "missing secret_base32 from totp enroll (is FIELD_ENCRYPTION_KEY configured?)" >&2
+  exit 1
+fi
+
+# A wrong code must not complete enrollment.
+verify_wrong_status="$(curl -s -o /dev/null -w '%{http_code}' -X POST "${BASE_URL}/auth/totp/verify" \
+  -H "Authorization: Bearer ${totp_session_token}" \
+  -H 'Content-Type: application/json' \
+  -d '{"code":"000000"}')"
+if [[ "${verify_wrong_status}" == "200" ]]; then
+  echo "expected totp verify with a wrong code to fail, got 200" >&2
+  exit 1
+fi
+
+curl -fsS -X POST "${BASE_URL}/auth/totp/verify" \
+  -H "Authorization: Bearer ${totp_session_token}" \
+  -H 'Content-Type: application/json' \
+  -d "{\"code\":\"$(totp_code "${totp_secret}")\"}" >/dev/null
+
+# With TOTP enabled, login must return a challenge and withhold the session.
+totp_login_response="$(curl -fsS -X POST "${BASE_URL}/auth/login" \
+  -H 'Content-Type: application/json' \
+  -d "{\"login\":\"${TOTP_LOGIN}\",\"password\":\"${TOTP_PASSWORD}\"}")"
+totp_challenge_id="$("${PYTHON}" -c 'import json,sys; print((json.load(sys.stdin).get("totp_challenge") or {}).get("challenge_id",""))' <<<"${totp_login_response}")"
+totp_login_session="$("${PYTHON}" -c 'import json,sys; print(json.load(sys.stdin).get("session_token") or "")' <<<"${totp_login_response}")"
+if [[ -z "${totp_challenge_id}" ]]; then
+  echo "expected login of a TOTP-enabled account to return a challenge id" >&2
+  exit 1
+fi
+if [[ -n "${totp_login_session}" ]]; then
+  echo "expected login of a TOTP-enabled account to withhold the session token until the challenge is met" >&2
+  exit 1
+fi
+
+# The step CAS rejects reusing the step enrollment just claimed; wait for the
+# next 30s window so the challenge code maps to a fresh, higher step.
+sleep "$(( 31 - $(date +%s) % 30 ))"
+
+totp_challenge_response="$(curl -fsS -X POST "${BASE_URL}/auth/totp/challenge" \
+  -H 'Content-Type: application/json' \
+  -d "{\"challenge_id\":\"${totp_challenge_id}\",\"code\":\"$(totp_code "${totp_secret}")\"}")"
+totp_challenge_session="$("${PYTHON}" -c 'import json,sys; print(json.load(sys.stdin)["session_token"])' <<<"${totp_challenge_response}")"
+if [[ -z "${totp_challenge_session}" ]]; then
+  echo "missing session token from totp challenge response" >&2
+  exit 1
+fi
+
+curl -fsS "${BASE_URL}/sync/capabilities" \
+  -H "Authorization: Bearer ${totp_challenge_session}" >/dev/null
