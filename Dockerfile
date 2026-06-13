@@ -28,4 +28,5 @@ VOLUME ["/data"]
 EXPOSE 8080
 
 USER 65532:65532
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD ["/app/ovumcy-sync-community", "healthcheck"]
 ENTRYPOINT ["/app/ovumcy-sync-community"]

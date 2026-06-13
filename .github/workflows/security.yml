@@ -57,6 +57,24 @@ jobs:
           path: .tmp/security/gosec.sarif
           if-no-files-found: error
 
+  govulncheck:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Call-graph reachability gate: fails only when the code actually calls
+      # a vulnerable symbol; Trivy covers vulnerable-but-unreachable packages.
+      - name: Govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+
   trivy-fs:
     runs-on: ubuntu-latest
 

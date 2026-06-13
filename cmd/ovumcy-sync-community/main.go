@@ -44,8 +44,10 @@ func run(args []string) error {
 		return runServe(cfg)
 	case "migrate":
 		return runMigrate(cfg)
+	case "healthcheck":
+		return runHealthcheck(cfg.BindAddr, 0)
 	default:
-		return fmt.Errorf("unknown command %q; use `serve` or `migrate`", command)
+		return fmt.Errorf("unknown command %q; use `serve`, `migrate`, or `healthcheck`", command)
 	}
 }
 
@@ -56,7 +58,9 @@ func runMigrate(cfg config.Config) error {
 	}
 	defer store.Close()
 
-	if err := store.ApplyMigrations(context.Background()); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := store.ApplyMigrations(ctx); err != nil {
 		return fmt.Errorf("apply migrations: %w", err)
 	}
 
@@ -71,7 +75,9 @@ func runServe(cfg config.Config) error {
 	}
 	defer store.Close()
 
-	ready, err := store.SchemaReady(context.Background())
+	readyCtx, readyCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer readyCancel()
+	ready, err := store.SchemaReady(readyCtx)
 	if err != nil {
 		return fmt.Errorf("check schema readiness: %w", err)
 	}
