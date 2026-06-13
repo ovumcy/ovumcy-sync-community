@@ -142,7 +142,7 @@ func (c Config) Validate() error {
 		return fmt.Errorf("METRICS_BEARER_TOKEN requires METRICS_ENABLED=true")
 	}
 	for _, value := range c.TrustedProxyCIDRs {
-		if _, err := parseTrustedProxyCIDR(value); err != nil {
+		if _, err := ParseTrustedProxyCIDR(value); err != nil {
 			return fmt.Errorf("TRUSTED_PROXY_CIDRS entry %q is invalid: %w", value, err)
 		}
 	}
@@ -224,7 +224,11 @@ func csvListFromEnv(name string) []string {
 	return result
 }
 
-func parseTrustedProxyCIDR(value string) (netip.Prefix, error) {
+// ParseTrustedProxyCIDR parses one TRUSTED_PROXY_CIDRS entry: either a CIDR
+// ("10.0.0.0/24") or a bare address ("127.0.0.1"), normalized to a masked
+// prefix. It is the single parser shared by config validation and the API
+// trusted-proxy matcher.
+func ParseTrustedProxyCIDR(value string) (netip.Prefix, error) {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
 		return netip.Prefix{}, fmt.Errorf("must not be empty")

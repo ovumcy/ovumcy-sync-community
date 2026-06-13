@@ -836,10 +836,7 @@ func newTestServerWithOptions(t *testing.T, options serverTestOptions) http.Hand
 		MaxDevices:   maxDevices,
 		MaxBlobBytes: maxBlobBytes,
 	})
-	managedBridgeService := services.NewManagedBridgeService(
-		store,
-		services.NewAuthService(store, 24*time.Hour),
-	)
+	managedBridgeService := services.NewManagedBridgeService(store, authService)
 
 	var totpService *services.TOTPService
 	if options.enableTOTP {

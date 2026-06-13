@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ovumcy/ovumcy-sync-community/internal/config"
 	"github.com/ovumcy/ovumcy-sync-community/internal/models"
 	"github.com/ovumcy/ovumcy-sync-community/internal/security"
 	"github.com/ovumcy/ovumcy-sync-community/internal/services"
@@ -865,36 +866,15 @@ func (s *Server) isTrustedProxy(addr netip.Addr) bool {
 func parseTrustedProxyCIDRs(values []string) []netip.Prefix {
 	result := make([]netip.Prefix, 0, len(values))
 	for _, value := range values {
-		prefix, ok := parseTrustedProxyCIDR(value)
-		if ok {
-			result = append(result, prefix)
+		// Values are validated by config.Validate at startup; a parse
+		// failure here can only mean the entry never passed validation.
+		prefix, err := config.ParseTrustedProxyCIDR(value)
+		if err != nil {
+			continue
 		}
+		result = append(result, prefix)
 	}
 	return result
-}
-
-func parseTrustedProxyCIDR(value string) (netip.Prefix, bool) {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return netip.Prefix{}, false
-	}
-
-	if strings.Contains(trimmed, "/") {
-		prefix, err := netip.ParsePrefix(trimmed)
-		if err != nil {
-			return netip.Prefix{}, false
-		}
-		return prefix.Masked(), true
-	}
-
-	addr, ok := parseClientIP(trimmed)
-	if !ok {
-		return netip.Prefix{}, false
-	}
-	if addr.Is4() {
-		return netip.PrefixFrom(addr, 32), true
-	}
-	return netip.PrefixFrom(addr, 128), true
 }
 
 func forwardedClientIP(value string) (netip.Addr, bool) {
