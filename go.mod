@@ -2,6 +2,8 @@ module github.com/ovumcy/ovumcy-sync-community
 
 go 1.25.0
 
+toolchain go1.25.11
+
 require (
 	github.com/prometheus/client_golang v1.23.2
 	golang.org/x/crypto v0.49.0
