@@ -208,7 +208,14 @@ func (s *AuthService) Authenticate(ctx context.Context, sessionToken string) (mo
 		return models.Account{}, ErrUnauthorized
 	}
 
-	_ = s.store.TouchSession(ctx, session.ID, now)
+	if err := s.store.TouchSession(ctx, session.ID, now); err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			// The session was revoked between lookup and touch; do not hand
+			// out an account for a session that no longer exists.
+			return models.Account{}, ErrUnauthorized
+		}
+		return models.Account{}, err
+	}
 
 	account, err := s.store.FindAccountByID(ctx, session.AccountID)
 	if err != nil {

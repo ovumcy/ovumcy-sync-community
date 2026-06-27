@@ -12,14 +12,13 @@ import (
 )
 
 var (
-	ErrTOTPNotConfigured     = errors.New("totp_not_configured")
-	ErrTOTPAlreadyEnabled    = errors.New("totp_already_enabled")
-	ErrTOTPSecretEncrypt     = errors.New("totp_secret_encrypt")
-	ErrTOTPSecretDecrypt     = errors.New("totp_secret_decrypt")
-	ErrTOTPInvalidCode       = errors.New("totp_invalid_code")
-	ErrTOTPReplayed          = errors.New("totp_replayed")
-	ErrTOTPChallengeInvalid  = errors.New("totp_challenge_invalid")
-	ErrTOTPChallengeRequired = errors.New("totp_challenge_required")
+	ErrTOTPNotConfigured    = errors.New("totp_not_configured")
+	ErrTOTPAlreadyEnabled   = errors.New("totp_already_enabled")
+	ErrTOTPSecretEncrypt    = errors.New("totp_secret_encrypt")
+	ErrTOTPSecretDecrypt    = errors.New("totp_secret_decrypt")
+	ErrTOTPInvalidCode      = errors.New("totp_invalid_code")
+	ErrTOTPReplayed         = errors.New("totp_replayed")
+	ErrTOTPChallengeInvalid = errors.New("totp_challenge_invalid")
 )
 
 // TOTPChallengeTTL is how long a login-second-factor challenge remains
@@ -103,8 +102,8 @@ func (s *TOTPService) Configured() bool {
 // TOTPEnrollmentStart is returned from StartEnrollment. The plaintext secret
 // is surfaced for manual entry; the provisioning URI is for QR code rendering.
 type TOTPEnrollmentStart struct {
-	SecretBase32     string `json:"secret_base32"`
-	ProvisioningURI  string `json:"provisioning_uri"`
+	SecretBase32    string `json:"secret_base32"`
+	ProvisioningURI string `json:"provisioning_uri"`
 }
 
 // StartEnrollment verifies the current password, generates a fresh TOTP
@@ -326,6 +325,14 @@ func (s *TOTPService) IssueChallenge(
 		return "", time.Time{}, tokenErr
 	}
 
+	// A fresh login challenge supersedes any earlier in-flight (or already
+	// expired) challenge for this account: only the newest is valid, and the
+	// row count stays bounded to one per account instead of growing with
+	// every uncompleted login attempt.
+	if delErr := s.store.DeleteTOTPChallengesForAccount(ctx, accountID); delErr != nil {
+		return "", time.Time{}, delErr
+	}
+
 	now := s.now().UTC()
 	expiresAt = now.Add(TOTPChallengeTTL)
 	if storeErr := s.store.UpsertTOTPChallenge(ctx, models.TOTPChallenge{
@@ -365,6 +372,8 @@ func (s *TOTPService) VerifyChallenge(
 
 	now := s.now().UTC()
 	if !challenge.ExpiresAt.After(now) {
+		// Best-effort prune of the dead row; the challenge is already invalid
+		// and we return the terminal error regardless of the delete outcome.
 		_ = s.store.DeleteTOTPChallengeByHash(ctx, security.HashToken(challengeID))
 		s.observeChallengeCompletion("challenge_invalid")
 		return AuthResult{}, ErrTOTPChallengeInvalid
@@ -413,6 +422,8 @@ func (s *TOTPService) VerifyChallenge(
 			return AuthResult{}, incrErr
 		}
 		if failedAttempts >= maxTOTPChallengeFailedAttempts {
+			// Best-effort burn of the exhausted challenge; the caller must
+			// restart from password login regardless of the delete outcome.
 			_ = s.store.DeleteTOTPChallengeByHash(ctx, security.HashToken(challengeID))
 			s.observeChallengeCompletion("burnt")
 			return AuthResult{}, ErrTOTPChallengeInvalid
