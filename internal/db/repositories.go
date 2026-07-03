@@ -169,6 +169,70 @@ func (s *Store) UpdateAccountRecoveryCodeHash(
 	return nil
 }
 
+// DeleteAccount erases every row this server holds for accountID: the
+// account row itself plus every child row keyed by account_id (sessions,
+// devices, the encrypted sync blob, the wrapped recovery-key package,
+// pending password reset tokens, and TOTP login challenges).
+//
+// All deletes run inside one transaction so a failure partway through never
+// leaves a partially-erased account: either every row is gone or none are.
+// `accounts.id` cascades (ON DELETE CASCADE) to every one of those tables
+// already, so the child deletes here are defense-in-depth against future
+// schema drift rather than the only thing standing between us and orphaned
+// rows — the explicit statements keep the erased-rows contract legible and
+// independently verifiable without relying on cascade behavior alone.
+//
+// Returns ErrNotFound when the account no longer exists (RowsAffected == 0
+// on the `accounts` delete), which the caller uses to make deletion
+// idempotent: a repeat call after a successful delete is a no-op, not an
+// error.
+func (s *Store) DeleteAccount(ctx context.Context, accountID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin delete account: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	childTables := []string{
+		"sessions",
+		"devices",
+		"encrypted_blobs",
+		"recovery_key_packages",
+		"password_reset_tokens",
+		"totp_challenges",
+	}
+	for _, table := range childTables {
+		if _, err := tx.ExecContext(
+			ctx,
+			`DELETE FROM `+table+` WHERE account_id = ?`,
+			accountID,
+		); err != nil {
+			return fmt.Errorf("delete account %s rows: %w", table, err)
+		}
+	}
+
+	result, err := tx.ExecContext(ctx, `DELETE FROM accounts WHERE id = ?`, accountID)
+	if err != nil {
+		return fmt.Errorf("delete account row: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete account row rows: %w", err)
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit delete account: %w", err)
+	}
+
+	return nil
+}
+
 func (s *Store) CreateSession(ctx context.Context, session models.Session) (models.Session, error) {
 	_, err := s.db.ExecContext(
 		ctx,

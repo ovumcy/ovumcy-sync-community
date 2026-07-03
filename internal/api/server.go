@@ -109,6 +109,7 @@ func (s *Server) routes() {
 	s.handleRoute("POST /auth/totp/challenge", "auth_totp_challenge", http.HandlerFunc(s.handleTOTPChallenge))
 	s.handleRoute("GET /auth/session", "auth_session", http.HandlerFunc(s.withAuth(s.handleCurrentSession)))
 	s.handleRoute("DELETE /auth/session", "auth_logout", http.HandlerFunc(s.handleLogout))
+	s.handleRoute("DELETE /account", "account_delete", http.HandlerFunc(s.withAuth(s.handleDeleteAccount)))
 	s.handleRoute("POST /managed/session", "managed_session", http.HandlerFunc(s.withManagedBridge(s.handleManagedSession)))
 	s.handleRoute("GET /sync/capabilities", "sync_capabilities", http.HandlerFunc(s.withAuth(s.handleCapabilities)))
 	s.handleRoute("POST /sync/devices", "sync_devices", http.HandlerFunc(s.withAuth(s.handleAttachDevice)))
@@ -519,6 +520,33 @@ func (s *Server) handleLogout(writer http.ResponseWriter, request *http.Request)
 	}
 
 	writeJSON(writer, http.StatusOK, map[string]string{"status": "revoked"})
+}
+
+// handleDeleteAccount implements DELETE /account: permanent, authenticated
+// self-service account erasure (Google Play data-deletion compliance and
+// general privacy hygiene).
+//
+// account is derived exclusively from the authenticated session via
+// s.withAuth — there is no request field the caller can use to name a
+// different account, so one session can never erase another account's data.
+// The service call is idempotent, so a retried request (e.g. a client that
+// did not see the first 200 due to a dropped connection) still reports
+// success instead of surfacing an error for an account that is already gone.
+func (s *Server) handleDeleteAccount(
+	writer http.ResponseWriter,
+	request *http.Request,
+	account models.Account,
+) {
+	if !s.allowAuthRequestForAccount(writer, request, account.ID) {
+		return
+	}
+
+	if err := s.auth.DeleteAccount(request.Context(), account.ID); err != nil {
+		writeError(writer, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
+	writeJSON(writer, http.StatusOK, map[string]string{"status": "account_deleted"})
 }
 
 func (s *Server) handleManagedSession(writer http.ResponseWriter, request *http.Request) {
