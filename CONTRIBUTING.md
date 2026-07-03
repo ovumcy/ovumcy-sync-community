@@ -51,3 +51,18 @@ Use imperative commit messages, e.g.:
 
 - `Add readiness endpoint for sync-community`
 - `Split CI checks for branch protection`
+
+## Contribution Licensing
+
+By submitting a contribution to this repository (for example, a pull request),
+you agree that:
+
+- your contribution is licensed to the project and its users under the
+  repository's license, the PolyForm Noncommercial License 1.0.0; and
+- you additionally grant Ovumcy a perpetual, worldwide, non-exclusive,
+  royalty-free, irrevocable license to use, reproduce, modify, distribute, and
+  relicense your contribution under any terms, including commercial terms and
+  inclusion in Ovumcy's proprietary products (such as Ovumcy Managed).
+
+You confirm that you are legally entitled to grant these rights and that, to
+your knowledge, the contribution is your original work.
