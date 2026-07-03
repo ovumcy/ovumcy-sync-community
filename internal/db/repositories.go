@@ -206,7 +206,7 @@ func (s *Store) DeleteAccount(ctx context.Context, accountID string) error {
 	for _, table := range childTables {
 		if _, err := tx.ExecContext(
 			ctx,
-			`DELETE FROM `+table+` WHERE account_id = ?`,
+			`DELETE FROM `+table+` WHERE account_id = ?`, // #nosec G202 -- table ranges only over the fixed childTables allowlist above, never user input; account_id is bound as a placeholder
 			accountID,
 		); err != nil {
 			return fmt.Errorf("delete account %s rows: %w", table, err)
