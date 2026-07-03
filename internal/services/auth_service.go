@@ -470,6 +470,31 @@ func (s *AuthService) RevokeSession(ctx context.Context, sessionToken string) er
 	return nil
 }
 
+// DeleteAccount permanently erases every row this server holds for
+// accountID: the account row, its sessions, its devices, its encrypted sync
+// blob, its wrapped recovery-key package, any pending password reset token,
+// and any pending TOTP login challenge. The delete runs in a single
+// transaction (db.Store.DeleteAccount) so a partial failure never leaves the
+// account half-erased.
+//
+// accountID must come from the caller's own authenticated session
+// (models.Account.ID from AuthService.Authenticate), never from a
+// client-supplied identifier, so one account can never erase another's data.
+//
+// Idempotent: calling this again after a successful delete is a no-op
+// success rather than an error, since the end state the caller wants
+// ("this account's data does not exist on the server") is already true.
+func (s *AuthService) DeleteAccount(ctx context.Context, accountID string) error {
+	if err := s.store.DeleteAccount(ctx, accountID); err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+
+	return nil
+}
+
 func (s *AuthService) CreateSessionForAccount(
 	ctx context.Context,
 	accountID string,

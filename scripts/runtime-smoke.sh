@@ -346,3 +346,80 @@ fi
 
 curl -fsS "${BASE_URL}/sync/capabilities" \
   -H "Authorization: Bearer ${totp_challenge_session}" >/dev/null
+
+# === Phase 4: DELETE /account erases the account and everything it owns ===
+
+delete_unauth_status="$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "${BASE_URL}/account")"
+if [[ "${delete_unauth_status}" != "401" ]]; then
+  echo "expected unauthenticated DELETE /account to return 401, got ${delete_unauth_status}" >&2
+  exit 1
+fi
+
+DELETE_LOGIN="delete-selftest-$(date +%s)@example.com"
+DELETE_PASSWORD="correct horse battery staple delete"
+
+delete_register_response="$(curl -fsS -X POST "${BASE_URL}/auth/register" \
+  -H 'Content-Type: application/json' \
+  -d "{\"login\":\"${DELETE_LOGIN}\",\"password\":\"${DELETE_PASSWORD}\"}")"
+delete_session_token="$("${PYTHON}" -c 'import json,sys; print(json.load(sys.stdin)["session_token"])' <<<"${delete_register_response}")"
+if [[ -z "${delete_session_token}" ]]; then
+  echo "missing session token from delete-account register response" >&2
+  exit 1
+fi
+
+curl -fsS -X POST "${BASE_URL}/sync/devices" \
+  -H "Authorization: Bearer ${delete_session_token}" \
+  -H 'Content-Type: application/json' \
+  -d '{"device_id":"device-delete-1","device_label":"CI delete smoke"}' >/dev/null
+
+delete_blob_payload="$("${PYTHON}" - <<'PY'
+import base64, hashlib, json
+ciphertext = b"delete-account-smoke-ciphertext"
+print(json.dumps({
+    "schema_version": 1,
+    "generation": 1,
+    "checksum_sha256": hashlib.sha256(ciphertext).hexdigest(),
+    "ciphertext_base64": base64.b64encode(ciphertext).decode("ascii"),
+}))
+PY
+)"
+curl -fsS -X PUT "${BASE_URL}/sync/blob" \
+  -H "Authorization: Bearer ${delete_session_token}" \
+  -H 'Content-Type: application/json' \
+  -d "${delete_blob_payload}" >/dev/null
+
+delete_response="$(curl -fsS -X DELETE "${BASE_URL}/account" \
+  -H "Authorization: Bearer ${delete_session_token}")"
+delete_status_field="$("${PYTHON}" -c 'import json,sys; print(json.load(sys.stdin)["status"])' <<<"${delete_response}")"
+if [[ "${delete_status_field}" != "account_deleted" ]]; then
+  echo "expected account_deleted status from DELETE /account, got: ${delete_response}" >&2
+  exit 1
+fi
+
+post_delete_status="$(curl -s -o /dev/null -w '%{http_code}' "${BASE_URL}/sync/capabilities" \
+  -H "Authorization: Bearer ${delete_session_token}")"
+if [[ "${post_delete_status}" != "401" ]]; then
+  echo "expected the deleted account's own session to stop authenticating, got ${post_delete_status}" >&2
+  exit 1
+fi
+
+post_delete_login_status="$(curl -s -o /dev/null -w '%{http_code}' -X POST "${BASE_URL}/auth/login" \
+  -H 'Content-Type: application/json' \
+  -d "{\"login\":\"${DELETE_LOGIN}\",\"password\":\"${DELETE_PASSWORD}\"}")"
+if [[ "${post_delete_login_status}" != "401" ]]; then
+  echo "expected login to fail for a deleted account, got ${post_delete_login_status}" >&2
+  exit 1
+fi
+
+# Repeat DELETE /account with the same (now-revoked) bearer token: the
+# account's data is gone either way, and since the session died with the
+# account, the caller sees 401 rather than a second 200 or a 500 -- that is
+# the idempotent outcome at the HTTP layer (see docs/self-hosting.md #
+# "Account Deletion" for why the repeat surfaces as unauthenticated instead
+# of a second success).
+repeat_delete_status="$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "${BASE_URL}/account" \
+  -H "Authorization: Bearer ${delete_session_token}")"
+if [[ "${repeat_delete_status}" != "401" ]]; then
+  echo "expected repeat DELETE /account with a revoked token to return 401, got ${repeat_delete_status}" >&2
+  exit 1
+fi
