@@ -4,7 +4,7 @@
 [![Coverage](https://codecov.io/gh/ovumcy/ovumcy-sync-community/graph/badge.svg)](https://app.codecov.io/gh/ovumcy/ovumcy-sync-community)
 [![Tested](https://img.shields.io/badge/tested-mutation%20%C2%B7%20fuzz%20%C2%B7%20property-2ea44f)](https://github.com/ovumcy/ovumcy-sync-community/blob/main/TESTING.md)
 [![Go Report Card](https://goreportcard.com/badge/github.com/ovumcy/ovumcy-sync-community)](https://goreportcard.com/report/github.com/ovumcy/ovumcy-sync-community)
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm%20NC%201.0.0-blue.svg)](https://polyformproject.org/licenses/noncommercial/1.0.0/)
 [![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go)](https://go.dev/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker)](https://github.com/ovumcy/ovumcy-sync-community/actions/workflows/docker-image.yml)
 [![Release](https://img.shields.io/github/v/release/ovumcy/ovumcy-sync-community?display_name=tag&sort=semver)](https://github.com/ovumcy/ovumcy-sync-community/releases)
@@ -59,7 +59,8 @@ This repository currently provides:
 - device registration;
 - a capability document for the community/self-hosted mode;
 - account-scoped wrapped recovery-key package storage for zero-knowledge recovery setup;
-- encrypted blob upload and download for one account-scoped sync state.
+- encrypted blob upload and download for one account-scoped sync state;
+- authenticated, permanent account deletion that erases every row the server holds for that account in one transaction.
 
 In the Ovumcy app, this is the backend used for the `Self-hosted` backup and sync mode.
 
@@ -121,6 +122,7 @@ Runtime endpoints:
 - `POST /auth/totp/disable` (authenticated) turn off TOTP 2FA
 - `POST /auth/totp/challenge` complete the TOTP second factor after login
 - `DELETE /auth/session`
+- `DELETE /account` (authenticated) permanently erase the account and every row it owns: sessions, devices, the encrypted sync blob, the wrapped recovery-key package, pending password reset tokens, and pending TOTP challenges
 - `GET /sync/capabilities`
 - `POST /sync/devices`
 - `GET /sync/recovery-key`
@@ -208,7 +210,10 @@ Most self-hosted operators do not need this. For normal community usage, leave `
 
 ## License
 
-Ovumcy Sync Community is licensed under AGPL v3.
+Ovumcy Sync Community is source-available under the **PolyForm Noncommercial
+License 1.0.0**. You may view, self-host, use, and modify it for any
+noncommercial purpose, and share it noncommercially. Commercial use is not
+granted; contact Ovumcy for a commercial license.
 See [LICENSE](LICENSE).
 
 ## Contributing
