@@ -1,0 +1,16 @@
+# Default owner
+* @terraincognita07
+
+# Security-sensitive runtime and deployment surfaces
+/cmd/ovumcy-sync-community/ @terraincognita07
+/internal/api/ @terraincognita07
+/internal/security/ @terraincognita07
+/internal/services/ @terraincognita07
+/internal/db/ @terraincognita07
+/internal/config/ @terraincognita07
+/scripts/ @terraincognita07
+/Dockerfile @terraincognita07
+/docker-compose.yml @terraincognita07
+/docker-compose.browser.yml @terraincognita07
+/docker-compose.caddy.yml @terraincognita07
+/docs/ @terraincognita07
