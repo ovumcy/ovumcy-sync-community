@@ -1,15 +1,19 @@
 [![CI](https://github.com/ovumcy/ovumcy-sync-community/actions/workflows/ci.yml/badge.svg)](https://github.com/ovumcy/ovumcy-sync-community/actions/workflows/ci.yml)
 [![Security](https://github.com/ovumcy/ovumcy-sync-community/actions/workflows/security.yml/badge.svg)](https://github.com/ovumcy/ovumcy-sync-community/actions/workflows/security.yml)
 [![CodeQL](https://github.com/ovumcy/ovumcy-sync-community/actions/workflows/codeql.yml/badge.svg)](https://github.com/ovumcy/ovumcy-sync-community/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/ovumcy/ovumcy-sync-community/badge)](https://securityscorecards.dev/viewer/?uri=github.com/ovumcy/ovumcy-sync-community)
 [![Coverage](https://codecov.io/gh/ovumcy/ovumcy-sync-community/graph/badge.svg)](https://app.codecov.io/gh/ovumcy/ovumcy-sync-community)
 [![Tested](https://img.shields.io/badge/tested-mutation%20%C2%B7%20fuzz%20%C2%B7%20property-2ea44f)](https://github.com/ovumcy/ovumcy-sync-community/blob/main/TESTING.md)
 [![Go Report Card](https://goreportcard.com/badge/github.com/ovumcy/ovumcy-sync-community)](https://goreportcard.com/report/github.com/ovumcy/ovumcy-sync-community)
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm%20NC%201.0.0-blue.svg)](https://polyformproject.org/licenses/noncommercial/1.0.0/)
 [![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go)](https://go.dev/)
+[![Go Reference](https://pkg.go.dev/badge/github.com/ovumcy/ovumcy-sync-community.svg)](https://pkg.go.dev/github.com/ovumcy/ovumcy-sync-community)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker)](https://github.com/ovumcy/ovumcy-sync-community/actions/workflows/docker-image.yml)
 [![Release](https://img.shields.io/github/v/release/ovumcy/ovumcy-sync-community?display_name=tag&sort=semver)](https://github.com/ovumcy/ovumcy-sync-community/releases)
+[![Last Commit](https://img.shields.io/github/last-commit/ovumcy/ovumcy-sync-community)](https://github.com/ovumcy/ovumcy-sync-community/commits/main)
 [![Self-hosted](https://img.shields.io/badge/Self--hosted-yes-2ea44f)](https://github.com/ovumcy/ovumcy-sync-community/blob/main/docs/self-hosting.md)
 [![Zero-knowledge](https://img.shields.io/badge/Zero--knowledge-transport-2ea44f)](https://github.com/ovumcy/ovumcy-sync-community#what-the-server-can-see)
+[![No telemetry](https://img.shields.io/badge/Telemetry-none-2ea44f)](https://github.com/ovumcy/ovumcy-sync-community#what-the-server-can-see)
 
 # ovumcy-sync-community
 
@@ -48,9 +52,11 @@ It must not know:
 - client master keys;
 - decrypted sync payloads.
 
+The server ships no analytics, ad trackers, or outbound telemetry. Operator metrics are exposed only through the optional, pull-based `/metrics` endpoint and are never reported anywhere outbound.
+
 ## What You Get With Ovumcy App
 
-This README describes the current `main` branch.
+This README describes the current `main` branch. The latest tagged release is `v0.2.0`.
 
 This repository currently provides:
 
@@ -207,6 +213,33 @@ If `MANAGED_BRIDGE_TOKEN` is configured, the service also enables:
 This endpoint is intended only for a separate trusted managed-auth service. It provisions a managed-mode sync session for an opaque managed `account_id` without sending email or password through the sync endpoint.
 
 Most self-hosted operators do not need this. For normal community usage, leave `MANAGED_BRIDGE_TOKEN` unset and ignore this endpoint.
+
+## Development
+
+Common commands from the repository root:
+
+```bash
+go test ./...
+go vet ./...
+go run honnef.co/go/tools/cmd/staticcheck@v0.6.1 ./...
+```
+
+Project structure:
+
+- `cmd/ovumcy-sync-community` — application entrypoint (`migrate`, `serve`, `healthcheck`)
+- `internal/api` — HTTP transport, handlers, and response mapping
+- `internal/services` — domain logic (`AuthService`, `SyncService`)
+- `internal/db` — persistence, repositories, and forward-only migrations under `internal/db/migrations/`
+- `internal/models` — transport-free domain types
+- `internal/security` — password hashing, tokens, and field encryption
+- `internal/config` — runtime configuration from environment
+
+CI runs staticcheck, `go vet`, tests with coverage, and a Docker runtime smoke on pushes and pull requests. A dedicated security workflow runs `gosec`, `govulncheck`, and Trivy filesystem/image scans and publishes a CycloneDX image SBOM; CodeQL, native fuzzing, and mutation testing run in their own workflows. See **[TESTING.md](TESTING.md)** for the full quality and security approach.
+
+## Releases
+
+- Latest tagged release: `v0.2.0`.
+- Notable changes are tracked in [CHANGELOG.md](CHANGELOG.md); release notes are published via GitHub Releases.
 
 ## License
 
