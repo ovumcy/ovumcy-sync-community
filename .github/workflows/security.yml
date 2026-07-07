@@ -15,11 +15,13 @@ on:
 
 permissions:
   contents: read
-  security-events: write
 
 jobs:
   gosec:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     env:
       GOBIN: ${{ github.workspace }}/.bin
 
@@ -77,6 +79,9 @@ jobs:
 
   trivy-fs:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
 
     steps:
       - name: Checkout
@@ -105,6 +110,9 @@ jobs:
 
   trivy-image:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
 
     steps:
       - name: Checkout

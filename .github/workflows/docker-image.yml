@@ -12,14 +12,16 @@ on:
   workflow_dispatch:
 
 permissions:
-  attestations: write
   contents: read
-  id-token: write
-  packages: write
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+      packages: write
 
     steps:
       - name: Checkout
