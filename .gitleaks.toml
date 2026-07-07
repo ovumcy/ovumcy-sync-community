@@ -1,0 +1,27 @@
+# Gitleaks configuration for ovumcy-sync-community.
+#
+# Extends gitleaks' built-in default rule set (do not replace it). A
+# full-history scan (--log-opts=--all) of this repository found zero
+# findings — not even test fixtures — so the allowlist below is an
+# intentionally empty scaffold: a low-friction place to add entries if a
+# future, already-triaged fixture or placeholder value trips a rule.
+[extend]
+useDefault = true
+
+# Allowlist policy (matches the sibling ovumcy-web repo's .gitleaks.toml):
+# - Add entries only for already-triaged, non-secret fixture/placeholder
+#   values — never production or non-test source, and never to silence an
+#   unreviewed finding.
+# - Prefer narrow path patterns scoped to file classes that legitimately
+#   carry fake secrets (e.g. '''_test\.go$''' for Go test fixtures,
+#   '''(^|/)\.env\.example$''' for documentation placeholders), or an
+#   exact-value regex for a specific named constant.
+# - Document each entry with the identifier and file it covers.
+#
+# Uncomment and populate when the first entry is needed:
+#
+# [allowlist]
+#   paths = [
+#   ]
+#   regexes = [
+#   ]
