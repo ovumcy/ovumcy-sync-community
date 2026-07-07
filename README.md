@@ -57,7 +57,7 @@ The server ships no analytics, ad trackers, or outbound telemetry. Operator metr
 
 ## What You Get With Ovumcy App
 
-This README describes the current `main` branch. The latest tagged release is `v0.2.0`.
+This README describes the current `main` branch. The latest tagged release is `v0.3.0`.
 
 This repository currently provides:
 
