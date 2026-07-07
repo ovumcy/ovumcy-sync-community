@@ -256,7 +256,7 @@ func TestTOTPEnrollVerifyDisableEndToEnd(t *testing.T) {
 		http.StatusOK,
 	)
 	var relogBody struct {
-		SessionToken  string `json:"session_token"`
+		SessionToken  string    `json:"session_token"`
 		TOTPChallenge *struct{} `json:"totp_challenge"`
 	}
 	decodeResponse(t, relogResp.Body.Bytes(), &relogBody)

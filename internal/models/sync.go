@@ -3,16 +3,16 @@ package models
 import "time"
 
 type Account struct {
-	ID                   string
-	Login                string
-	PasswordHash         string
-	RecoveryCodeHash     string
-	Mode                 string
-	PremiumActive        bool
-	CreatedAt            time.Time
-	TOTPSecretEncrypted  string
-	TOTPEnabled          bool
-	TOTPLastUsedStep     int64
+	ID                  string
+	Login               string
+	PasswordHash        string
+	RecoveryCodeHash    string
+	Mode                string
+	PremiumActive       bool
+	CreatedAt           time.Time
+	TOTPSecretEncrypted string
+	TOTPEnabled         bool
+	TOTPLastUsedStep    int64
 }
 
 type PasswordResetToken struct {
