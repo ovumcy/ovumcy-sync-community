@@ -283,11 +283,16 @@ func (s *Store) TouchSession(ctx context.Context, sessionID string, lastSeenAt t
 	return nil
 }
 
-// UpdateTOTPSecretAndEnabled writes the new TOTP secret ciphertext alongside
-// the totp_enabled flag in one statement. Called when enrolling (set secret +
-// enable) and when disabling (clear secret + disable). totp_last_used_step
-// is reset on every transition so a previously consumed step does not block
-// a fresh enrollment.
+// UpdateTOTPSecretAndEnabled writes the TOTP secret ciphertext alongside the
+// totp_enabled flag in one statement, resetting totp_last_used_step to 0. It
+// is the secret-write transition: storing a fresh pending secret at enrollment
+// start (enabled=false) and clearing the secret on disable / recovery reset
+// (empty ciphertext, enabled=false). Resetting the step here is deliberate and
+// safe — either the secret is brand new (any leftover step from a prior secret
+// must not reject the new secret's first verify) or the secret is gone (no
+// code can verify against it). The enable transition does NOT go through here;
+// it uses SetTOTPEnabled, which preserves the step claimed by the verifying
+// code so that same code cannot be replayed inside its skew window.
 func (s *Store) UpdateTOTPSecretAndEnabled(
 	ctx context.Context,
 	accountID string,
@@ -308,6 +313,40 @@ func (s *Store) UpdateTOTPSecretAndEnabled(
 	affected, err := result.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("update totp secret rows: %w", err)
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+
+	return nil
+}
+
+// SetTOTPEnabled flips only the totp_enabled flag, leaving both
+// totp_secret_encrypted and totp_last_used_step untouched. It is the enable
+// transition at the end of CompleteEnrollment: the verifying code has already
+// been consumed via ClaimTOTPStep, so the claimed step MUST survive this write
+// or the just-used enrollment code would be replayable against the login
+// challenge and disable paths within its ±1-step skew window (RFC 6238 §5.2).
+// Keeping the secret column out of the statement also avoids a redundant
+// re-write of the ciphertext the caller already holds.
+func (s *Store) SetTOTPEnabled(
+	ctx context.Context,
+	accountID string,
+	enabled bool,
+) error {
+	result, err := s.db.ExecContext(
+		ctx,
+		`UPDATE accounts SET totp_enabled = ? WHERE id = ?`,
+		boolToInt(enabled),
+		accountID,
+	)
+	if err != nil {
+		return fmt.Errorf("set totp enabled: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("set totp enabled rows: %w", err)
 	}
 	if affected == 0 {
 		return ErrNotFound
