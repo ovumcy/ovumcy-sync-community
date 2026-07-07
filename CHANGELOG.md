@@ -35,6 +35,7 @@ Extensive auth and security work has landed on `main` since `v0.2.0` and is not 
 - Healthcheck self-probe plus container `HEALTHCHECK`; `govulncheck`, native fuzz, and advisory mutation (gremlins) CI lanes; fuzz and property tests for crypto, TOTP, and login/recovery helpers.
 - Pinned the Go toolchain to 1.25.11 and bumped `golang.org/x/crypto` to v0.53.0 for advisories; made the Codecov upload non-blocking on pull requests.
 - Added the `SECURITY.md` Test Enforcement Matrix; documented the optional TOTP second factor and the mutation/fuzz/property test stack.
+- Added a `golangci-lint` v2.12.2 CI gate (`.golangci.yml`, parallel `golangci-lint` job) alongside the existing `staticcheck` and `go vet` jobs; fixed the mechanical findings it surfaced (unchecked deferred `Close` errors, redundant `http.HandlerFunc` conversions, three-clause counting loops rewritten to `range`).
 
 ## [0.2.0] - 2026-03-23
 
