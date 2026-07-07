@@ -258,6 +258,9 @@ noncommercial purpose, and share it noncommercially. Commercial use is not
 granted; contact Ovumcy for a commercial license.
 See [LICENSE](LICENSE).
 
+Third-party Go module dependencies compiled into the binary and container image are listed
+with their licenses in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
