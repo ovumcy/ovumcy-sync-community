@@ -37,8 +37,13 @@ Five native Go fuzz targets guard the inputs that sit on the trust boundary:
 - `FuzzDecodeTOTPSecretBase32` — TOTP secret decoding
 - `FuzzFieldCryptoRoundTrip` — field-encryption encrypt→decrypt round-trip
 
-CI runs the seed corpus on every push; longer active fuzzing is run on demand
-(see below).
+CI runs the seed corpus on every push. The `Fuzz` workflow additionally runs
+active fuzzing on GitHub Actions: a short (3m/target) weekly pass over every
+target, and a longer (10m/target) daily pass whose generated corpus is cached
+and restored between runs so coverage accumulates — both also runnable on
+demand via `workflow_dispatch`. An `oss-fuzz/` scaffold prepares this project
+for Google's OSS-Fuzz infrastructure but is not itself active; see
+[`oss-fuzz/ONBOARDING.md`](oss-fuzz/ONBOARDING.md).
 
 ## We test our tests
 

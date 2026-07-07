@@ -1,0 +1,8 @@
+homepage: "https://github.com/ovumcy/ovumcy-sync-community"
+language: go
+primary_contact: "contact@ovumcy.com"
+main_repo: "https://github.com/ovumcy/ovumcy-sync-community.git"
+fuzzing_engines:
+  - libfuzzer
+sanitizers:
+  - address
