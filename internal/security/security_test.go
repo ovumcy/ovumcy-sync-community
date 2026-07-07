@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestNormalizeLoginAndValidateLogin(t *testing.T) {
@@ -47,6 +49,65 @@ func TestHashPasswordAndCompare(t *testing.T) {
 	}
 	if err := ComparePasswordHash(hash, "wrong password"); err == nil {
 		t.Fatal("expected wrong password comparison to fail")
+	}
+}
+
+// TestHashPasswordUsesConfiguredCost pins the generated cost to
+// PasswordHashCost so a silent downgrade (or an accidental divergence from
+// the timing-equalization placeholder in internal/services) fails the suite.
+func TestHashPasswordUsesConfiguredCost(t *testing.T) {
+	hash, err := HashPassword("correct horse battery staple")
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	cost, err := bcrypt.Cost([]byte(hash))
+	if err != nil {
+		t.Fatalf("parse password hash cost: %v", err)
+	}
+	if cost != PasswordHashCost {
+		t.Fatalf("expected password hash cost %d, got %d", PasswordHashCost, cost)
+	}
+}
+
+// TestNewRecoveryCodeUsesConfiguredCost keeps recovery-code hashing at the
+// same cost as password hashing, so the forgot-password compare path stays in
+// timing parity with the equalization placeholder as well.
+func TestNewRecoveryCodeUsesConfiguredCost(t *testing.T) {
+	_, hash, err := NewRecoveryCode()
+	if err != nil {
+		t.Fatalf("new recovery code: %v", err)
+	}
+	cost, err := bcrypt.Cost([]byte(hash))
+	if err != nil {
+		t.Fatalf("parse recovery code hash cost: %v", err)
+	}
+	if cost != PasswordHashCost {
+		t.Fatalf("expected recovery code hash cost %d, got %d", PasswordHashCost, cost)
+	}
+}
+
+func TestPasswordHashNeedsRehash(t *testing.T) {
+	lower, err := bcrypt.GenerateFromPassword([]byte("legacy password ok"), PasswordHashCost-2)
+	if err != nil {
+		t.Fatalf("generate lower-cost hash: %v", err)
+	}
+	if !PasswordHashNeedsRehash(string(lower)) {
+		t.Fatal("expected a lower-cost hash to need a rehash")
+	}
+
+	current, err := HashPassword("correct horse battery staple")
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	if PasswordHashNeedsRehash(current) {
+		t.Fatal("a current-cost hash must not be flagged for rehash")
+	}
+
+	if PasswordHashNeedsRehash("not-a-bcrypt-hash") {
+		t.Fatal("an unparseable hash must never be flagged for rehash")
+	}
+	if PasswordHashNeedsRehash("") {
+		t.Fatal("an empty hash must never be flagged for rehash")
 	}
 }
 

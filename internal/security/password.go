@@ -11,6 +11,19 @@ import (
 
 var ErrWeakPassword = errors.New("weak_password")
 
+// PasswordHashCost is the bcrypt cost for every hash this server generates:
+// account passwords (HashPassword) and recovery codes (NewRecoveryCode).
+//
+// CWE-208 coupling: the login/forgot-password timing equalizer in
+// internal/services burns bcrypt work against a fixed placeholder hash whose
+// embedded cost MUST equal this constant. If real hashes and the placeholder
+// ever diverge in cost, an early return on an unknown login performs a
+// measurably different amount of work than a real wrong-credential compare,
+// and login enumeration by timing becomes possible again. Move this constant
+// and the placeholder together — a test pins the parity
+// (TestPasswordTimingEqualizationHashCostMatchesPasswordHashCost).
+const PasswordHashCost = 12
+
 func NormalizeLogin(login string) string {
 	return strings.ToLower(strings.TrimSpace(login))
 }
@@ -39,7 +52,7 @@ func HashPassword(password string) (string, error) {
 		return "", ErrWeakPassword
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), PasswordHashCost)
 	if err != nil {
 		return "", err
 	}
@@ -49,6 +62,17 @@ func HashPassword(password string) (string, error) {
 
 func ComparePasswordHash(hash string, password string) error {
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
+}
+
+// PasswordHashNeedsRehash reports whether a stored bcrypt hash was generated
+// at a lower cost than PasswordHashCost and should be transparently upgraded
+// after its next successful verification. An unparseable hash returns false:
+// the caller has already verified the credential against the stored hash, so
+// a hash whose cost cannot even be read is left to the compare path to
+// surface — it is never rewritten blindly.
+func PasswordHashNeedsRehash(hash string) bool {
+	cost, err := bcrypt.Cost([]byte(hash))
+	return err == nil && cost < PasswordHashCost
 }
 
 // NewRecoveryCode generates a fresh account-level recovery code and returns
@@ -65,7 +89,7 @@ func NewRecoveryCode() (plain string, hash string, err error) {
 	}
 
 	plain = hex.EncodeToString(raw)
-	bcryptHash, err := bcrypt.GenerateFromPassword([]byte(plain), bcrypt.DefaultCost)
+	bcryptHash, err := bcrypt.GenerateFromPassword([]byte(plain), PasswordHashCost)
 	if err != nil {
 		return "", "", err
 	}
