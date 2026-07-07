@@ -30,6 +30,7 @@ Extensive auth and security work has landed on `main` since `v0.2.0` and is not 
 - Equalize bcrypt timing on `Login` and `ForgotPassword` early-return paths (CWE-208).
 - Move blob generation-freshness into an atomic SQL compare-and-swap; make password-reset-token consumption atomic.
 - Harden the TOTP login flow; annotate reviewed gosec findings (G202 in `DeleteAccount`, G505/G115 in TOTP).
+- Pin both Dockerfile base images (`golang`, `distroless/static-debian12`) by digest instead of tag alone, kept current by Dependabot's weekly `docker` update.
 
 ### Internal
 

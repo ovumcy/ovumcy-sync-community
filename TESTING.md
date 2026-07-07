@@ -66,8 +66,10 @@ with a brittle test. We do not chase a fake 100%.
 | [Trivy](https://trivy.dev) | Dependency and container image scanning |
 | CycloneDX SBOM | Software bill of materials generated for the runtime image |
 
-The runtime image is a multi-stage build running as a non-root user with pinned
-base-image digests and dependency versions. Test code never ships in the image.
+The runtime image is a multi-stage build running as a non-root user. Both base
+images are pinned by digest (`FROM image:tag@sha256:...`, kept current by
+Dependabot's weekly `docker` update) and Go module dependencies are pinned via
+`go.sum`. Test code never ships in the image.
 
 ## What the server can see
 
