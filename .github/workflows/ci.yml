@@ -82,7 +82,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
 
     steps:
       - name: Checkout
@@ -95,23 +94,77 @@ jobs:
           cache: true
 
       - name: Go test with coverage
-        # -coverpkg credits a line when ANY test exercises it, including
-        # cross-package integration tests (e.g. internal/db methods driven
-        # through internal/services and internal/api). Without it, per-package
-        # profiles score a line 0% unless its own package's tests call it
-        # directly, which understates real coverage and misleads the Codecov
-        # patch report.
-        run: go test -race ./... -coverprofile=coverage.out -covermode=atomic -coverpkg=./cmd/...,./internal/...
+        # -coverpkg credits a line when ANY test exercises it (including
+        # cross-package integration tests, e.g. internal/db methods driven
+        # through internal/services and internal/api), not only its own
+        # package's unit tests. The patch-coverage gate consumes this profile.
+        # No -race here: the race detector runs separately in the `race` job
+        # below so a data race and a coverage regression fail independently
+        # and legibly.
+        run: go test ./cmd/... ./internal/... -coverprofile=coverage.out -covermode=atomic -coverpkg=./cmd/...,./internal/...
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-out
+          path: coverage.out
+          if-no-files-found: error
+          retention-days: 1
+
+  race:
+    name: race
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Go test with race detector
+        # CGO is required for the race detector; the production image stays
+        # CGO_ENABLED=0. Unlike ovumcy-web (which excludes internal/api because
+        # instantiating hundreds of Fiber apps trips a fasthttp/fiber library
+        # race), this repo uses net/http directly with no such library-internal
+        # noise, so the full module tree races cleanly.
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race ./...
+
+  coverage-upload:
+    name: coverage-upload
+    runs-on: ubuntu-latest
+    needs:
+      - test
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Download coverage artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: coverage-out
+          path: .
 
       - name: Upload coverage to Codecov
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        id: codecov
         # Coverage upload is reporting, not a merge gate: the tests already ran
-        # and passed before this step. A Codecov ingest/OIDC hiccup must never
-        # fail CI. This was advisory on push only; the pull_request OIDC upload
-        # path is unreliable (and was never exercised while the repo pushed
-        # straight to main), so make it non-blocking on every event. The
-        # follow-up step still surfaces a warning.
+        # and passed in the `test` job before this step. A Codecov ingest/OIDC
+        # hiccup must never fail CI. This was advisory on push only; the
+        # pull_request OIDC upload path is unreliable (and was never exercised
+        # while the repo pushed straight to main), so make it non-blocking on
+        # every event. The follow-up step still surfaces a warning.
+        id: codecov
         continue-on-error: true
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
@@ -122,6 +175,46 @@ jobs:
       - name: Warn on non-blocking Codecov failure
         if: ${{ steps.codecov.outcome == 'failure' }}
         run: echo "::warning::Codecov upload failed. Tests ran and passed; Codecov ingest returned an external error (non-blocking)."
+
+  patch-coverage:
+    name: patch-coverage
+    runs-on: ubuntu-latest
+    needs:
+      - test
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download coverage artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: coverage-out
+          path: .
+
+      - name: Fetch base branch
+        run: git fetch --no-tags origin ${{ github.event.pull_request.base.ref }}
+
+      - name: Enforce patch coverage
+        # Fails when a modified, coverable Go line is not covered by tests. This
+        # is the in-CI, self-contained replacement for the external codecov patch
+        # status, which can stall and deadlock a required check. See
+        # scripts/patchcov for the gate logic (test files and tooling excluded).
+        env:
+          COVERAGE_FILE: coverage.out
+          BASE_REF: origin/${{ github.event.pull_request.base.ref }}
+        run: go run ./scripts/patchcov
 
   docker-smoke:
     name: docker-smoke
