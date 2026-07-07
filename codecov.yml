@@ -13,9 +13,19 @@ coverage:
         informational: false
     patch:
       default:
-        target: auto
+        # Require every modified, coverable line in a PR to be covered by tests
+        # ("All modified and coverable lines are covered by tests"). Genuinely
+        # unreachable lines can be excluded inline with a `// codecov:ignore`
+        # comment rather than lowering this gate.
+        target: 100%
         threshold: 0%
         informational: false
+
+# Tooling is excluded from coverage reporting, matching the in-CI
+# scripts/patchcov gate. This is not product code. (Unlike the sibling
+# ovumcy-web repo, this module has no internal/testdb equivalent to add here.)
+ignore:
+  - "scripts"
 
 github_checks:
   annotations: true
