@@ -35,6 +35,8 @@ With the Ovumcy app, this repository provides the self-hosted server side of:
 
 ## What The Server Can See
 
+![Zero-knowledge boundary. The Ovumcy app on the owner's device encrypts all health data with a master key the server never receives; only ciphertext and metadata cross the boundary. The sync server stores account, session, and device metadata plus opaque ciphertext, and never sees cycle dates, symptoms, notes, the recovery phrase, the client master key, or any decrypted payload.](docs/assets/zero-knowledge.svg)
+
 `ovumcy-sync-community` is intentionally narrow. In community mode it may know:
 
 - the account login that the owner chose on their own server;
