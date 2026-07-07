@@ -148,6 +148,13 @@ func (s *TOTPService) StartEnrollment(
 		return TOTPEnrollmentStart{}, fmt.Errorf("%w: %v", ErrTOTPSecretEncrypt, err)
 	}
 
+	// Write the fresh pending secret with totp_enabled=false. This resets
+	// totp_last_used_step to 0 on purpose: a leftover high step from a
+	// previous secret (a prior enrollment or an abandoned one) would otherwise
+	// reject this new secret's first valid code inside the same skew window.
+	// The step claim is only meaningful for the secret that earned it, so a
+	// new secret starts from a clean step. (The enable flip in
+	// CompleteEnrollment, by contrast, preserves the step — see SetTOTPEnabled.)
 	if err := s.store.UpdateTOTPSecretAndEnabled(ctx, accountID, encrypted, false); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			return TOTPEnrollmentStart{}, ErrUnauthorized
@@ -219,12 +226,12 @@ func (s *TOTPService) CompleteEnrollment(
 		return ErrTOTPReplayed
 	}
 
-	if err := s.store.UpdateTOTPSecretAndEnabled(
-		ctx,
-		accountID,
-		account.TOTPSecretEncrypted,
-		true,
-	); err != nil {
+	// Flip to enabled WITHOUT resetting totp_last_used_step: the step just
+	// claimed above must stay consumed, or this same enrollment code would be
+	// accepted again by the login-challenge and disable paths within its
+	// ±1-step skew window. SetTOTPEnabled touches only the flag; the pending
+	// secret stored by StartEnrollment is already the live secret.
+	if err := s.store.SetTOTPEnabled(ctx, accountID, true); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			return ErrUnauthorized
 		}
