@@ -6,230 +6,182 @@
 [![Tested](https://img.shields.io/badge/tested-mutation%20%C2%B7%20fuzz%20%C2%B7%20property-2ea44f)](https://github.com/ovumcy/ovumcy-sync-community/blob/main/TESTING.md)
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm%20NC%201.0.0-blue.svg)](https://polyformproject.org/licenses/noncommercial/1.0.0/)
 [![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go)](https://go.dev/)
-[![Go Reference](https://pkg.go.dev/badge/github.com/ovumcy/ovumcy-sync-community.svg)](https://pkg.go.dev/github.com/ovumcy/ovumcy-sync-community)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker)](https://github.com/ovumcy/ovumcy-sync-community/actions/workflows/docker-image.yml)
 [![Release](https://img.shields.io/github/v/release/ovumcy/ovumcy-sync-community?display_name=tag&sort=semver)](https://github.com/ovumcy/ovumcy-sync-community/releases)
-[![Last Commit](https://img.shields.io/github/last-commit/ovumcy/ovumcy-sync-community)](https://github.com/ovumcy/ovumcy-sync-community/commits/main)
 [![Self-hosted](https://img.shields.io/badge/Self--hosted-yes-2ea44f)](https://github.com/ovumcy/ovumcy-sync-community/blob/main/docs/self-hosting.md)
-[![Zero-knowledge](https://img.shields.io/badge/Zero--knowledge-transport-2ea44f)](https://github.com/ovumcy/ovumcy-sync-community#what-the-server-can-see)
-[![No telemetry](https://img.shields.io/badge/Telemetry-none-2ea44f)](https://github.com/ovumcy/ovumcy-sync-community#what-the-server-can-see)
+[![Zero-knowledge](https://img.shields.io/badge/Zero--knowledge-transport-2ea44f)](#what-the-server-can-see)
+[![No telemetry](https://img.shields.io/badge/Telemetry-none-2ea44f)](#what-the-server-can-see)
 
 # ovumcy-sync-community
 
-`ovumcy-sync-community` is the self-hosted encrypted sync backend for the [Ovumcy app](https://github.com/ovumcy/ovumcy-app).
+**Self-hosted, zero-knowledge encrypted-sync backend for the [Ovumcy](https://github.com/ovumcy/ovumcy-app) period & cycle tracker.**
 
-It is built for people who want to run their own Ovumcy sync server for backup, restore, and multi-device encrypted sync without turning the server into a plaintext health-data processor.
+Run your own Ovumcy sync server so your devices can back up and stay in sync — without handing a cloud vendor your readable health data. The server only ever holds **ciphertext it cannot decrypt**: your cycle dates, symptoms, and notes are encrypted on your phone, with a key the server never receives.
 
-It is designed around a zero-knowledge contract:
+> The Ovumcy app is local-first. This server is the **optional** transport for encrypted backup, restore, and multi-device sync. You only need it if you want those.
 
-- the server knows account identity, device registry, capability metadata, and encrypted blob metadata;
-- the server stores only ciphertext for synced health data;
-- the server never receives recovery phrases or plaintext health records.
+## Why run your own sync server
 
-With the Ovumcy app, this repository provides the self-hosted server side of:
+- **You keep the keys.** Health data is encrypted on the client; the server stores opaque blobs. Even a fully compromised server (or its operator) cannot read your cycle data.
+- **No lock-in, no tracking.** No accounts with a third party, no analytics, no ad trackers, no outbound telemetry.
+- **Small and auditable.** One Go binary, one SQLite file, a narrow HTTP surface you can read end to end — and a [machine-readable API spec](openapi.yaml).
+- **Multi-device.** Back up on one device, restore on another, all end-to-end encrypted.
 
-- account registration and sign-in on your own server;
-- encrypted backup and restore across devices;
-- device registration and recovery-key package storage;
-- a simple, auditable community deployment baseline.
+## What the server can see
 
-## What The Server Can See
+![Zero-knowledge boundary: the Ovumcy app on the owner's device encrypts all health data with a master key the server never receives; only ciphertext and metadata cross the boundary. The sync server stores account, session, and device metadata plus opaque ciphertext, and never sees cycle dates, symptoms, notes, the recovery phrase, the client master key, or any decrypted payload.](docs/assets/zero-knowledge.svg)
 
-![Zero-knowledge boundary. The Ovumcy app on the owner's device encrypts all health data with a master key the server never receives; only ciphertext and metadata cross the boundary. The sync server stores account, session, and device metadata plus opaque ciphertext, and never sees cycle dates, symptoms, notes, the recovery phrase, the client master key, or any decrypted payload.](docs/assets/zero-knowledge.svg)
+The boundary is deliberate and narrow. The server **may** hold:
 
-`ovumcy-sync-community` is intentionally narrow. In community mode it may know:
+- the account login you chose on your own server, and bearer-session metadata;
+- attached device IDs and labels;
+- capability metadata (device limits, blob-size limits);
+- encrypted-blob metadata (generation, checksum, ciphertext size, timestamps);
+- the wrapped recovery-key package (opaque ciphertext).
 
-- the account login that the owner chose on their own server;
-- bearer-session lifecycle metadata;
-- attached device IDs and device labels;
-- capability metadata such as device limits and blob-size limits;
-- encrypted blob metadata such as generation, checksum, ciphertext size, and timestamps;
-- wrapped recovery-key package metadata.
+The server **never** holds:
 
-It must not know:
+- cycle dates, symptoms, notes, or any plaintext health content;
+- your recovery phrase or client master key;
+- any decrypted sync payload.
 
-- cycle dates, symptoms, notes, or other plaintext health content;
-- recovery phrases;
-- client master keys;
-- decrypted sync payloads.
+## FAQ
 
-The server ships no analytics, ad trackers, or outbound telemetry. Operator metrics are exposed only through the optional, pull-based `/metrics` endpoint and are never reported anywhere outbound.
+**Can the server read my cycle data?** No. The app encrypts everything with a master key derived on your device from your recovery phrase. The server receives only ciphertext and cannot decrypt it.
 
-## What You Get With Ovumcy App
+**Where is my data stored?** In a single SQLite file on the machine you run this on (persisted under `/data`). You own the disk and the backups.
 
-This README describes the current `main` branch. The latest tagged release is `v0.3.0`.
+**Does it phone home or use analytics?** No. There are no ad trackers and no outbound telemetry. Operator metrics exist only behind an optional, pull-based `/metrics` endpoint that is off by default.
 
-This repository currently provides:
+**Is there an API specification?** Yes — a machine-readable OpenAPI 3.1 spec in [`openapi.yaml`](openapi.yaml).
 
-- account registration and login;
-- bearer session tokens with hashed storage;
-- device registration;
-- a capability document for the community/self-hosted mode;
-- account-scoped wrapped recovery-key package storage for zero-knowledge recovery setup;
-- encrypted blob upload and download for one account-scoped sync state;
-- authenticated, permanent account deletion that erases every row the server holds for that account in one transaction.
+**Do I have to trust the operator?** For confidentiality of your health data, no — that is the point of the zero-knowledge design. The operator does control availability and sees account/device *metadata* (see the boundary above).
 
-In the Ovumcy app, this is the backend used for the `Self-hosted` backup and sync mode.
+**Can I verify a release?** Yes. Release binaries and the container image are signed with keyless [cosign](https://www.sigstore.dev/) and carry SLSA build provenance. See [Verifying release integrity](docs/self-hosting.md#verifying-release-integrity).
 
-The core Ovumcy product remains local-first. This server exists only for optional encrypted sync and recovery transport.
+## Features
 
-## Current v1 Baseline
+- Account registration and login, with bearer session tokens stored only as hashes.
+- Encrypted blob upload/download for one account-scoped sync state, with generation-based conflict rejection.
+- Device registration, listing, and removal, bounded by a configurable device limit.
+- Account recovery: recovery codes and recovery-code-based password reset.
+- Optional TOTP two-factor authentication (off until you set an encryption key).
+- Wrapped recovery-key package storage for zero-knowledge key recovery.
+- Authenticated, permanent account deletion that erases every row the server holds in one transaction.
 
-The supported deployment baseline is:
+## Quick start
 
-- one self-hosted instance;
-- SQLite persisted on a local disk or volume;
-- HTTPS terminated at a reverse proxy or load balancer in front of this service.
-
-This repository is not intended to become a general product backend, analytics service, or plaintext health-data processor.
-
-## Why This Repository Exists
-
-Ovumcy app users may want multi-device backup and restore without giving a cloud vendor access to readable health data.
-
-`ovumcy-sync-community` exists to provide that self-hosted transport layer:
-
-- self-hosted by the user or operator;
-- narrow and auditable;
-- compatible with zero-knowledge encrypted client payloads;
-- honest about the metadata a sync server can still see.
-
-## Configuration
-
-Environment variables:
-
-- `BIND_ADDR` default `:8080`
-- `DB_PATH` default `./data/ovumcy-sync-community.sqlite`
-- `SESSION_TTL` default `720h`
-- `MAX_DEVICES` default `5`
-- `MAX_BLOB_BYTES` default `16777216` (16 MiB ciphertext cap)
-- `AUTH_RATE_LIMIT_COUNT` default `10`
-- `AUTH_RATE_LIMIT_WINDOW` default `1m`
-- `METRICS_ENABLED` default `false`; enables `GET /metrics`
-- `METRICS_BEARER_TOKEN` optional bearer token for `GET /metrics`; requires `METRICS_ENABLED=true`
-- `MANAGED_BRIDGE_TOKEN` optional bearer token that enables the machine-to-machine managed bridge endpoint
-- `ALLOWED_ORIGINS` comma-separated allowlist for browser clients; empty by default
-- `TRUSTED_PROXY_CIDRS` optional comma-separated list of trusted reverse-proxy IPs or CIDRs whose forwarded client IP headers may be used for auth rate limiting
-- `FIELD_ENCRYPTION_KEY` optional hex-encoded master key (>=32 bytes / 64 hex chars) that enables the optional TOTP second-factor surface; leave unset to disable 2FA entirely
-- `TOTP_ISSUER` default `ovumcy-sync-community`; issuer label embedded in `otpauth://` provisioning URIs so authenticator apps show which instance a secret belongs to
-
-Runtime endpoints (machine-readable spec: [openapi.yaml](openapi.yaml)):
-
-- `GET /healthz` liveness
-- `GET /readyz` readiness
-- `GET /metrics` optional Prometheus endpoint for operators
-- `POST /auth/register`
-- `POST /auth/login`
-- `POST /auth/change-password` (authenticated) change the account password
-- `POST /auth/forgot-password` start a recovery-code-based password reset
-- `POST /auth/reset-password` complete a password reset and rotate the recovery code
-- `POST /auth/recovery-code/regenerate` (authenticated) rotate the account recovery code
-- `POST /auth/totp/enroll` (authenticated) begin optional TOTP 2FA enrollment
-- `POST /auth/totp/verify` (authenticated) confirm TOTP enrollment
-- `POST /auth/totp/disable` (authenticated) turn off TOTP 2FA
-- `POST /auth/totp/challenge` complete the TOTP second factor after login
-- `GET /auth/session` (authenticated) return the current session's `account_id`, `login`, and `totp_enabled`
-- `DELETE /auth/session`
-- `DELETE /account` (authenticated) permanently erase the account and every row it owns: sessions, devices, the encrypted sync blob, the wrapped recovery-key package, pending password reset tokens, and pending TOTP challenges
-- `GET /sync/capabilities`
-- `POST /sync/devices` (authenticated) attach a device to the account
-- `GET /sync/devices` (authenticated) list the account's attached devices
-- `DELETE /sync/devices/{device_id}` (authenticated) remove one attached device, freeing a slot
-- `GET /sync/recovery-key`
-- `PUT /sync/recovery-key`
-- `GET /sync/blob`
-- `PUT /sync/blob`
-
-The TOTP endpoints stay inactive (`503 totp_not_configured`) until `FIELD_ENCRYPTION_KEY` is set; see [docs/self-hosting.md](docs/self-hosting.md#optional-two-factor-authentication) for the 2FA and account-recovery flows.
-
-## Run locally
-
-```bash
-go run ./cmd/ovumcy-sync-community migrate
-go run ./cmd/ovumcy-sync-community serve
-```
-
-## Docker
-
-```bash
-docker build -t ovumcy-sync-community .
-docker run --rm -v $(pwd)/data:/data ovumcy-sync-community migrate
-docker run --rm -p 8080:8080 -v $(pwd)/data:/data ovumcy-sync-community serve
-```
-
-## Docker Compose
+**Docker Compose (recommended).** Migrate the database once, then start the server:
 
 ```bash
 docker compose run --rm ovumcy-sync-community migrate
 docker compose up --build
 ```
 
-The compose baseline publishes the service on `127.0.0.1:8080` only (loopback, via `ports: ["127.0.0.1:8080:8080"]`) and persists SQLite data under `./data`. For remote or LAN access, put a reverse proxy in front of the loopback port (recommended) rather than exposing the app port directly. If you must publish on all host interfaces anyway, add a `docker-compose.override.yml` (auto-loaded by `docker compose`) with:
+The baseline publishes on `127.0.0.1:8080` (loopback only) and persists SQLite under `./data`. For remote or LAN access, put a reverse proxy in front of the loopback port — see [Self-hosting in production](#self-hosting-in-production).
 
-```yaml
-services:
-  ovumcy-sync-community:
-    ports: !override
-      - "8080:8080"
-```
-
-The `!override` tag replaces the baseline loopback mapping. A plain `ports:` list in an override file would be merged by appending, leaving two bindings of host port 8080 (loopback plus all interfaces) and the container would fail to start with a port-allocation conflict.
-
-For local browser-preview work with `ovumcy-app`, use the dedicated override:
+**Docker (without Compose):**
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.browser.yml run --rm ovumcy-sync-community migrate
-docker compose -f docker-compose.yml -f docker-compose.browser.yml up --build
+docker build -t ovumcy-sync-community .
+docker run --rm -v "$(pwd)/data:/data" ovumcy-sync-community migrate
+docker run --rm -p 8080:8080 -v "$(pwd)/data:/data" ovumcy-sync-community serve
 ```
 
-That override allows only:
+**Local (Go toolchain).** The schema must exist first, so `migrate` before `serve`:
 
-- `http://127.0.0.1:4173`
-- `http://localhost:4173`
+```bash
+go run ./cmd/ovumcy-sync-community migrate
+go run ./cmd/ovumcy-sync-community serve
+```
 
-Keep the base compose file unchanged for the default self-hosted security posture.
+**Connect the Ovumcy app:** open `Backup & sync` → choose `Self-hosted` → enter your HTTPS sync endpoint → prepare the device, save the recovery phrase, then register or sign in on your own server.
 
-For an optional reverse-proxy example with Caddy:
+## Configuration
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `BIND_ADDR` | `:8080` | Address the server listens on |
+| `DB_PATH` | `./data/ovumcy-sync-community.sqlite` | SQLite database file |
+| `SESSION_TTL` | `720h` | Session token lifetime |
+| `MAX_DEVICES` | `5` | Devices attachable per account |
+| `MAX_BLOB_BYTES` | `16777216` | Ciphertext size cap (16 MiB) |
+| `AUTH_RATE_LIMIT_COUNT` | `10` | Auth requests allowed per window |
+| `AUTH_RATE_LIMIT_WINDOW` | `1m` | Auth rate-limit window |
+| `METRICS_ENABLED` | `false` | Enables `GET /metrics` |
+| `METRICS_BEARER_TOKEN` | _(unset)_ | Bearer token for `/metrics` (requires `METRICS_ENABLED=true`) |
+| `MANAGED_BRIDGE_TOKEN` | _(unset)_ | Enables the managed-bridge endpoint (leave unset for community use) |
+| `ALLOWED_ORIGINS` | _(empty)_ | Explicit CORS allowlist for browser clients |
+| `TRUSTED_PROXY_CIDRS` | _(unset)_ | Reverse-proxy CIDRs whose forwarded client IP is trusted for rate limiting |
+| `FIELD_ENCRYPTION_KEY` | _(unset)_ | Hex key (≥32 bytes / 64 hex chars) that enables the optional TOTP surface |
+| `TOTP_ISSUER` | `ovumcy-sync-community` | Issuer label embedded in `otpauth://` provisioning URIs |
+
+TOTP endpoints stay inactive (`503 totp_not_configured`) until `FIELD_ENCRYPTION_KEY` is set; see [docs/self-hosting.md](docs/self-hosting.md#optional-two-factor-authentication) for the 2FA and account-recovery flows.
+
+<details>
+<summary><strong>Runtime endpoints</strong> (full list — machine-readable spec in <a href="openapi.yaml"><code>openapi.yaml</code></a>)</summary>
+
+- `GET /healthz` liveness · `GET /readyz` readiness · `GET /metrics` optional Prometheus endpoint
+- `POST /auth/register` · `POST /auth/login`
+- `POST /auth/change-password` (auth) · `POST /auth/forgot-password` · `POST /auth/reset-password` · `POST /auth/recovery-code/regenerate` (auth)
+- `POST /auth/totp/enroll` (auth) · `POST /auth/totp/verify` (auth) · `POST /auth/totp/disable` (auth) · `POST /auth/totp/challenge`
+- `GET /auth/session` (auth) returns `account_id` / `login` / `totp_enabled` · `DELETE /auth/session`
+- `DELETE /account` (auth) permanently erases the account and every row it owns
+- `GET /sync/capabilities`
+- `POST /sync/devices` (auth) attach · `GET /sync/devices` (auth) list · `DELETE /sync/devices/{device_id}` (auth) remove
+- `GET /sync/recovery-key` · `PUT /sync/recovery-key`
+- `GET /sync/blob` · `PUT /sync/blob`
+
+</details>
+
+## Self-hosting in production
+
+- Put the service behind HTTPS (terminate TLS at a reverse proxy such as Caddy, Nginx, or Traefik).
+- Persist the `/data` volume so SQLite survives restarts.
+- Set `TRUSTED_PROXY_CIDRS` to your reverse-proxy addresses so auth rate limiting sees real client IPs.
+- Enable `METRICS_ENABLED` only when needed, and keep `/metrics` internal or protect it with `METRICS_BEARER_TOKEN`.
+- Leave `MANAGED_BRIDGE_TOKEN` unset unless you operate a separate trusted managed-auth service.
+- Set `ALLOWED_ORIGINS` only when browser clients need direct CORS access.
+
+A ready-to-adapt Caddy edge (which blocks `/metrics` publicly by default):
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.caddy.yml run --rm ovumcy-sync-community migrate
 docker compose -f docker-compose.yml -f docker-compose.caddy.yml up --build
 ```
 
-The bundled Caddy example blocks `/metrics` at the public edge by default. If you enable metrics, prefer scraping the backend container directly from a private network or protect the endpoint with `METRICS_BEARER_TOKEN`.
+See [docs/self-hosting.md](docs/self-hosting.md) for the reverse-proxy, TLS, 2FA, and release-verification details, and [docs/backup-restore.md](docs/backup-restore.md) for an operator restore drill.
 
-To use it with the Ovumcy app:
+> **Publishing on all interfaces.** The baseline binds loopback only. To expose the port directly (a reverse proxy is preferred), add a `docker-compose.override.yml` (auto-loaded) with `ports: !override` — the `!override` tag *replaces* the loopback mapping; a plain `ports:` list would append and double-bind port 8080, failing to start.
 
-1. start the server with Docker Compose or your own deployment stack;
-2. open `Backup & sync` in the Ovumcy app;
-3. choose `Self-hosted`;
-4. enter your HTTPS sync endpoint;
-5. prepare the device, save the recovery phrase, then register or sign in on your own server.
+## Security
 
-For a production-style self-hosted setup:
+Confidentiality of health data is a property of the client encryption — the server is deliberately blind to payload contents. On top of that, the server is built to be correct about authentication and storage and paranoid about the primitives it owns: bcrypt password/recovery-code hashing, hashed session tokens, AES-256-GCM field encryption for TOTP secrets, enumeration- and timing-safe auth, and per-account rate limiting.
 
-- put this service behind HTTPS;
-- persist `/data`;
-- set `TRUSTED_PROXY_CIDRS` to your trusted reverse-proxy addresses if you want auth rate limiting to distinguish real client IPs behind the proxy;
-- enable `METRICS_ENABLED` only when you really need operator metrics, and keep `/metrics` internal or protect it with `METRICS_BEARER_TOKEN`;
-- keep `MANAGED_BRIDGE_TOKEN` unset unless you really run a separate trusted managed-auth service;
-- set `ALLOWED_ORIGINS` only when browser clients need direct CORS access.
+- Design, threat model, and the test-backed invariants: **[SECURITY.md](SECURITY.md)**.
+- How it is tested (mutation, fuzz, property, race, and supply-chain scanning): **[TESTING.md](TESTING.md)**.
+- Report a vulnerability privately: see [SECURITY.md](SECURITY.md).
 
-See [docs/self-hosting.md](docs/self-hosting.md) for a minimal reverse-proxy, TLS, and backup checklist, and [docs/backup-restore.md](docs/backup-restore.md) for an operator restore drill.
+## Architecture & tech stack
 
-## Advanced: Managed Bridge
+A single Go binary with a strict layering — transport never touches the database, services never touch HTTP:
 
-If `MANAGED_BRIDGE_TOKEN` is configured, the service also enables:
+```
+internal/api  →  internal/services  →  internal/db     (+ internal/security, internal/models)
+ (transport)      (AuthService,          (repositories,
+                   SyncService)           forward-only migrations)
+```
 
-- `POST /managed/session`
+- **Language:** Go 1.26, `net/http`, CGO-free build.
+- **Storage:** SQLite in WAL mode; forward-only SQL migrations (explicit `migrate` before `serve`).
+- **Runtime image:** multi-stage, distroless, non-root, digest-pinned base images.
+- **Supply chain:** cosign-signed image and release binaries, SLSA provenance, CycloneDX SBOM, digest-pinned GitHub Actions.
 
-This endpoint is intended only for a separate trusted managed-auth service. It provisions a managed-mode sync session for an opaque managed `account_id` without sending email or password through the sync endpoint.
+## Advanced: managed bridge
 
-Most self-hosted operators do not need this. For normal community usage, leave `MANAGED_BRIDGE_TOKEN` unset and ignore this endpoint.
+When `MANAGED_BRIDGE_TOKEN` is set, one extra endpoint is enabled — `POST /managed/session` — intended only for a separate trusted managed-auth service to provision a managed-mode session for an opaque managed `account_id`. Most self-hosted operators do not need this; leave the token unset and ignore the endpoint.
 
 ## Development
-
-Common commands from the repository root:
 
 ```bash
 go test ./...
@@ -237,36 +189,20 @@ go vet ./...
 go run honnef.co/go/tools/cmd/staticcheck@v0.6.1 ./...
 ```
 
-Project structure:
+Project layout:
 
-- `cmd/ovumcy-sync-community` — application entrypoint (`migrate`, `serve`, `healthcheck`)
-- `internal/api` — HTTP transport, handlers, and response mapping
+- `cmd/ovumcy-sync-community` — entrypoint (`migrate`, `serve`, `healthcheck`)
+- `internal/api` — HTTP transport, handlers, response mapping
 - `internal/services` — domain logic (`AuthService`, `SyncService`)
-- `internal/db` — persistence, repositories, and forward-only migrations under `internal/db/migrations/`
+- `internal/db` — persistence, repositories, forward-only migrations
 - `internal/models` — transport-free domain types
-- `internal/security` — password hashing, tokens, and field encryption
-- `internal/config` — runtime configuration from environment
+- `internal/security` — password hashing, tokens, field encryption
+- `internal/config` — runtime configuration from the environment
 
-CI runs staticcheck, `go vet`, tests with coverage, and a Docker runtime smoke on pushes and pull requests. A dedicated security workflow runs `gosec`, `govulncheck`, and Trivy filesystem/image scans and publishes a CycloneDX image SBOM; CodeQL, native fuzzing, and mutation testing run in their own workflows. See **[TESTING.md](TESTING.md)** for the full quality and security approach.
+CI runs staticcheck, `go vet`, golangci-lint, race-enabled tests with coverage, and a Docker runtime smoke on every push and pull request; a dedicated security workflow runs `gosec`, `govulncheck`, gitleaks, and Trivy scans, with CodeQL, native fuzzing, and mutation testing in their own lanes. See [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
 
-## Releases
+## Releases & license
 
-- Latest tagged release: `v0.2.0`.
-- Notable changes are tracked in [CHANGELOG.md](CHANGELOG.md); release notes are published via GitHub Releases.
+This README tracks the `main` branch. Tagged versions, release notes, and signed artifacts are on the [Releases](https://github.com/ovumcy/ovumcy-sync-community/releases) page; notable changes are in [CHANGELOG.md](CHANGELOG.md).
 
-## License
-
-Ovumcy Sync Community is source-available under the **PolyForm Noncommercial
-License 1.0.0**. You may view, self-host, use, and modify it for any
-noncommercial purpose, and share it noncommercially. Commercial use is not
-granted; contact Ovumcy for a commercial license.
-See [LICENSE](LICENSE).
-
-Third-party Go module dependencies compiled into the binary and container image are listed
-with their licenses in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-If you found a security issue, see [SECURITY.md](SECURITY.md).
+Source-available under the **PolyForm Noncommercial License 1.0.0** — view, self-host, use, and modify for any noncommercial purpose, and share noncommercially. Commercial use is not granted; contact Ovumcy for a commercial license. See [LICENSE](LICENSE). Third-party dependency licenses are listed in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
