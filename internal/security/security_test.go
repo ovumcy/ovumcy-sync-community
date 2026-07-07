@@ -122,7 +122,7 @@ func TestRateLimiterSweepsExpiredEntries(t *testing.T) {
 	// Seed one distinct key per Allow call, stopping one call short of the
 	// sweep interval so no sweep has fired yet.
 	seedKeys := rateLimiterSweepInterval - 1
-	for i := 0; i < seedKeys; i++ {
+	for i := range seedKeys {
 		if !limiter.Allow(fmt.Sprintf("seed:%d", i)) {
 			t.Fatalf("expected first touch of unique key seed:%d to pass", i)
 		}
@@ -171,9 +171,9 @@ func TestRateLimiterBoundsMapAcrossManyWindows(t *testing.T) {
 	// shifting offsets instead of aligning with window boundaries.
 	const keysPerWindow = rateLimiterSweepInterval + rateLimiterSweepInterval/2
 	maxSeen := 0
-	for w := 0; w < windows; w++ {
+	for w := range windows {
 		current = base.Add(time.Duration(w) * time.Minute)
-		for i := 0; i < keysPerWindow; i++ {
+		for i := range keysPerWindow {
 			// Keys unique per window so every prior window's keys are expired
 			// by the time the current window's sweeps run.
 			limiter.Allow(fmt.Sprintf("w%d:k%d", w, i))
