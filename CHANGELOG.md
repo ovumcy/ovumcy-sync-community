@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Extensive auth and security work has landed on `main` since `v0.2.0` and is not yet tagged.
+## [0.3.0] - 2026-07-07
+
+A major auth, security-hardening, and supply-chain release since `v0.2.0`: optional TOTP 2FA, account recovery and password management, authenticated account deletion, signed release artifacts, and a substantially hardened CI and quality bar.
 
 ### Added
 
@@ -15,6 +17,7 @@ Extensive auth and security work has landed on `main` since `v0.2.0` and is not 
 - **Account recovery and password management.** Password change, recovery codes, and recovery-code-based password reset across the auth surface.
 - **Authenticated account deletion.** `DELETE /account` erases every row the server holds for an account in a single transaction.
 - **`GET /auth/session`** exposing the current `totp_enabled` state.
+- **Machine-readable OpenAPI 3.1 spec** (`openapi.yaml`) covering the full HTTP surface, plus a zero-knowledge boundary diagram in the README.
 
 ### Changed
 
@@ -46,6 +49,7 @@ Extensive auth and security work has landed on `main` since `v0.2.0` and is not 
 - Added a `golangci-lint` v2.12.2 CI gate (`.golangci.yml`, parallel `golangci-lint` job) alongside the existing `staticcheck` and `go vet` jobs; fixed the mechanical findings it surfaced (unchecked deferred `Close` errors, redundant `http.HandlerFunc` conversions, three-clause counting loops rewritten to `range`).
 - Added a daily `fuzz-continuous` job to the `Fuzz` workflow that runs each native Go fuzz target for 10m with its generated corpus cached and restored between runs (`actions/cache`, keyed per target), so coverage accumulates instead of restarting from the seed corpus every time; the existing weekly 3m short pass is unchanged.
 - Added an `oss-fuzz/` scaffold (`project.yaml`, `Dockerfile`, `build.sh`) following the `google/oss-fuzz` Go project layout. This is preparation only — see [`oss-fuzz/ONBOARDING.md`](oss-fuzz/ONBOARDING.md); OSS-Fuzz does not run against this repository until a maintainer opens a separate PR against `google/oss-fuzz` and Google accepts it.
+- Moved workflow write permissions to the job level (OpenSSF Scorecard least-privilege), added `THIRD_PARTY_LICENSES.md`, and raised test coverage from ~63% to ~83% — `internal/db` error branches via fault injection (to 93%) and `internal/api` handler error paths (to 90%).
 
 ## [0.2.0] - 2026-03-23
 
@@ -64,6 +68,7 @@ Extensive auth and security work has landed on `main` since `v0.2.0` and is not 
 - Initial public release of `ovumcy-sync-community` — the encrypted sync community server: account registration and sign-in, hashed bearer sessions, device registration, a community capability document, wrapped recovery-key package storage, and encrypted blob upload/download.
 - Public repository community metadata, split CI checks for branch protection, and an explicit browser-sync CORS origin allowlist.
 
-[Unreleased]: https://github.com/ovumcy/ovumcy-sync-community/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/ovumcy/ovumcy-sync-community/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/ovumcy/ovumcy-sync-community/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ovumcy/ovumcy-sync-community/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ovumcy/ovumcy-sync-community/releases/tag/v0.1.0
