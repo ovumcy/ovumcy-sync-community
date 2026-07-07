@@ -127,6 +127,7 @@ Runtime endpoints:
 - `POST /auth/totp/verify` (authenticated) confirm TOTP enrollment
 - `POST /auth/totp/disable` (authenticated) turn off TOTP 2FA
 - `POST /auth/totp/challenge` complete the TOTP second factor after login
+- `GET /auth/session` (authenticated) return the current session's `account_id`, `login`, and `totp_enabled`
 - `DELETE /auth/session`
 - `DELETE /account` (authenticated) permanently erase the account and every row it owns: sessions, devices, the encrypted sync blob, the wrapped recovery-key package, pending password reset tokens, and pending TOTP challenges
 - `GET /sync/capabilities`
