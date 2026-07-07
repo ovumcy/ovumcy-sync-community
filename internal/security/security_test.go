@@ -210,7 +210,7 @@ func TestRateLimiterSweepPreservesInWindowEntries(t *testing.T) {
 	limiter.now = func() time.Time { return current }
 
 	// Drive the attacker key to its limit so it is throttled.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if !limiter.Allow("attacker") {
 			t.Fatalf("expected attacker touch %d to pass", i)
 		}
@@ -222,7 +222,7 @@ func TestRateLimiterSweepPreservesInWindowEntries(t *testing.T) {
 	// Flood unique keys within the SAME window for more than two full sweep
 	// intervals, guaranteeing at least two interval-triggered sweeps run while
 	// the attacker's window is still open. The sweeps must not evict it.
-	for i := 0; i < 2*rateLimiterSweepInterval+10; i++ {
+	for i := range 2*rateLimiterSweepInterval + 10 {
 		limiter.Allow(fmt.Sprintf("flood:%d", i))
 	}
 
