@@ -169,6 +169,7 @@ on the account's next successful login.
 | A challenge burns after five wrong codes; a correct code does not reopen it | `TestTOTPChallengeBurnsAfterFiveWrongCodes` in [internal/api/auth_totp_test.go](internal/api/auth_totp_test.go) |
 | An invalid challenge id returns a generic error | `TestTOTPChallengeWithInvalidIDReturnsGenericError` in [internal/api/auth_totp_test.go](internal/api/auth_totp_test.go) |
 | Re-enrollment while TOTP is enabled returns a conflict | `TestTOTPEnrollRejectsWhenAlreadyEnabled` in [internal/api/auth_totp_test.go](internal/api/auth_totp_test.go) |
+| A consumed TOTP step is rejected on replay (atomic `totp_last_used_step` CAS): the step claimed at enrollment survives the enable flip, so the same enrollment code cannot re-verify on the login challenge or disable; a fresh enrollment resets the step so a new secret's first code still verifies | `TestCompleteEnrollmentStepSurvivesEnableSoLoginChallengeCannotReplay`, `TestCompleteEnrollmentStepSurvivesEnableSoDisableCannotReplay`, `TestFreshStartEnrollmentResetsStaleStepClaim`, `TestLoginChallengeSucceedsOnAFreshStep` in [internal/services/totp_service_test.go](internal/services/totp_service_test.go) |
 | Secrets are 160-bit; base32 round-trips; code generation matches RFC 6238 vectors; only current and adjacent steps verify; empty codes are rejected; the provisioning URI carries secret and issuer | `TestNewTOTPSecretIs160Bits`, `TestEncodeDecodeBase32Roundtrip`, `TestGenerateTOTPCodeIsRFC6238TestVector`, `TestVerifyTOTPCodeAcceptsCurrentAndAdjacentSteps`, `TestVerifyTOTPCodeRejectsFarFutureAndPastSteps`, `TestVerifyTOTPCodeRejectsEmpty`, `TestBuildTOTPProvisioningURIIncludesSecretAndIssuer` in [internal/security/totp_test.go](internal/security/totp_test.go) |
 | Generate/verify, skew window, and base32 round-trip hold over generated inputs | `TestTOTPGenerateVerifyProperty`, `TestTOTPSkewWindowProperty`, `TestTOTPBase32RoundTripProperty` in [internal/security/security_property_test.go](internal/security/security_property_test.go) |
 | Secret decoding never panics; accepted secrets survive canonical re-encoding | `FuzzDecodeTOTPSecretBase32` in [internal/security/security_fuzz_test.go](internal/security/security_fuzz_test.go) |
@@ -238,9 +239,6 @@ on the account's next successful login.
 Test-enforceable claims that currently rely on implementation review; each is
 a planned dedicated regression:
 
-- A consumed TOTP time step is rejected on replay (atomic `totp_last_used_step`
-  CAS) — the end-to-end flow waits for a fresh step instead of asserting the
-  rejection directly.
 - The exact production TOTP AAD string binds ciphertexts to the account row.
 - Raw session tokens never reach the `sessions` table (hash-only persistence).
 - Recovery codes are persisted only as bcrypt hashes.
