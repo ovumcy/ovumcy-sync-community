@@ -32,6 +32,7 @@ Extensive auth and security work has landed on `main` since `v0.2.0` and is not 
 
 ### Internal
 
+- Added a `gitleaks` secret-scanning CI gate (full git history, `.gitleaks.toml` allowlist for test fixtures) on push, pull request, and a weekly schedule.
 - Healthcheck self-probe plus container `HEALTHCHECK`; `govulncheck`, native fuzz, and advisory mutation (gremlins) CI lanes; fuzz and property tests for crypto, TOTP, and login/recovery helpers.
 - Pinned the Go toolchain to 1.25.11 and bumped `golang.org/x/crypto` to v0.53.0 for advisories; made the Codecov upload non-blocking on pull requests.
 - Added the `SECURITY.md` Test Enforcement Matrix; documented the optional TOTP second factor and the mutation/fuzz/property test stack.

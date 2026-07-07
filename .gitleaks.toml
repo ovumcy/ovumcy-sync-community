@@ -1,0 +1,27 @@
+# Gitleaks configuration for ovumcy-sync-community.
+#
+# Extends gitleaks' built-in default rule set (does not replace it). A
+# full-history scan (--log-opts=--all) found zero real secrets, so this
+# config is a forward-looking gate, not a cleanup — the allowlist below is
+# scoped only to file classes that are legitimately allowed to carry
+# fixture/placeholder values, never production or non-test source.
+[extend]
+useDefault = true
+
+[allowlist]
+  # Broad, path-based allowlisting scoped to file classes that legitimately
+  # carry fixture/placeholder secrets in this repo: Go test files and
+  # .env.example documentation. Neither is production source or reachable at
+  # runtime.
+  paths = [
+    # All Go test files repo-wide: unit/integration/security/property/fuzz
+    # tests use syntactically-valid-but-fake tokens, hashes, hex keys, and
+    # TOTP secrets to exercise auth, session, TOTP, and field-encryption logic
+    # without touching a real secret.
+    '''_test\.go$''',
+
+    # .env.example documentation: METRICS_BEARER_TOKEN=, MANAGED_BRIDGE_TOKEN=,
+    # and the commented FIELD_ENCRYPTION_KEY= line ship empty (or commented
+    # out), never a real value.
+    '''(^|/)\.env\.example$''',
+  ]
