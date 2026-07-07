@@ -132,7 +132,9 @@ Runtime endpoints (machine-readable spec: [openapi.yaml](openapi.yaml)):
 - `DELETE /auth/session`
 - `DELETE /account` (authenticated) permanently erase the account and every row it owns: sessions, devices, the encrypted sync blob, the wrapped recovery-key package, pending password reset tokens, and pending TOTP challenges
 - `GET /sync/capabilities`
-- `POST /sync/devices`
+- `POST /sync/devices` (authenticated) attach a device to the account
+- `GET /sync/devices` (authenticated) list the account's attached devices
+- `DELETE /sync/devices/{device_id}` (authenticated) remove one attached device, freeing a slot
 - `GET /sync/recovery-key`
 - `PUT /sync/recovery-key`
 - `GET /sync/blob`

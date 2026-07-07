@@ -198,6 +198,7 @@ on the account's next successful login.
 | Oversized blobs are rejected by the configured limit | `TestSyncServiceRejectsOversizedBlob` in [internal/services/sync_service_test.go](internal/services/sync_service_test.go); `TestServerRejectsOversizedBlobByConfiguredLimit` in [internal/api/server_test.go](internal/api/server_test.go) |
 | Invalid recovery-key packages (unsupported algorithm, malformed fields, wrong word count) are rejected | `TestSyncServiceRejectsInvalidRecoveryKeyPackage` in [internal/services/sync_service_test.go](internal/services/sync_service_test.go) |
 | The device limit is enforced | `TestSyncServiceEnforcesDeviceLimit` in [internal/services/sync_service_test.go](internal/services/sync_service_test.go) |
+| Device list and removal are account-scoped — one account can neither see nor remove another account's devices | `TestListDevicesIsAccountScoped`, `TestRemoveDeviceIsAccountScopedNoIDOR` in [internal/services/sync_service_device_test.go](internal/services/sync_service_device_test.go) |
 
 ### Managed Bridge
 
