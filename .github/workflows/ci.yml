@@ -95,10 +95,12 @@ jobs:
 
       - name: Go test with coverage
         # -coverpkg credits a line when ANY test exercises it (including
-        # cross-package integration tests), not only its own package's unit
-        # tests. The patch-coverage gate consumes this profile. No -race here:
-        # the race detector runs separately in the `race` job below so a data
-        # race and a coverage regression fail independently and legibly.
+        # cross-package integration tests, e.g. internal/db methods driven
+        # through internal/services and internal/api), not only its own
+        # package's unit tests. The patch-coverage gate consumes this profile.
+        # No -race here: the race detector runs separately in the `race` job
+        # below so a data race and a coverage regression fail independently
+        # and legibly.
         run: go test ./cmd/... ./internal/... -coverprofile=coverage.out -covermode=atomic -coverpkg=./cmd/...,./internal/...
 
       - name: Upload coverage artifact
