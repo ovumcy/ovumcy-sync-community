@@ -22,7 +22,9 @@ updates:
         patterns: ["*"]
 
   - package-ecosystem: "docker"
-    directory: "/"
+    directories:
+      - "/"
+      - "/oss-fuzz"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
