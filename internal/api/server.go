@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
@@ -153,7 +154,43 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)
 		return
 	}
-	s.mux.ServeHTTP(writer, request)
+	serveWithPanicRecovery(writer, request, s.mux)
+}
+
+// recoveryWriter tracks whether a response has begun so the panic recovery only
+// writes a 500 when the handler has not already started writing.
+type recoveryWriter struct {
+	http.ResponseWriter
+	wrote bool
+}
+
+func (w *recoveryWriter) WriteHeader(code int) {
+	w.wrote = true
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *recoveryWriter) Write(b []byte) (int, error) {
+	w.wrote = true
+	return w.ResponseWriter.Write(b)
+}
+
+// serveWithPanicRecovery runs next and converts a handler panic into a clean
+// 500 instead of net/http's default (which drops the connection and logs an
+// unbounded stack trace to stderr). The recovery log line is deliberately
+// secret-free — method and path only, never the body, headers, or query — so
+// it stays inside the zero-knowledge no-secret-in-logs contract.
+func serveWithPanicRecovery(writer http.ResponseWriter, request *http.Request, next http.Handler) {
+	rw := &recoveryWriter{ResponseWriter: writer}
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Printf("recovered panic serving %s %s: %v", request.Method, request.URL.Path, rec)
+			if !rw.wrote {
+				writeError(rw, http.StatusInternalServerError, "internal_error")
+			}
+		}
+	}()
+
+	next.ServeHTTP(rw, request)
 }
 
 func (s *Server) handleHealth(writer http.ResponseWriter, _ *http.Request) {
