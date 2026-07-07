@@ -66,6 +66,7 @@ with a brittle test. We do not chase a fake 100%.
 | Tool | Purpose |
 |------|---------|
 | `staticcheck` + `go vet` | Static analysis |
+| [`golangci-lint`](https://golangci-lint.run) | Aggregated Go linting (`errcheck`, `govet`, `ineffassign`, `staticcheck`, `unused`, plus `copyloopvar`/`intrange`/`misspell`/`unconvert`); config in `.golangci.yml` |
 | [`gosec`](https://github.com/securego/gosec) | Go security (SAST), results in the GitHub Security tab |
 | [CodeQL](https://codeql.github.com) | Semantic code scanning |
 | [Trivy](https://trivy.dev) | Dependency and container image scanning |
