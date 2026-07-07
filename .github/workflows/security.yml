@@ -42,7 +42,15 @@ jobs:
         run: mkdir -p .tmp/security
 
       - name: Run gosec
-        run: ./.bin/gosec -fmt sarif -out .tmp/security/gosec.sarif ./...
+        # Scoped to the module's product-code trees, not ./..., matching
+        # ovumcy-web: scripts/ is CI tooling (see codecov.yml's `ignore:` and
+        # scripts/patchcov's own isGatedFile), not part of the server's attack
+        # surface, and its path/subprocess patterns (reading a coverage file
+        # named by an env var, diffing against a caller-supplied git ref) are
+        # inherent to a local dev-and-CI tool, not something to review at the
+        # same bar as the network-facing auth/blob/session code in cmd and
+        # internal.
+        run: ./.bin/gosec -fmt sarif -out .tmp/security/gosec.sarif ./cmd/... ./internal/...
 
       - name: Upload gosec SARIF
         if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
