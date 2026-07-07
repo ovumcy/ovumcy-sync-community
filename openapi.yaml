@@ -1,0 +1,1468 @@
+openapi: 3.1.0
+info:
+  title: ovumcy-sync-community
+  version: "0.3.0-dev"
+  description: |
+    Self-hosted, zero-knowledge encrypted-sync backend for the Ovumcy app.
+
+    The server stores only account/session/device metadata and ciphertext blobs.
+    It never receives cycle dates, symptoms, notes, recovery phrases, client
+    master keys, or decrypted sync payloads — sync blobs and recovery-key
+    packages are accepted and returned as opaque base64/hex payloads plus
+    metadata only.
+
+    This document is generated from the actual Go handlers and request/response
+    structs in `internal/api/server.go` (every `s.handleRoute(...)` registration)
+    and the service-layer result types they return. It intentionally omits
+    ciphertext content shapes beyond "opaque base64/hex string" to respect the
+    zero-knowledge contract.
+  license:
+    name: PolyForm Noncommercial 1.0.0
+    url: https://polyformproject.org/licenses/noncommercial/1.0.0/
+externalDocs:
+  description: Project README
+  url: https://github.com/ovumcy/ovumcy-sync-community#readme
+
+servers:
+  - url: http://localhost:8080
+    description: Local / self-hosted default bind address
+
+security: []
+
+tags:
+  - name: health
+    description: Liveness, readiness, and operator metrics.
+  - name: auth
+    description: Registration, login, password/recovery-code management, TOTP 2FA, and session lifecycle.
+  - name: sync
+    description: Device registry, encrypted blob storage, and the wrapped recovery-key package. Authenticated, account- and device-scoped.
+  - name: managed-bridge
+    description: Machine-to-machine bridge for the separate managed-cloud service. Disabled unless MANAGED_BRIDGE_TOKEN is configured.
+
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      operationId: getHealthz
+      summary: Liveness probe
+      description: Always returns 200 while the process is up. No auth, no dependency checks.
+      security: []
+      responses:
+        "200":
+          description: Process is alive.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+
+  /readyz:
+    get:
+      tags: [health]
+      operationId: getReadyz
+      summary: Readiness probe
+      description: Runs the configured readiness check (e.g. a DB ping) if one is wired in; otherwise behaves like /healthz.
+      security: []
+      responses:
+        "200":
+          description: Server is ready to accept traffic.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+        "503":
+          description: Readiness check failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                notReady:
+                  value: { error: not_ready }
+
+  /metrics:
+    get:
+      tags: [health]
+      operationId: getMetrics
+      summary: Prometheus metrics
+      description: |
+        Only registered when `METRICS_ENABLED=true`; otherwise every request to
+        this path returns 404. When `METRICS_BEARER_TOKEN` is set, a matching
+        `Authorization: Bearer <token>` header is required.
+      security:
+        - metricsBearerAuth: []
+        - {}
+      responses:
+        "200":
+          description: Prometheus text exposition format.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "401":
+          description: Metrics enabled with a bearer token configured, and the request's token did not match.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  value: { error: unauthorized }
+        "404":
+          description: Metrics are not enabled on this server.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                notFound:
+                  value: { error: not_found }
+
+  /auth/register:
+    post:
+      tags: [auth]
+      operationId: registerAccount
+      summary: Register a new account
+      description: |
+        Creates an account and an initial session in one call. The plaintext
+        account-level recovery code is returned only in this response — it is
+        never retrievable again, only rotated.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CredentialsRequest"
+      responses:
+        "201":
+          description: Account created; session issued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResult"
+        "400":
+          description: Invalid login/password, or the login is already taken.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidInput:
+                  value: { error: invalid_registration_input }
+                registrationFailed:
+                  value: { error: registration_failed }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /auth/login:
+    post:
+      tags: [auth]
+      operationId: login
+      summary: Log in with login + password
+      description: |
+        On success for an account without TOTP enabled, returns a session
+        token immediately. On success for a TOTP-enabled account, returns a
+        `totp_challenge` instead — the two response shapes are mutually
+        exclusive; a session token is never returned alongside a challenge.
+        The caller must then complete `POST /auth/totp/challenge`.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CredentialsRequest"
+      responses:
+        "200":
+          description: Login succeeded — either a session, or a pending TOTP challenge.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResult"
+        "401":
+          description: Unknown login or wrong password.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidCredentials:
+                  value: { error: invalid_credentials }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          description: Account has TOTP enabled but the server has no FIELD_ENCRYPTION_KEY configured; fails closed instead of a password-only downgrade.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                totpNotConfigured:
+                  value: { error: totp_not_configured }
+
+  /auth/change-password:
+    post:
+      tags: [auth]
+      operationId: changePassword
+      summary: Change the account password
+      description: |
+        Requires the current password. On success, every other session for the
+        account is revoked (the caller's own session token stays valid) and
+        any pending password-reset tokens are deleted.
+      security:
+        - sessionBearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangePasswordRequest"
+      responses:
+        "200":
+          description: Password changed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+              examples:
+                changed:
+                  value: { status: password_changed }
+        "400":
+          description: New password fails the strength check, or equals the current password.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                mustDiffer:
+                  value: { error: new_password_must_differ }
+                weak:
+                  value: { error: weak_new_password }
+        "401":
+          description: Missing/invalid session, or wrong current password.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidCurrentPassword:
+                  value: { error: invalid_current_password }
+                unauthorized:
+                  value: { error: unauthorized }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /auth/forgot-password:
+    post:
+      tags: [auth]
+      operationId: forgotPassword
+      summary: Start a recovery-code-based password reset
+      description: |
+        Verifies the account-level recovery code and issues a short-lived
+        (30 minute) opaque reset token. Errors are deliberately generic across
+        unknown login, wrong recovery code, and pre-recovery-code accounts to
+        keep the surface enumeration-safe.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ForgotPasswordRequest"
+      responses:
+        "200":
+          description: Reset token issued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ForgotPasswordResult"
+        "401":
+          description: Unknown login, or a recovery code that does not match.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidRecoveryCredentials:
+                  value: { error: invalid_recovery_credentials }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /auth/reset-password:
+    post:
+      tags: [auth]
+      operationId: resetPassword
+      summary: Complete a password reset
+      description: |
+        Consumes the reset token from `POST /auth/forgot-password`. On
+        success: password and recovery code both rotate (the new recovery
+        code is returned in plaintext), TOTP is disabled and its pending
+        challenges are cleared, and every existing session for the account is
+        revoked.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResetPasswordRequest"
+      responses:
+        "200":
+          description: Password reset; recovery code rotated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PasswordResetResult"
+        "400":
+          description: New password fails the strength check.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                weak:
+                  value: { error: weak_new_password }
+        "401":
+          description: Reset token missing, unknown, expired, or already consumed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidResetToken:
+                  value: { error: invalid_reset_token }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /auth/recovery-code/regenerate:
+    post:
+      tags: [auth]
+      operationId: regenerateRecoveryCode
+      summary: Rotate the account recovery code
+      description: Requires the current password. Existing sessions and reset tokens are left untouched.
+      security:
+        - sessionBearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegenerateRecoveryCodeRequest"
+      responses:
+        "200":
+          description: New plaintext recovery code.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecoveryCodeResponse"
+        "401":
+          description: Missing/invalid session, or wrong current password.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidCurrentPassword:
+                  value: { error: invalid_current_password }
+                unauthorized:
+                  value: { error: unauthorized }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /auth/totp/enroll:
+    post:
+      tags: [auth]
+      operationId: totpEnroll
+      summary: Begin TOTP 2FA enrollment
+      description: |
+        Requires the current password. Generates a fresh secret and stores it
+        pending (`totp_enabled=false`) until confirmed by
+        `POST /auth/totp/verify`. Fails with 503 if the server has no
+        `FIELD_ENCRYPTION_KEY` configured, or if TOTP is already enabled.
+      security:
+        - sessionBearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TOTPEnrollRequest"
+      responses:
+        "200":
+          description: Pending secret issued for authenticator-app enrollment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TOTPEnrollmentStart"
+        "401":
+          description: Missing/invalid session, or wrong current password.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidCurrentPassword:
+                  value: { error: invalid_current_password }
+                unauthorized:
+                  value: { error: unauthorized }
+        "409":
+          description: TOTP is already enabled on this account.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                alreadyEnabled:
+                  value: { error: totp_already_enabled }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          description: Internal error, including a field-encryption failure while sealing the new secret.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                internalError:
+                  value: { error: internal_error }
+                secretFailed:
+                  value: { error: totp_secret_failed }
+        "503":
+          description: Server has no FIELD_ENCRYPTION_KEY configured; TOTP is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                notConfigured:
+                  value: { error: totp_not_configured }
+
+  /auth/totp/verify:
+    post:
+      tags: [auth]
+      operationId: totpVerifyEnrollment
+      summary: Confirm TOTP enrollment
+      description: |
+        Verifies a current code from the authenticator app against the
+        pending secret from `POST /auth/totp/enroll`. On success, TOTP flips
+        to enabled and every other session for the account is revoked (the
+        caller's own session stays valid).
+      security:
+        - sessionBearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TOTPVerifyRequest"
+      responses:
+        "200":
+          description: TOTP enabled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+              examples:
+                enabled:
+                  value: { status: totp_enabled }
+        "401":
+          description: Missing/invalid session, wrong/expired code, or a replayed step.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidCode:
+                  value: { error: totp_invalid_code }
+                replayed:
+                  value: { error: totp_replayed }
+                unauthorized:
+                  value: { error: unauthorized }
+        "409":
+          description: TOTP is already enabled on this account.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                alreadyEnabled:
+                  value: { error: totp_already_enabled }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          description: Internal error, including a field-decryption failure while opening the pending secret.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                internalError:
+                  value: { error: internal_error }
+                secretFailed:
+                  value: { error: totp_secret_failed }
+        "503":
+          description: Server has no FIELD_ENCRYPTION_KEY configured, or there is no pending secret to confirm.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                notConfigured:
+                  value: { error: totp_not_configured }
+
+  /auth/totp/disable:
+    post:
+      tags: [auth]
+      operationId: totpDisable
+      summary: Turn off TOTP 2FA
+      description: |
+        Requires both the current password AND a current TOTP code, so a
+        temporarily-borrowed authenticator alone cannot remove 2FA. On
+        success, the secret is cleared, and every session and pending
+        challenge for the account is revoked/deleted.
+      security:
+        - sessionBearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TOTPDisableRequest"
+      responses:
+        "200":
+          description: TOTP disabled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+              examples:
+                disabled:
+                  value: { status: totp_disabled }
+        "401":
+          description: Missing/invalid session, wrong current password, wrong/expired code, or a replayed step.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidCurrentPassword:
+                  value: { error: invalid_current_password }
+                invalidCode:
+                  value: { error: totp_invalid_code }
+                replayed:
+                  value: { error: totp_replayed }
+                unauthorized:
+                  value: { error: unauthorized }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          description: Internal error, including a field-decryption failure while opening the stored secret.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                internalError:
+                  value: { error: internal_error }
+                secretFailed:
+                  value: { error: totp_secret_failed }
+        "503":
+          description: Server has no FIELD_ENCRYPTION_KEY configured, or TOTP is not enabled on this account.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                notConfigured:
+                  value: { error: totp_not_configured }
+
+  /auth/totp/challenge:
+    post:
+      tags: [auth]
+      operationId: totpChallenge
+      summary: Complete the TOTP second factor after login
+      description: |
+        Consumes the `totp_challenge.challenge_id` returned by
+        `POST /auth/login` plus a current authenticator code, and issues a
+        session on success. Each challenge allows a bounded number of failed
+        code attempts before it is burnt and the caller must restart from
+        password login.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TOTPChallengeRequest"
+      responses:
+        "200":
+          description: Session issued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResult"
+        "401":
+          description: Unknown/expired/burnt challenge, or a wrong/replayed code.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                challengeInvalid:
+                  value: { error: totp_challenge_invalid }
+                invalidCode:
+                  value: { error: totp_invalid_code }
+                replayed:
+                  value: { error: totp_replayed }
+                unauthorized:
+                  value: { error: unauthorized }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          description: Internal error, including a field-decryption failure while opening the stored secret.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                internalError:
+                  value: { error: internal_error }
+                secretFailed:
+                  value: { error: totp_secret_failed }
+        "503":
+          description: Server has no FIELD_ENCRYPTION_KEY configured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                notConfigured:
+                  value: { error: totp_not_configured }
+
+  /auth/session:
+    get:
+      tags: [auth]
+      operationId: getCurrentSession
+      summary: Get the current session's account view
+      description: Minimal account-scoped state for the authenticated caller, including live TOTP status.
+      security:
+        - sessionBearerAuth: []
+      responses:
+        "200":
+          description: Current account view.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountSessionView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    delete:
+      tags: [auth]
+      operationId: logout
+      summary: Revoke the current session
+      description: Revokes the session identified by the bearer token on this request. No request body.
+      security:
+        - sessionBearerAuth: []
+      responses:
+        "200":
+          description: Session revoked.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+              examples:
+                revoked:
+                  value: { status: revoked }
+        "401":
+          description: Missing bearer token, or it does not match any session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  value: { error: unauthorized }
+
+  /account:
+    delete:
+      tags: [auth]
+      operationId: deleteAccount
+      summary: Permanently erase the account
+      description: |
+        Erases every row this server holds for the caller's own account in a
+        single transaction: the account row, sessions, devices, the encrypted
+        sync blob, the wrapped recovery-key package, pending password-reset
+        tokens, and pending TOTP challenges. The account is derived only from
+        the authenticated session — there is no field to name a different
+        account. Idempotent: a retry after a successful delete still reports
+        success.
+      security:
+        - sessionBearerAuth: []
+      responses:
+        "200":
+          description: Account and all owned data erased (or already gone).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+              examples:
+                deleted:
+                  value: { status: account_deleted }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /managed/session:
+    post:
+      tags: [managed-bridge]
+      operationId: createManagedSession
+      summary: Provision a managed-mode sync session
+      description: |
+        Machine-to-machine only: intended for a separate trusted managed-auth
+        service, never a direct client. Requires the
+        `MANAGED_BRIDGE_TOKEN` bearer credential; the route itself is disabled
+        (503) whenever that token is not configured on this server. Provisions
+        or reuses a `mode=managed` account for the given opaque
+        `account_id` and returns a session for it, without any login/password
+        exchange.
+      security:
+        - managedBridgeAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ManagedSessionRequest"
+      responses:
+        "200":
+          description: Managed session issued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResult"
+        "400":
+          description: account_id fails the managed-account id pattern, or names an existing non-managed account.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidManagedAccount:
+                  value: { error: invalid_managed_account }
+        "401":
+          description: Missing/invalid MANAGED_BRIDGE_TOKEN bearer credential.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  value: { error: unauthorized }
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          description: MANAGED_BRIDGE_TOKEN is not configured on this server; the bridge is disabled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                bridgeDisabled:
+                  value: { error: managed_bridge_disabled }
+
+  /sync/capabilities:
+    get:
+      tags: [sync]
+      operationId: getCapabilities
+      summary: Get this account's sync capability document
+      description: Reflects self-hosted vs. managed mode, premium/recovery/push/portal/insight support flags, and the configured device and blob-size ceilings.
+      security:
+        - sessionBearerAuth: []
+      responses:
+        "200":
+          description: Capability document.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CapabilityDocument"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /sync/devices:
+    post:
+      tags: [sync]
+      operationId: attachDevice
+      summary: Register or refresh a device for this account
+      description: Upserts a device row scoped to the caller's account. Rejected once the account is at its configured device ceiling and the device is not already known.
+      security:
+        - sessionBearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeviceRequest"
+      responses:
+        "200":
+          description: Device attached/refreshed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Device"
+        "400":
+          description: device_id shorter than 8 characters, or device_label shorter than 2 characters (after trimming).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidDevice:
+                  value: { error: invalid_device }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: Account is already at its configured device ceiling and this device is not already registered.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                tooManyDevices:
+                  value: { error: too_many_devices }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /sync/recovery-key:
+    get:
+      tags: [sync]
+      operationId: getRecoveryKeyPackage
+      summary: Get the wrapped recovery-key package
+      description: |
+        Returns the account's client-wrapped master-key package as opaque
+        hex fields plus metadata. The server never sees the recovery phrase
+        or the unwrapped key.
+      security:
+        - sessionBearerAuth: []
+      responses:
+        "200":
+          description: Recovery-key package.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecoveryKeyPackageResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: No recovery-key package has been stored for this account yet.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                notFound:
+                  value: { error: recovery_package_not_found }
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      tags: [sync]
+      operationId: putRecoveryKeyPackage
+      summary: Store/replace the wrapped recovery-key package
+      description: |
+        Upserts the account's client-wrapped master-key package. All fields
+        are opaque to the server beyond format validation (fixed algorithm/KDF
+        identifiers, fixed word count, hex length checks) — the server never
+        derives or sees the unwrapped key.
+      security:
+        - sessionBearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecoveryKeyPackageRequest"
+      responses:
+        "200":
+          description: Recovery-key package stored.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecoveryKeyPackageResponse"
+        "400":
+          description: Package fails format validation (algorithm, KDF, mnemonic word count, or hex field length/format).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidPackage:
+                  value: { error: invalid_recovery_package }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /sync/blob:
+    get:
+      tags: [sync]
+      operationId: getBlob
+      summary: Get the account's encrypted sync blob
+      description: |
+        Returns the single ciphertext blob for this account as opaque
+        base64, plus schema/generation/checksum metadata. The server never
+        decrypts or inspects the contents.
+      security:
+        - sessionBearerAuth: []
+      responses:
+        "200":
+          description: Encrypted blob.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BlobResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: No blob has been stored for this account yet.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                notFound:
+                  value: { error: blob_not_found }
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      tags: [sync]
+      operationId: putBlob
+      summary: Store the account's encrypted sync blob
+      description: |
+        Replaces the account's single ciphertext blob under an
+        optimistic-concurrency generation counter. `ciphertext_base64` is
+        opaque to the server beyond a SHA-256 checksum match and a
+        configured max-size ceiling; the server never decrypts it.
+        `generation` must be strictly greater than the currently stored
+        generation (a fresh account may write any positive generation).
+      security:
+        - sessionBearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BlobPutRequest"
+      responses:
+        "200":
+          description: Blob stored.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BlobResponse"
+        "400":
+          description: Non-positive schema_version/generation, empty ciphertext, oversized ciphertext, malformed checksum_sha256, a checksum that does not match the ciphertext, or ciphertext_base64 that is not valid base64.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidBlob:
+                  value: { error: invalid_blob }
+                invalidCiphertext:
+                  value: { error: invalid_ciphertext }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: generation is not strictly greater than the currently stored generation (a concurrent writer already advanced it).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                staleGeneration:
+                  value: { error: stale_generation }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+components:
+  securitySchemes:
+    sessionBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque session token
+      description: |
+        Opaque session token issued by /auth/register, /auth/login,
+        /auth/totp/challenge, or /managed/session, sent as
+        `Authorization: Bearer <session_token>`. Validated by
+        AuthService.Authenticate against the hash stored for the session; an
+        expired or unknown token returns 401 `unauthorized`.
+    managedBridgeAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: MANAGED_BRIDGE_TOKEN
+      description: |
+        Static bridge credential configured via the MANAGED_BRIDGE_TOKEN
+        environment variable, sent as `Authorization: Bearer <token>`.
+        Reserved for the separate trusted managed-auth service; the route is
+        503 `managed_bridge_disabled` whenever this variable is unset.
+    metricsBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: METRICS_BEARER_TOKEN
+      description: |
+        Optional static credential configured via METRICS_BEARER_TOKEN. Only
+        enforced when that variable is set; otherwise GET /metrics is
+        reachable by anyone once METRICS_ENABLED=true.
+
+  responses:
+    Unauthorized:
+      description: Missing/invalid/expired bearer session token.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            unauthorized:
+              value: { error: unauthorized }
+    RateLimited:
+      description: "Per-route auth rate limit exceeded (per-IP, per-account, and/or per-login-identifier depending on the route). Response includes a `Retry-After: 60` header."
+      headers:
+        Retry-After:
+          description: Seconds until the caller may retry.
+          schema:
+            type: string
+            example: "60"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            rateLimited:
+              value: { error: rate_limited }
+    InternalError:
+      description: Unexpected server-side failure.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            internalError:
+              value: { error: internal_error }
+
+  schemas:
+    ErrorResponse:
+      type: object
+      description: Shared error envelope returned by every non-2xx JSON response in this API.
+      properties:
+        error:
+          type: string
+          description: Stable machine-readable error key (e.g. `invalid_credentials`, `rate_limited`). See each operation for the keys it can return.
+      required: [error]
+      additionalProperties: false
+
+    StatusResponse:
+      type: object
+      description: Generic single-field status acknowledgement used by several endpoints.
+      properties:
+        status:
+          type: string
+          description: 'Short status key, e.g. "ok", "password_changed", "totp_enabled", "totp_disabled", "revoked", "account_deleted".'
+      required: [status]
+      additionalProperties: false
+
+    CredentialsRequest:
+      type: object
+      description: Shared login+password request body for register and login.
+      properties:
+        login:
+          type: string
+          description: Normalized (lowercased, trimmed) to at least 3 characters server-side; the `managed:` prefix is reserved and rejected on registration.
+        password:
+          type: string
+          format: password
+          description: Minimum 12 characters (after trimming) on registration; hashed with bcrypt.
+      required: [login, password]
+      additionalProperties: false
+
+    ChangePasswordRequest:
+      type: object
+      properties:
+        current_password:
+          type: string
+          format: password
+        new_password:
+          type: string
+          format: password
+          description: Must differ from current_password and satisfy the same minimum-length policy as registration.
+      required: [current_password, new_password]
+      additionalProperties: false
+
+    ForgotPasswordRequest:
+      type: object
+      properties:
+        login:
+          type: string
+        recovery_code:
+          type: string
+          description: The plaintext account-level recovery code issued at registration or by the most recent rotation.
+      required: [login, recovery_code]
+      additionalProperties: false
+
+    ResetPasswordRequest:
+      type: object
+      properties:
+        reset_token:
+          type: string
+          description: Plaintext token returned by POST /auth/forgot-password. Single-use; expires after 30 minutes.
+        new_password:
+          type: string
+          format: password
+      required: [reset_token, new_password]
+      additionalProperties: false
+
+    RegenerateRecoveryCodeRequest:
+      type: object
+      properties:
+        current_password:
+          type: string
+          format: password
+      required: [current_password]
+      additionalProperties: false
+
+    RecoveryCodeResponse:
+      type: object
+      properties:
+        recovery_code:
+          type: string
+          description: New plaintext recovery code. Shown once; store it out of band.
+      required: [recovery_code]
+      additionalProperties: false
+
+    TOTPEnrollRequest:
+      type: object
+      properties:
+        current_password:
+          type: string
+          format: password
+      required: [current_password]
+      additionalProperties: false
+
+    TOTPEnrollmentStart:
+      type: object
+      properties:
+        secret_base32:
+          type: string
+          description: Base32-encoded TOTP secret for manual entry into an authenticator app.
+        provisioning_uri:
+          type: string
+          description: otpauth:// URI for QR-code enrollment, embedding the configured TOTP_ISSUER label.
+      required: [secret_base32, provisioning_uri]
+      additionalProperties: false
+
+    TOTPVerifyRequest:
+      type: object
+      properties:
+        code:
+          type: string
+          description: Current 6-digit code from the authenticator app for the pending secret.
+      required: [code]
+      additionalProperties: false
+
+    TOTPDisableRequest:
+      type: object
+      properties:
+        current_password:
+          type: string
+          format: password
+        code:
+          type: string
+          description: Current 6-digit code from the enrolled authenticator app.
+      required: [current_password, code]
+      additionalProperties: false
+
+    TOTPChallengeRequest:
+      type: object
+      properties:
+        challenge_id:
+          type: string
+          description: challenge_id from the totp_challenge object returned by POST /auth/login.
+        code:
+          type: string
+          description: Current 6-digit code from the enrolled authenticator app.
+      required: [challenge_id, code]
+      additionalProperties: false
+
+    AuthTOTPChallenge:
+      type: object
+      description: Present on AuthResult only when password verification succeeded but the account has TOTP enabled; session fields are absent in that case.
+      properties:
+        challenge_id:
+          type: string
+        challenge_expires_at:
+          type: string
+          format: date-time
+      required: [challenge_id, challenge_expires_at]
+      additionalProperties: false
+
+    AuthResult:
+      type: object
+      description: |
+        Returned by register, login, the TOTP login challenge, and the
+        managed-bridge session endpoint. Either the session_token/
+        session_expires_at pair is populated, or totp_challenge is populated
+        (login only) — never both.
+      properties:
+        account_id:
+          type: string
+        session_token:
+          type: string
+          description: "Opaque bearer token for Authorization: Bearer <token>. Empty when totp_challenge is present."
+        session_expires_at:
+          type: string
+          format: date-time
+        recovery_code:
+          type: string
+          description: Plaintext account-level recovery code. Populated only on the register response.
+        totp_challenge:
+          $ref: "#/components/schemas/AuthTOTPChallenge"
+      required: [account_id]
+      additionalProperties: false
+
+    ForgotPasswordResult:
+      type: object
+      properties:
+        reset_token:
+          type: string
+          description: Plaintext single-use token; carry it to /auth/reset-password.
+        reset_token_expires_at:
+          type: string
+          format: date-time
+      required: [reset_token, reset_token_expires_at]
+      additionalProperties: false
+
+    PasswordResetResult:
+      type: object
+      properties:
+        recovery_code:
+          type: string
+          description: Freshly rotated plaintext recovery code, shown once.
+      required: [recovery_code]
+      additionalProperties: false
+
+    AccountSessionView:
+      type: object
+      description: GET /auth/session response — minimal account-scoped state for the authenticated caller.
+      properties:
+        account_id:
+          type: string
+        login:
+          type: string
+        totp_enabled:
+          type: boolean
+      required: [account_id, login, totp_enabled]
+      additionalProperties: false
+
+    ManagedSessionRequest:
+      type: object
+      properties:
+        account_id:
+          type: string
+          description: Opaque managed-account identifier (lowercased/trimmed server-side); must match `^[a-z0-9][a-z0-9_-]{7,127}$`.
+      required: [account_id]
+      additionalProperties: false
+
+    CapabilityDocument:
+      type: object
+      properties:
+        mode:
+          type: string
+          description: '"self_hosted" or "managed".'
+        sync_enabled:
+          type: boolean
+        premium_active:
+          type: boolean
+        recovery_supported:
+          type: boolean
+        push_supported:
+          type: boolean
+        portal_supported:
+          type: boolean
+        advanced_cloud_insights:
+          type: boolean
+        max_devices:
+          type: integer
+        max_blob_bytes:
+          type: integer
+          format: int64
+      required:
+        - mode
+        - sync_enabled
+        - premium_active
+        - recovery_supported
+        - push_supported
+        - portal_supported
+        - advanced_cloud_insights
+        - max_devices
+        - max_blob_bytes
+      additionalProperties: false
+
+    DeviceRequest:
+      type: object
+      properties:
+        device_id:
+          type: string
+          description: Minimum 8 characters after trimming.
+        device_label:
+          type: string
+          description: Minimum 2 characters after trimming.
+      required: [device_id, device_label]
+      additionalProperties: false
+
+    Device:
+      type: object
+      properties:
+        device_id:
+          type: string
+        device_label:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_seen_at:
+          type: string
+          format: date-time
+      required: [device_id, device_label, created_at, last_seen_at]
+      additionalProperties: false
+
+    BlobPutRequest:
+      type: object
+      properties:
+        schema_version:
+          type: integer
+          description: Must be positive.
+        generation:
+          type: integer
+          format: int64
+          description: Must be positive and strictly greater than the currently stored generation.
+        checksum_sha256:
+          type: string
+          description: Lowercase hex SHA-256 of the decoded ciphertext; 64 hex characters.
+          pattern: "^[a-f0-9]{64}$"
+        ciphertext_base64:
+          type: string
+          format: byte
+          description: Opaque base64-encoded ciphertext. Server never decrypts or inspects contents; only size and checksum are validated.
+      required: [schema_version, generation, checksum_sha256, ciphertext_base64]
+      additionalProperties: false
+
+    BlobResponse:
+      type: object
+      properties:
+        schema_version:
+          type: integer
+        generation:
+          type: integer
+          format: int64
+        checksum_sha256:
+          type: string
+          pattern: "^[a-f0-9]{64}$"
+        ciphertext_base64:
+          type: string
+          format: byte
+          description: Opaque base64-encoded ciphertext.
+        ciphertext_size:
+          type: integer
+          description: Decoded ciphertext length in bytes.
+        updated_at:
+          type: string
+          format: date-time
+      required:
+        - schema_version
+        - generation
+        - checksum_sha256
+        - ciphertext_base64
+        - ciphertext_size
+        - updated_at
+      additionalProperties: false
+
+    RecoveryKeyPackageRequest:
+      type: object
+      description: Client-wrapped master-key package. Every field is opaque to the server beyond the format checks noted per field.
+      properties:
+        algorithm:
+          type: string
+          description: 'Must be exactly "xchacha20poly1305" (case-insensitive, normalized to lowercase).'
+        kdf:
+          type: string
+          description: 'Must be exactly "bip39_seed_hkdf_sha256" (case-insensitive, normalized to lowercase).'
+        mnemonic_word_count:
+          type: integer
+          description: Must be exactly 12.
+        wrap_nonce_hex:
+          type: string
+          description: Lowercase hex, exactly 48 characters.
+          pattern: "^[a-f0-9]{48}$"
+        wrapped_master_key_hex:
+          type: string
+          description: Lowercase hex, at least 64 characters, even length.
+          pattern: "^[a-f0-9]+$"
+        phrase_fingerprint_hex:
+          type: string
+          description: Lowercase hex, exactly 16 characters.
+          pattern: "^[a-f0-9]{16}$"
+      required:
+        - algorithm
+        - kdf
+        - mnemonic_word_count
+        - wrap_nonce_hex
+        - wrapped_master_key_hex
+        - phrase_fingerprint_hex
+      additionalProperties: false
+
+    RecoveryKeyPackageResponse:
+      type: object
+      properties:
+        algorithm:
+          type: string
+        kdf:
+          type: string
+        mnemonic_word_count:
+          type: integer
+        wrap_nonce_hex:
+          type: string
+        wrapped_master_key_hex:
+          type: string
+        phrase_fingerprint_hex:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+      required:
+        - algorithm
+        - kdf
+        - mnemonic_word_count
+        - wrap_nonce_hex
+        - wrapped_master_key_hex
+        - phrase_fingerprint_hex
+        - updated_at
+      additionalProperties: false
