@@ -5,33 +5,30 @@ import (
 	"time"
 )
 
-// rateLimiterSweepInterval and rateLimiterSweepThreshold bound the growth of
-// the in-memory entries map. Without a sweep, keys (attacker-influenced login
-// / client-IP strings) accumulate forever, so a sustained distributed attack
-// spraying unique keys would grow the map without limit even though each
-// individual key is throttled. The sweep deletes only EXPIRED entries — those
-// whose window has fully elapsed — which is behavior-preserving: Allow already
-// treats an expired entry identically to a missing one (it overwrites it with
-// a fresh count-1 window on the next touch), so removing an expired key and
-// letting the next touch recreate it yields the exact same throttling.
+// rateLimiterSweepInterval bounds the growth of the in-memory entries map.
+// Without a sweep, keys (attacker-influenced login / client-IP strings)
+// accumulate forever, so a sustained distributed attack spraying unique keys
+// would grow the map without limit even though each individual key is
+// throttled. Once every rateLimiterSweepInterval Allow calls, an amortized
+// sweep deletes only EXPIRED entries — those whose window has fully elapsed —
+// which is behavior-preserving: Allow already treats an expired entry
+// identically to a missing one (it overwrites it with a fresh count-1 window
+// on the next touch), so removing an expired key and letting the next touch
+// recreate it yields the exact same throttling.
 //
 // In-window entries are never evicted, by design: an attacker who can flood
 // unique keys must not be able to push their own throttled key out of the map
-// and reset its counter (that would defeat the limiter). Growth is therefore
-// bounded by the number of distinct keys seen within the current window (plus
-// up to one sweep interval of lag), not by the total number of keys ever seen.
+// and reset its counter (that would defeat the limiter).
 //
-// The constants are deliberately conservative. Under normal single-instance
-// self-hosted load the map holds only a handful of client IPs, sweeps almost
-// never fire, and the amortized O(n) pass is negligible. Under attack the
-// interval caps how many Allow calls pass between sweeps, and the size
-// threshold forces a sweep once the map has grown past the threshold even if
-// the interval has not yet elapsed, so a burst cannot outrun the interval
-// counter.
-const (
-	rateLimiterSweepInterval  = 1024
-	rateLimiterSweepThreshold = 1024
-)
+// Each Allow call inserts at most one new key, so the map grows by at most
+// rateLimiterSweepInterval keys between sweeps. Its size is therefore bounded
+// by the distinct in-window keys plus rateLimiterSweepInterval — never by the
+// total keys ever seen. After a burst goes idle, already-expired keys linger
+// until rateLimiterSweepInterval further Allow calls accumulate; that linger
+// is capped by the same bound and the map never grows while idle. Under
+// normal single-instance self-hosted load the map holds a handful of client
+// IPs and the amortized O(n) pass is negligible.
+const rateLimiterSweepInterval = 1024
 
 type RateLimiter struct {
 	mu            sync.Mutex
@@ -86,12 +83,16 @@ func (l *RateLimiter) allowLocked(key string, now time.Time) bool {
 }
 
 // maybeSweepLocked runs an amortized, opportunistic sweep of expired entries.
-// It is called from Allow with l.mu already held. A sweep fires when at least
-// rateLimiterSweepInterval Allow calls have happened since the last sweep, or
-// when the map has grown past rateLimiterSweepThreshold live-or-stale keys.
+// It is called from Allow with l.mu already held and fires once every
+// rateLimiterSweepInterval Allow calls. The trigger is deliberately
+// interval-only: a size-based trigger would degrade into a full-map scan on
+// every single Allow call once the map held more than the threshold of
+// in-window entries (each such sweep deletes nothing, resets the counter,
+// and immediately re-arms), concentrating O(n) mutex work on exactly the
+// flood the limiter exists to absorb.
 func (l *RateLimiter) maybeSweepLocked(now time.Time) {
 	l.opsSinceSweep++
-	if l.opsSinceSweep < rateLimiterSweepInterval && len(l.entries) <= rateLimiterSweepThreshold {
+	if l.opsSinceSweep < rateLimiterSweepInterval {
 		return
 	}
 	l.opsSinceSweep = 0

@@ -119,25 +119,27 @@ func TestRateLimiterSweepsExpiredEntries(t *testing.T) {
 	current := base
 	limiter.now = func() time.Time { return current }
 
-	// Seed one distinct key per Allow call. Once the map grows past the size
-	// threshold the sweep fires on that same call; because the clock has been
-	// advanced two windows past the seeds, every seeded entry is expired and
-	// must be deleted, leaving only the entry created on the sweeping call.
-	seedKeys := rateLimiterSweepThreshold + 1
+	// Seed one distinct key per Allow call, stopping one call short of the
+	// sweep interval so no sweep has fired yet.
+	seedKeys := rateLimiterSweepInterval - 1
 	for i := 0; i < seedKeys; i++ {
 		if !limiter.Allow(fmt.Sprintf("seed:%d", i)) {
 			t.Fatalf("expected first touch of unique key seed:%d to pass", i)
 		}
 	}
-	// Advance two full windows so every seeded entry is expired.
-	current = base.Add(2 * time.Minute)
+	if got := len(limiter.entries); got != seedKeys {
+		t.Fatalf("expected %d seeded entries before any sweep, got %d", seedKeys, got)
+	}
 
-	// This touch pushes len past the threshold and triggers the sweep.
+	// Advance two full windows so every seeded entry is expired, then make
+	// the interval-completing call: its sweep must delete all expired seeds,
+	// leaving only the entry created by the sweeping call itself.
+	current = base.Add(2 * time.Minute)
 	if !limiter.Allow("trigger") {
 		t.Fatal("expected trigger key to pass")
 	}
-	if got := len(limiter.entries); got > 2 {
-		t.Fatalf("expected sweep to drop all expired seed entries (<=2 remaining), got %d", got)
+	if got := len(limiter.entries); got != 1 {
+		t.Fatalf("expected sweep to drop all expired seed entries (1 remaining), got %d", got)
 	}
 
 	// The swept keys must behave as brand-new: full budget available again.
@@ -153,9 +155,11 @@ func TestRateLimiterSweepsExpiredEntries(t *testing.T) {
 }
 
 // TestRateLimiterBoundsMapAcrossManyWindows drives far more unique keys than
-// the sweep threshold across several advancing windows and asserts the map
-// never grows to the total number of keys ever seen — memory is bounded by the
-// keys live within the current window (plus sweep lag), not by history.
+// the sweep interval across several advancing windows and asserts the map
+// never exceeds the documented bound — the current window's distinct keys
+// plus at most one sweep interval of growth — and never approaches the total
+// number of keys ever seen. Sweeps are driven purely by Allow-call count
+// under the injected clock.
 func TestRateLimiterBoundsMapAcrossManyWindows(t *testing.T) {
 	limiter := NewRateLimiter(5, time.Minute)
 	base := time.Date(2026, 3, 23, 9, 0, 0, 0, time.UTC)
@@ -163,13 +167,15 @@ func TestRateLimiterBoundsMapAcrossManyWindows(t *testing.T) {
 	limiter.now = func() time.Time { return current }
 
 	const windows = 8
-	const keysPerWindow = rateLimiterSweepThreshold // 1024 unique keys each window
+	// 1.5x the interval so interval-triggered sweeps land mid-window at
+	// shifting offsets instead of aligning with window boundaries.
+	const keysPerWindow = rateLimiterSweepInterval + rateLimiterSweepInterval/2
 	maxSeen := 0
 	for w := 0; w < windows; w++ {
 		current = base.Add(time.Duration(w) * time.Minute)
 		for i := 0; i < keysPerWindow; i++ {
 			// Keys unique per window so every prior window's keys are expired
-			// by the time the current window sweeps.
+			// by the time the current window's sweeps run.
 			limiter.Allow(fmt.Sprintf("w%d:k%d", w, i))
 			if n := len(limiter.entries); n > maxSeen {
 				maxSeen = n
@@ -178,17 +184,15 @@ func TestRateLimiterBoundsMapAcrossManyWindows(t *testing.T) {
 	}
 
 	totalKeysSeen := windows * keysPerWindow
-	// The whole point: the map size stays bounded by roughly one window's live
-	// keys plus one sweep interval of lag, never the full history. Allow a
-	// generous ceiling (2x a window's worth) to keep the test robust to the
-	// exact sweep-trigger point while still failing loudly on unbounded growth.
-	ceiling := 2 * keysPerWindow
+	// The documented bound: distinct in-window keys plus at most one sweep
+	// interval of growth between sweeps (each Allow inserts at most one key).
+	ceiling := keysPerWindow + rateLimiterSweepInterval
 	if maxSeen > ceiling {
-		t.Fatalf("map grew to %d entries (ceiling %d); expected bounded growth, %d keys seen total",
+		t.Fatalf("map grew to %d entries (bound %d); expected bounded growth, %d keys seen total",
 			maxSeen, ceiling, totalKeysSeen)
 	}
-	// Sanity: after the final window plus its sweep, only current-window keys
-	// (and at most the residual pre-sweep tail) remain — never all history.
+	// Sanity: the map never accumulates history — after eight windows it holds
+	// nowhere near every key ever seen.
 	if len(limiter.entries) >= totalKeysSeen {
 		t.Fatalf("final map holds %d entries out of %d total keys seen; entries were never swept",
 			len(limiter.entries), totalKeysSeen)
@@ -215,9 +219,10 @@ func TestRateLimiterSweepPreservesInWindowEntries(t *testing.T) {
 		t.Fatal("expected attacker key to be throttled after reaching the limit")
 	}
 
-	// Flood many unique keys within the SAME window to force a sweep. The
-	// attacker's window is still open, so the sweep must not evict it.
-	for i := 0; i < rateLimiterSweepThreshold+rateLimiterSweepInterval+10; i++ {
+	// Flood unique keys within the SAME window for more than two full sweep
+	// intervals, guaranteeing at least two interval-triggered sweeps run while
+	// the attacker's window is still open. The sweeps must not evict it.
+	for i := 0; i < 2*rateLimiterSweepInterval+10; i++ {
 		limiter.Allow(fmt.Sprintf("flood:%d", i))
 	}
 
