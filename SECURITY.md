@@ -225,6 +225,7 @@ on the account's next successful login.
 | `/metrics` is absent when disabled and requires the bearer token when configured | `TestServerMetricsEndpointReturnsNotFoundWhenDisabled`, `TestServerMetricsEndpointRequiresBearerTokenWhenConfigured`, `TestServerMetricsEndpointReturnsPrometheusPayload` in [internal/api/server_test.go](internal/api/server_test.go) |
 | Baseline hardening headers (`Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options`) are asserted on unauthenticated responses | `TestServerUnauthorizedSyncAccess` in [internal/api/server_test.go](internal/api/server_test.go) |
 | CORS allows a configured origin on preflight and rejects unknown origins | `TestServerAllowsConfiguredOriginPreflight`, `TestServerRejectsUnknownOriginPreflight` in [internal/api/server_test.go](internal/api/server_test.go) |
+| A handler panic is recovered into a clean `500 internal_error` instead of a dropped connection or a leaked stack trace | `TestServeWithPanicRecoveryReturns500`, `TestServeWithPanicRecoveryPassesThroughNormalResponse` in [internal/api/recovery_test.go](internal/api/recovery_test.go) |
 
 ### Policy-Level Claims (Human-Reviewed, Exempt from the Matrix)
 
