@@ -23,6 +23,11 @@ the repository and by CI.
 Currently **120+ Go test and fuzz functions** across `internal/`. Tests favor
 behavior and persisted state over implementation details.
 
+CI runs the unit, integration, persistence, security, and property-based layers
+under the Go race detector (`go test -race`) so concurrency bugs in
+authentication, session, and CAS logic surface as CI failures rather than
+intermittent production incidents.
+
 ### Fuzz targets
 
 Five native Go fuzz targets guard the inputs that sit on the trust boundary:
