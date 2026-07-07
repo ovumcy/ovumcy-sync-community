@@ -23,10 +23,12 @@ the repository and by CI.
 Currently **120+ Go test and fuzz functions** across `internal/`. Tests favor
 behavior and persisted state over implementation details.
 
-CI runs the unit, integration, persistence, security, and property-based layers
-under the Go race detector (`go test -race`) so concurrency bugs in
-authentication, session, and CAS logic surface as CI failures rather than
-intermittent production incidents.
+CI runs the full suite twice in parallel: a `test` job that generates the
+coverage profile (`-coverpkg=./cmd/...,./internal/...`, no `-race`, so a
+coverage regression fails independently and legibly) and a separate `race`
+job that runs the same packages under the Go race detector (`go test -race
+./...`, no coverage) so concurrency bugs in authentication, session, and CAS
+logic surface as CI failures rather than intermittent production incidents.
 
 ### Fuzz targets
 
@@ -106,6 +108,90 @@ bash scripts/runtime-smoke.sh
 # Mutation testing (slow; local or nightly)
 bash scripts/mutation.sh baseline
 ```
+
+## Checking patch coverage locally
+
+`scripts/patchcov` is the same gate CI's `patch-coverage` job runs: every modified,
+coverable Go line in your diff against `origin/main` must be exercised by a test
+(a genuinely unreachable line is excluded with a trailing `// codecov:ignore`, see
+the comment at the top of `scripts/patchcov/main.go`).
+
+**Warning: running `patchcov` against a stale `coverage.out` gives a false pass.**
+`go test -coverprofile` is subject to Go's test result cache — if you edit a file
+and re-run the coverage command without also touching its test, `go test` can
+silently reuse a cached run from *before* your latest edit. `coverage.out` then
+reflects the old code, `patchcov` reports your newest lines as covered, and CI
+(which always starts from a clean checkout with an empty test cache) fails on the
+same diff. This has bitten contributors more than once — always regenerate the
+profile fresh before trusting a local "gate OK".
+
+The one-liner that reproduces CI's coverage condition end to end:
+
+```bash
+bash scripts/patch-coverage-local.sh
+```
+
+It removes any existing `coverage.out`, runs `go clean -testcache`, regenerates
+the profile with the exact package set and flags CI uses
+(`-covermode=atomic -count=1`), then runs `scripts/patchcov` against it. It takes
+a few minutes — that's the point, it is the real test suite run for real.
+
+If you'd rather run it by hand, the two steps that matter are `go clean
+-testcache` and `-count=1`; either alone defeats the cache, but the script uses
+both for good measure:
+
+```bash
+rm -f coverage.out
+go clean -testcache
+go test ./cmd/... ./internal/... \
+  -coverprofile=coverage.out -covermode=atomic \
+  -coverpkg=./cmd/...,./internal/... \
+  -count=1
+COVERAGE_FILE=coverage.out BASE_REF=origin/main go run ./scripts/patchcov
+```
+
+## Enforcing patch coverage before you push (pre-push hook)
+
+Running `patch-coverage-local.sh` by hand only helps if you remember to do it —
+and the stale-`coverage.out` false-pass trap above has bitten contributors more
+than once even when they *did* remember. `scripts/hooks/pre-push` closes that
+gap by running the check automatically as part of `git push`.
+
+**Enable it once per clone:**
+
+```bash
+bash scripts/setup-hooks.sh
+```
+
+This points git's `core.hooksPath` at `scripts/hooks` (committing a file under
+that path does not make git run it — `core.hooksPath` is what wires a
+version-controlled hook directory up to git's actual hook dispatch) and marks
+`scripts/hooks/pre-push` executable. Equivalent one-liner, if you'd rather
+configure it yourself: `git config core.hooksPath scripts/hooks` (then `chmod
++x scripts/hooks/pre-push` — this repo pins `core.fileMode=false`, so a fresh
+checkout may not carry the executable bit git needs to run the hook directly).
+
+**What it does on every `git push`:**
+
+1. Reads the ref range being pushed (git feeds this to the hook on stdin: `<local
+   ref> <local sha1> <remote ref> <remote sha1>` per updated ref) and diffs it
+   for `*.go` changes.
+2. **No Go files changed** (e.g. a docs-only push): skips immediately, no
+   coverage run.
+3. **Go files changed**: runs `scripts/patch-coverage-local.sh` — the exact
+   same fresh, cache-defeated gate described above — and blocks the push
+   (non-zero exit) if it fails, printing the uncovered `file:line` entries
+   `scripts/patchcov` reports and how to fix them (add a test, or annotate a
+   genuinely unreachable line with `// codecov:ignore`).
+
+It is bounded but not instant: expect it to take as long as the full test
+suite (a few minutes), since that is the only way to get a trustworthy
+answer. The hook prints a notice before it starts so it doesn't look hung.
+
+**Emergency bypass:** `git push --no-verify` skips the hook entirely (git's
+own built-in escape hatch). Use it sparingly — CI's `patch-coverage` job will
+still enforce the same gate on the PR, so a bypassed push only defers the
+failure, it doesn't avoid it.
 
 ## Honest limits
 
