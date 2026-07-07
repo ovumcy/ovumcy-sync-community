@@ -44,10 +44,10 @@ func TestGenerateTOTPCodeIsRFC6238TestVector(t *testing.T) {
 		nowSeconds int64
 		expected   string
 	}{
-		{59, "287082"},          // T1 = 1, code 94287082 truncated to 6 digits → "287082"
-		{1111111109, "081804"},  // T = 0x023523EC
-		{1111111111, "050471"},  // T = 0x023523ED
-		{1234567890, "005924"},  // T = 0x0273EF07
+		{59, "287082"},         // T1 = 1, code 94287082 truncated to 6 digits → "287082"
+		{1111111109, "081804"}, // T = 0x023523EC
+		{1111111111, "050471"}, // T = 0x023523ED
+		{1234567890, "005924"}, // T = 0x0273EF07
 	}
 	for _, tc := range cases {
 		step := tc.nowSeconds / TOTPStepSeconds
