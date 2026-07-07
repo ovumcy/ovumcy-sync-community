@@ -183,7 +183,7 @@ func serveWithPanicRecovery(writer http.ResponseWriter, request *http.Request, n
 	rw := &recoveryWriter{ResponseWriter: writer}
 	defer func() {
 		if rec := recover(); rec != nil {
-			log.Printf("recovered panic serving %s %s: %v", request.Method, request.URL.Path, rec)
+			log.Printf("recovered panic serving %s %s: %v", sanitizeLogValue(request.Method), sanitizeLogValue(request.URL.Path), rec)
 			if !rw.wrote {
 				writeError(rw, http.StatusInternalServerError, "internal_error")
 			}
@@ -191,6 +191,15 @@ func serveWithPanicRecovery(writer http.ResponseWriter, request *http.Request, n
 	}()
 
 	next.ServeHTTP(rw, request)
+}
+
+// sanitizeLogValue strips CR and LF from a request-derived value (method,
+// path) before it reaches a log call, so a caller cannot inject line breaks to
+// forge or split log entries (CWE-117 log injection).
+func sanitizeLogValue(value string) string {
+	value = strings.ReplaceAll(value, "\n", "")
+	value = strings.ReplaceAll(value, "\r", "")
+	return value
 }
 
 func (s *Server) handleHealth(writer http.ResponseWriter, _ *http.Request) {

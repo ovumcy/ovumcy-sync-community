@@ -25,6 +25,18 @@ func TestServeWithPanicRecoveryReturns500(t *testing.T) {
 	}
 }
 
+func TestSanitizeLogValueStripsLineBreaks(t *testing.T) {
+	got := sanitizeLogValue("GET /x\r\nInjected: forged-log-line")
+	for _, r := range got {
+		if r == '\n' || r == '\r' {
+			t.Fatalf("sanitized value still contains a line break: %q", got)
+		}
+	}
+	if got != "GET /xInjected: forged-log-line" {
+		t.Fatalf("unexpected sanitized value: %q", got)
+	}
+}
+
 func TestServeWithPanicRecoveryPassesThroughNormalResponse(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/ok", nil)
