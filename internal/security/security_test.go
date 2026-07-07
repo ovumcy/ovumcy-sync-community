@@ -2,6 +2,7 @@ package security
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -104,6 +105,127 @@ func TestRateLimiterResetsAfterWindow(t *testing.T) {
 	}
 	if len(limiter.entries) != 2 {
 		t.Fatalf("expected entries for two keys, got %d", len(limiter.entries))
+	}
+}
+
+// TestRateLimiterSweepsExpiredEntries proves the amortized sweep actually
+// removes entries whose window has fully elapsed, rather than leaking them for
+// the process lifetime. It also confirms the sweep is behavior-preserving: an
+// expired key that gets swept is indistinguishable from one that was never
+// seen — its counter starts fresh on the next touch.
+func TestRateLimiterSweepsExpiredEntries(t *testing.T) {
+	limiter := NewRateLimiter(2, time.Minute)
+	base := time.Date(2026, 3, 23, 9, 0, 0, 0, time.UTC)
+	current := base
+	limiter.now = func() time.Time { return current }
+
+	// Seed one distinct key per Allow call. Once the map grows past the size
+	// threshold the sweep fires on that same call; because the clock has been
+	// advanced two windows past the seeds, every seeded entry is expired and
+	// must be deleted, leaving only the entry created on the sweeping call.
+	seedKeys := rateLimiterSweepThreshold + 1
+	for i := 0; i < seedKeys; i++ {
+		if !limiter.Allow(fmt.Sprintf("seed:%d", i)) {
+			t.Fatalf("expected first touch of unique key seed:%d to pass", i)
+		}
+	}
+	// Advance two full windows so every seeded entry is expired.
+	current = base.Add(2 * time.Minute)
+
+	// This touch pushes len past the threshold and triggers the sweep.
+	if !limiter.Allow("trigger") {
+		t.Fatal("expected trigger key to pass")
+	}
+	if got := len(limiter.entries); got > 2 {
+		t.Fatalf("expected sweep to drop all expired seed entries (<=2 remaining), got %d", got)
+	}
+
+	// The swept keys must behave as brand-new: full budget available again.
+	if !limiter.Allow("seed:0") {
+		t.Fatal("expected swept key to have a fresh window")
+	}
+	if !limiter.Allow("seed:0") {
+		t.Fatal("expected swept key to still be within its fresh budget")
+	}
+	if limiter.Allow("seed:0") {
+		t.Fatal("expected swept key to throttle after its fresh budget is spent")
+	}
+}
+
+// TestRateLimiterBoundsMapAcrossManyWindows drives far more unique keys than
+// the sweep threshold across several advancing windows and asserts the map
+// never grows to the total number of keys ever seen — memory is bounded by the
+// keys live within the current window (plus sweep lag), not by history.
+func TestRateLimiterBoundsMapAcrossManyWindows(t *testing.T) {
+	limiter := NewRateLimiter(5, time.Minute)
+	base := time.Date(2026, 3, 23, 9, 0, 0, 0, time.UTC)
+	current := base
+	limiter.now = func() time.Time { return current }
+
+	const windows = 8
+	const keysPerWindow = rateLimiterSweepThreshold // 1024 unique keys each window
+	maxSeen := 0
+	for w := 0; w < windows; w++ {
+		current = base.Add(time.Duration(w) * time.Minute)
+		for i := 0; i < keysPerWindow; i++ {
+			// Keys unique per window so every prior window's keys are expired
+			// by the time the current window sweeps.
+			limiter.Allow(fmt.Sprintf("w%d:k%d", w, i))
+			if n := len(limiter.entries); n > maxSeen {
+				maxSeen = n
+			}
+		}
+	}
+
+	totalKeysSeen := windows * keysPerWindow
+	// The whole point: the map size stays bounded by roughly one window's live
+	// keys plus one sweep interval of lag, never the full history. Allow a
+	// generous ceiling (2x a window's worth) to keep the test robust to the
+	// exact sweep-trigger point while still failing loudly on unbounded growth.
+	ceiling := 2 * keysPerWindow
+	if maxSeen > ceiling {
+		t.Fatalf("map grew to %d entries (ceiling %d); expected bounded growth, %d keys seen total",
+			maxSeen, ceiling, totalKeysSeen)
+	}
+	// Sanity: after the final window plus its sweep, only current-window keys
+	// (and at most the residual pre-sweep tail) remain — never all history.
+	if len(limiter.entries) >= totalKeysSeen {
+		t.Fatalf("final map holds %d entries out of %d total keys seen; entries were never swept",
+			len(limiter.entries), totalKeysSeen)
+	}
+}
+
+// TestRateLimiterSweepPreservesInWindowEntries guards the security-critical
+// half of the sweep contract: entries whose window is still open are NEVER
+// evicted, so an attacker who floods unique keys cannot push their own
+// throttled key out of the map to reset its counter.
+func TestRateLimiterSweepPreservesInWindowEntries(t *testing.T) {
+	limiter := NewRateLimiter(3, time.Minute)
+	base := time.Date(2026, 3, 23, 9, 0, 0, 0, time.UTC)
+	current := base
+	limiter.now = func() time.Time { return current }
+
+	// Drive the attacker key to its limit so it is throttled.
+	for i := 0; i < 3; i++ {
+		if !limiter.Allow("attacker") {
+			t.Fatalf("expected attacker touch %d to pass", i)
+		}
+	}
+	if limiter.Allow("attacker") {
+		t.Fatal("expected attacker key to be throttled after reaching the limit")
+	}
+
+	// Flood many unique keys within the SAME window to force a sweep. The
+	// attacker's window is still open, so the sweep must not evict it.
+	for i := 0; i < rateLimiterSweepThreshold+rateLimiterSweepInterval+10; i++ {
+		limiter.Allow(fmt.Sprintf("flood:%d", i))
+	}
+
+	if _, ok := limiter.entries["attacker"]; !ok {
+		t.Fatal("in-window attacker entry was evicted by the sweep — counter could be reset")
+	}
+	if limiter.Allow("attacker") {
+		t.Fatal("attacker key must remain throttled; the flood must not reset its counter")
 	}
 }
 

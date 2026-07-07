@@ -38,7 +38,14 @@ self-hosted accounts always register with `premium_active=false`.
 ## Accepted Residual Risks
 
 - **In-memory rate limiting.** Rate-limit state is per-process and resets on
-  restart. Accepted for the single-instance self-hosted baseline.
+  restart. Accepted for the single-instance self-hosted baseline. The limiter
+  map is bounded by an amortized sweep that removes only entries whose window
+  has fully elapsed (in-window entries are never evicted, so a throttled key
+  can never be flushed to reset its counter). Memory is therefore bounded by
+  the distinct client keys seen within the current window plus a bounded sweep
+  lag, not by the total number of keys ever seen; under a sustained
+  distributed attack that upper bound is still attack-rate × window, which is
+  accepted for the single-instance self-hosted baseline.
 - **Field-encryption key rotation.** Rotating `FIELD_ENCRYPTION_KEY`
   invalidates every stored TOTP ciphertext; affected accounts fail closed on
   the next login until they reset via their recovery code. Operator
@@ -150,6 +157,9 @@ live-server evidence, not a substitute for the rows below.
 | Claim | Enforced by |
 | --- | --- |
 | The limiter allows up to the configured count, then resets after the window | `TestRateLimiterResetsAfterWindow` in [internal/security/security_test.go](internal/security/security_test.go) |
+| Expired entries are swept, so the limiter map does not leak keys for the process lifetime | `TestRateLimiterSweepsExpiredEntries` in [internal/security/security_test.go](internal/security/security_test.go) |
+| Map size stays bounded by the current window's keys across many unique keys over multiple windows | `TestRateLimiterBoundsMapAcrossManyWindows` in [internal/security/security_test.go](internal/security/security_test.go) |
+| The sweep never evicts an in-window entry, so a throttled key cannot be flushed to reset its counter | `TestRateLimiterSweepPreservesInWindowEntries` in [internal/security/security_test.go](internal/security/security_test.go) |
 | Auth endpoints are rate-limited per client; excess requests receive `rate_limited` | `TestServerRateLimitsAuthEndpoints` in [internal/api/server_test.go](internal/api/server_test.go) |
 | `X-Forwarded-For` is honored only from a trusted-proxy CIDR | `TestServerAuthRateLimitUsesForwardedClientFromTrustedProxy` in [internal/api/server_test.go](internal/api/server_test.go) |
 | `X-Forwarded-For` from an untrusted peer is ignored; the raw peer address is the key | `TestServerIgnoresForwardedClientFromUntrustedRemoteAddr` in [internal/api/server_test.go](internal/api/server_test.go) |
