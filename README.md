@@ -111,7 +111,7 @@ Environment variables:
 - `FIELD_ENCRYPTION_KEY` optional hex-encoded master key (>=32 bytes / 64 hex chars) that enables the optional TOTP second-factor surface; leave unset to disable 2FA entirely
 - `TOTP_ISSUER` default `ovumcy-sync-community`; issuer label embedded in `otpauth://` provisioning URIs so authenticator apps show which instance a secret belongs to
 
-Runtime endpoints:
+Runtime endpoints (machine-readable spec: [openapi.yaml](openapi.yaml)):
 
 - `GET /healthz` liveness
 - `GET /readyz` readiness
