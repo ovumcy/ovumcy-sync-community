@@ -4,7 +4,6 @@
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/ovumcy/ovumcy-sync-community/badge)](https://securityscorecards.dev/viewer/?uri=github.com/ovumcy/ovumcy-sync-community)
 [![Coverage](https://codecov.io/gh/ovumcy/ovumcy-sync-community/graph/badge.svg)](https://app.codecov.io/gh/ovumcy/ovumcy-sync-community)
 [![Tested](https://img.shields.io/badge/tested-mutation%20%C2%B7%20fuzz%20%C2%B7%20property-2ea44f)](https://github.com/ovumcy/ovumcy-sync-community/blob/main/TESTING.md)
-[![Go Report Card](https://goreportcard.com/badge/github.com/ovumcy/ovumcy-sync-community)](https://goreportcard.com/report/github.com/ovumcy/ovumcy-sync-community)
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm%20NC%201.0.0-blue.svg)](https://polyformproject.org/licenses/noncommercial/1.0.0/)
 [![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go)](https://go.dev/)
 [![Go Reference](https://pkg.go.dev/badge/github.com/ovumcy/ovumcy-sync-community.svg)](https://pkg.go.dev/github.com/ovumcy/ovumcy-sync-community)
@@ -160,7 +159,14 @@ docker compose run --rm ovumcy-sync-community migrate
 docker compose up --build
 ```
 
-The compose baseline publishes the service on `0.0.0.0:8080` (all host interfaces, via `ports: ["8080:8080"]`) and persists SQLite data under `./data`. Keep it behind a reverse proxy or firewall — or change the mapping to `"127.0.0.1:8080:8080"` to publish on loopback only.
+The compose baseline publishes the service on `127.0.0.1:8080` only (loopback, via `ports: ["127.0.0.1:8080:8080"]`) and persists SQLite data under `./data`. For remote or LAN access, put a reverse proxy in front of the loopback port (recommended) rather than exposing the app port directly. If you must publish on all host interfaces anyway, add a `docker-compose.override.yml` (auto-loaded by `docker compose`) with:
+
+```yaml
+services:
+  ovumcy-sync-community:
+    ports:
+      - "8080:8080"
+```
 
 For local browser-preview work with `ovumcy-app`, use the dedicated override:
 
