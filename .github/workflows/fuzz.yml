@@ -5,9 +5,12 @@ env:
 
 on:
   schedule:
-    # Sundays 12:00 UTC; live fuzzing catches stale fuzz oracles that stay
-    # green on the seed corpus during regular CI runs.
+    # Sundays 12:00 UTC; a short pass over every target catches stale fuzz
+    # oracles that stay green on the seed corpus during regular CI runs.
     - cron: "0 12 * * 0"
+    # Daily 03:17 UTC, offset from the Sunday short pass; only the
+    # fuzz-continuous job below reacts to this trigger (see its `if:`).
+    - cron: "17 3 * * *"
   workflow_dispatch:
 
 permissions:
@@ -15,6 +18,10 @@ permissions:
 
 jobs:
   fuzz:
+    # Unchanged short PR/schedule-facing lane: fixed 3m per target, no corpus
+    # persistence. Only reacts to the Sunday cron (and manual dispatch) so
+    # the new daily cron below does not also trigger this job.
+    if: github.event_name != 'schedule' || github.event.schedule == '0 12 * * 0'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -47,6 +54,74 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: fuzz-crashers-${{ matrix.target }}
+          path: internal/security/testdata/fuzz/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  fuzz-continuous:
+    # Additive to `fuzz` above: a longer daily run per target with the
+    # generated corpus persisted between runs via actions/cache, so coverage
+    # accumulates instead of restarting from the seed corpus every time. Only
+    # reacts to the daily cron (or a manual dispatch) — the Sunday cron stays
+    # the short `fuzz` job's alone, so PR-facing behavior is unchanged.
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 3 * * *'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - FuzzNormalizeLogin
+          - FuzzValidateLogin
+          - FuzzNormalizeRecoveryCode
+          - FuzzDecodeTOTPSecretBase32
+          - FuzzFieldCryptoRoundTrip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Resolve Go fuzz cache directory
+        # go test writes the live, growing per-target corpus under
+        # $(go env GOCACHE)/fuzz/<module>/<package>/<FuzzName>/ (verified by
+        # running a target locally and inspecting the cache). This is
+        # distinct from testdata/fuzz/, which only holds corpus entries a
+        # developer commits (e.g. promoted crash regressions). setup-go's own
+        # `cache: true` above also snapshots all of GOCACHE keyed on go.sum,
+        # but that restore already ran; this step's cache lands after it and
+        # only overlays the fuzz subtree, so the two do not race.
+        id: gocache
+        run: echo "fuzz_dir=$(go env GOCACHE)/fuzz" >> "$GITHUB_OUTPUT"
+
+      - name: Restore fuzz corpus
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.gocache.outputs.fuzz_dir }}
+          # A cache entry is immutable once written, so a unique key per run
+          # means this step always saves the post-fuzz corpus at job end;
+          # restore-keys falls back to the most recent prior corpus for this
+          # target so coverage keeps accumulating across runs.
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ matrix.target }}-
+
+      - name: Fuzz ${{ matrix.target }} (continuous)
+        # -run '^$' skips unit tests; -fuzz runs only the matrix target for
+        # 10m against the restored corpus above.
+        run: go test ./internal/security/ -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime=10m
+
+      - name: Upload crashers
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-continuous-crashers-${{ matrix.target }}
           path: internal/security/testdata/fuzz/
           if-no-files-found: ignore
           retention-days: 7

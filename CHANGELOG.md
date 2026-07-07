@@ -34,6 +34,7 @@ Extensive auth and security work has landed on `main` since `v0.2.0` and is not 
 - Move blob generation-freshness into an atomic SQL compare-and-swap; make password-reset-token consumption atomic.
 - Harden the TOTP login flow; annotate reviewed gosec findings (G202 in `DeleteAccount`, G505/G115 in TOTP).
 - Pin both Dockerfile base images (`golang`, `distroless/static-debian12`) by digest instead of tag alone, kept current by Dependabot's weekly `docker` update.
+- Sign published release binaries. A `Release` workflow builds the `linux/amd64` and `linux/arm64` server binaries with the Dockerfile's flags, signs the `SHA256SUMS` manifest with keyless cosign, and attaches the binaries, manifest, signature, certificate, and SLSA build provenance to each GitHub Release. Verification steps for both release binaries and the container image are documented in [docs/self-hosting.md](docs/self-hosting.md).
 
 ### Internal
 
@@ -43,6 +44,8 @@ Extensive auth and security work has landed on `main` since `v0.2.0` and is not 
 - Added the `SECURITY.md` Test Enforcement Matrix; documented the optional TOTP second factor and the mutation/fuzz/property test stack.
 - Run the CI `test` job with `go test -race` to catch data races in the concurrency-sensitive auth/session/CAS logic; `-covermode=atomic` retained as required alongside `-race`.
 - Added a `golangci-lint` v2.12.2 CI gate (`.golangci.yml`, parallel `golangci-lint` job) alongside the existing `staticcheck` and `go vet` jobs; fixed the mechanical findings it surfaced (unchecked deferred `Close` errors, redundant `http.HandlerFunc` conversions, three-clause counting loops rewritten to `range`).
+- Added a daily `fuzz-continuous` job to the `Fuzz` workflow that runs each native Go fuzz target for 10m with its generated corpus cached and restored between runs (`actions/cache`, keyed per target), so coverage accumulates instead of restarting from the seed corpus every time; the existing weekly 3m short pass is unchanged.
+- Added an `oss-fuzz/` scaffold (`project.yaml`, `Dockerfile`, `build.sh`) following the `google/oss-fuzz` Go project layout. This is preparation only — see [`oss-fuzz/ONBOARDING.md`](oss-fuzz/ONBOARDING.md); OSS-Fuzz does not run against this repository until a maintainer opens a separate PR against `google/oss-fuzz` and Google accepts it.
 
 ## [0.2.0] - 2026-03-23
 
