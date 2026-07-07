@@ -17,6 +17,7 @@ A major auth, security-hardening, and supply-chain release since `v0.2.0`: optio
 - **Account recovery and password management.** Password change, recovery codes, and recovery-code-based password reset across the auth surface.
 - **Authenticated account deletion.** `DELETE /account` erases every row the server holds for an account in a single transaction.
 - **`GET /auth/session`** exposing the current `totp_enabled` state.
+- **Device management.** `GET /sync/devices` lists an account's attached devices and `DELETE /sync/devices/{device_id}` removes one (account-scoped, no IDOR), so reaching the device limit no longer forces deleting the whole account to free a slot.
 - **Machine-readable OpenAPI 3.1 spec** (`openapi.yaml`) covering the full HTTP surface, plus a zero-knowledge boundary diagram in the README.
 
 ### Changed

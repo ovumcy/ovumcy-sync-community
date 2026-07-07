@@ -848,6 +848,72 @@ paths:
           $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/InternalError"
+    get:
+      tags: [sync]
+      operationId: listDevices
+      summary: List the account's devices
+      description: Returns every device attached to the caller's account, account-scoped so one account can never see another's devices.
+      security:
+        - sessionBearerAuth: []
+      responses:
+        "200":
+          description: The account's devices.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /sync/devices/{device_id}:
+    delete:
+      tags: [sync]
+      operationId: removeDevice
+      summary: Remove one of the account's devices
+      description: Detaches a device from the caller's account, freeing a slot. The delete is scoped to the authenticated account in the query, so a caller can only ever remove its own devices; sessions are not device-bound and are unaffected.
+      security:
+        - sessionBearerAuth: []
+      parameters:
+        - name: device_id
+          in: path
+          required: true
+          description: The device_id to remove.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Device removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+              examples:
+                removed:
+                  value: { status: removed }
+        "400":
+          description: Empty device_id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidDevice:
+                  value: { error: invalid_device }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: The account has no device with that id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                notFound:
+                  value: { error: device_not_found }
+        "500":
+          $ref: "#/components/responses/InternalError"
 
   /sync/recovery-key:
     get:
@@ -1352,6 +1418,16 @@ components:
           type: string
           format: date-time
       required: [device_id, device_label, created_at, last_seen_at]
+      additionalProperties: false
+
+    DeviceListResponse:
+      type: object
+      properties:
+        devices:
+          type: array
+          items:
+            $ref: "#/components/schemas/Device"
+      required: [devices]
       additionalProperties: false
 
     BlobPutRequest:

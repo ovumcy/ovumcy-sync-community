@@ -113,6 +113,8 @@ func (s *Server) routes() {
 	s.handleRoute("POST /managed/session", "managed_session", s.withManagedBridge(s.handleManagedSession))
 	s.handleRoute("GET /sync/capabilities", "sync_capabilities", s.withAuth(s.handleCapabilities))
 	s.handleRoute("POST /sync/devices", "sync_devices", s.withAuth(s.handleAttachDevice))
+	s.handleRoute("GET /sync/devices", "sync_devices_list", s.withAuth(s.handleListDevices))
+	s.handleRoute("DELETE /sync/devices/{device_id}", "sync_devices_remove", s.withAuth(s.handleRemoveDevice))
 	s.handleRoute("GET /sync/recovery-key", "sync_recovery_key_get", s.withAuth(s.handleGetRecoveryKey))
 	s.handleRoute("PUT /sync/recovery-key", "sync_recovery_key_put", s.withAuth(s.handlePutRecoveryKey))
 	s.handleRoute("GET /sync/blob", "sync_blob_get", s.withAuth(s.handleGetBlob))
@@ -629,6 +631,43 @@ func (s *Server) handleAttachDevice(
 	writeJSON(writer, http.StatusOK, device)
 }
 
+func (s *Server) handleListDevices(
+	writer http.ResponseWriter,
+	request *http.Request,
+	account models.Account,
+) {
+	devices, err := s.sync.ListDevices(request.Context(), account.ID)
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
+	writeJSON(writer, http.StatusOK, deviceListResponse{Devices: devices})
+}
+
+func (s *Server) handleRemoveDevice(
+	writer http.ResponseWriter,
+	request *http.Request,
+	account models.Account,
+) {
+	// device_id comes from the path; the delete is scoped to the authenticated
+	// account in the query, so a caller can only remove its own devices.
+	err := s.sync.RemoveDevice(request.Context(), account.ID, request.PathValue("device_id"))
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrInvalidDevice):
+			writeError(writer, http.StatusBadRequest, "invalid_device")
+		case errors.Is(err, services.ErrDeviceNotFound):
+			writeError(writer, http.StatusNotFound, "device_not_found")
+		default:
+			writeError(writer, http.StatusInternalServerError, "internal_error")
+		}
+		return
+	}
+
+	writeJSON(writer, http.StatusOK, map[string]string{"status": "removed"})
+}
+
 func (s *Server) handlePutBlob(
 	writer http.ResponseWriter,
 	request *http.Request,
@@ -1001,6 +1040,10 @@ type managedSessionRequest struct {
 type deviceRequest struct {
 	DeviceID    string `json:"device_id"`
 	DeviceLabel string `json:"device_label"`
+}
+
+type deviceListResponse struct {
+	Devices []models.Device `json:"devices"`
 }
 
 type blobPutRequest struct {

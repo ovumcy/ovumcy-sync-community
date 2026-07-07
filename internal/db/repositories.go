@@ -672,6 +672,60 @@ ON CONFLICT(account_id, device_id) DO UPDATE SET
 	return device, nil
 }
 
+// ListDevicesForAccount returns every device attached to the account, oldest
+// first. The query is account-scoped so one account can never enumerate
+// another's devices.
+func (s *Store) ListDevicesForAccount(ctx context.Context, accountID string) ([]models.Device, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT device_id, account_id, device_label, created_at, last_seen_at FROM devices WHERE account_id = ? ORDER BY created_at`,
+		accountID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list devices: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	devices := make([]models.Device, 0)
+	for rows.Next() {
+		device, scanErr := scanDevice(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		devices = append(devices, device)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list devices rows: %w", err)
+	}
+
+	return devices, nil
+}
+
+// DeleteDevice removes one device from the account. The DELETE is scoped by
+// both account_id and device_id, so a caller can only ever delete its own
+// devices (no IDOR). Returns ErrNotFound when the account has no such device.
+func (s *Store) DeleteDevice(ctx context.Context, accountID string, deviceID string) error {
+	result, err := s.db.ExecContext(
+		ctx,
+		`DELETE FROM devices WHERE account_id = ? AND device_id = ?`,
+		accountID,
+		deviceID,
+	)
+	if err != nil {
+		return fmt.Errorf("delete device: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete device rows: %w", err)
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+
+	return nil
+}
+
 func (s *Store) GetEncryptedBlob(ctx context.Context, accountID string) (models.EncryptedBlob, error) {
 	row := s.db.QueryRowContext(
 		ctx,

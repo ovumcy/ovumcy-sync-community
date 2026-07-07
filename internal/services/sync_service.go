@@ -15,6 +15,7 @@ import (
 
 var ErrInvalidDevice = errors.New("invalid_device")
 var ErrTooManyDevices = errors.New("too_many_devices")
+var ErrDeviceNotFound = errors.New("device_not_found")
 var ErrInvalidBlob = errors.New("invalid_blob")
 var ErrBlobNotFound = errors.New("blob_not_found")
 var ErrStaleGeneration = errors.New("stale_generation")
@@ -127,6 +128,31 @@ func (s *SyncService) AttachDevice(
 		CreatedAt:   now,
 		LastSeenAt:  now,
 	})
+}
+
+// ListDevices returns every device attached to the account, account-scoped.
+func (s *SyncService) ListDevices(ctx context.Context, accountID string) ([]models.Device, error) {
+	return s.store.ListDevicesForAccount(ctx, accountID)
+}
+
+// RemoveDevice detaches one device from the account so its slot is freed. The
+// delete is account-scoped in the query (no IDOR), and removing a device does
+// not touch sessions — sessions are not device-bound. Returns ErrInvalidDevice
+// for an empty id and ErrDeviceNotFound when the account has no such device.
+func (s *SyncService) RemoveDevice(ctx context.Context, accountID string, deviceID string) error {
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID == "" {
+		return ErrInvalidDevice
+	}
+
+	if err := s.store.DeleteDevice(ctx, accountID, deviceID); err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return ErrDeviceNotFound
+		}
+		return err
+	}
+
+	return nil
 }
 
 func (s *SyncService) PutBlob(
