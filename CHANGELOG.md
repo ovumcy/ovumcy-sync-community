@@ -21,6 +21,7 @@ Extensive auth and security work has landed on `main` since `v0.2.0` and is not 
 - **Relicensed** from AGPL-3.0 to the PolyForm Noncommercial License 1.0.0.
 - **Runtime image switched to distroless** to drop the vulnerable gnutls chain.
 - Tightened auth rate-limit ceilings.
+- **Compose baseline now binds to loopback by default.** `docker-compose.yml` publishes the service on `127.0.0.1:8080` instead of all host interfaces; use a `docker-compose.override.yml` to publish on `0.0.0.0` for remote/LAN access.
 
 ### Security
 
