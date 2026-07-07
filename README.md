@@ -222,6 +222,7 @@ Common commands from the repository root:
 go test ./...
 go vet ./...
 go run honnef.co/go/tools/cmd/staticcheck@v0.6.1 ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run
 ```
 
 Project structure:
@@ -234,7 +235,7 @@ Project structure:
 - `internal/security` — password hashing, tokens, and field encryption
 - `internal/config` — runtime configuration from environment
 
-CI runs staticcheck, `go vet`, tests with coverage, and a Docker runtime smoke on pushes and pull requests. A dedicated security workflow runs `gosec`, `govulncheck`, and Trivy filesystem/image scans and publishes a CycloneDX image SBOM; CodeQL, native fuzzing, and mutation testing run in their own workflows. See **[TESTING.md](TESTING.md)** for the full quality and security approach.
+CI runs staticcheck, `go vet`, `golangci-lint`, tests with coverage, and a Docker runtime smoke on pushes and pull requests. A dedicated security workflow runs `gosec`, `govulncheck`, and Trivy filesystem/image scans and publishes a CycloneDX image SBOM; CodeQL, native fuzzing, and mutation testing run in their own workflows. See **[TESTING.md](TESTING.md)** for the full quality and security approach.
 
 ## Releases
 

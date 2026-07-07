@@ -1,0 +1,18 @@
+version: "2"
+
+# Minimal, additive config. staticcheck and go vet already run as their own
+# CI jobs (ci.yml); gosec already runs as its own Security job (security.yml)
+# with SARIF upload to the Security tab. This keeps golangci-lint's default
+# linter set (govet, errcheck, staticcheck, unused, ineffassign, etc.) without
+# re-enabling its gosec integration, so the two workflows don't produce
+# duplicate findings for the same class of issue.
+linters:
+  exclusions:
+    presets:
+      - comments
+      - std-error-handling
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
