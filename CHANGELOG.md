@@ -40,6 +40,7 @@ Extensive auth and security work has landed on `main` since `v0.2.0` and is not 
 - Pinned the Go toolchain to 1.25.11 and bumped `golang.org/x/crypto` to v0.53.0 for advisories; made the Codecov upload non-blocking on pull requests.
 - Added the `SECURITY.md` Test Enforcement Matrix; documented the optional TOTP second factor and the mutation/fuzz/property test stack.
 - Run the CI `test` job with `go test -race` to catch data races in the concurrency-sensitive auth/session/CAS logic; `-covermode=atomic` retained as required alongside `-race`.
+- Added a `golangci-lint` v2.12.2 CI gate (`.golangci.yml`, parallel `golangci-lint` job) alongside the existing `staticcheck` and `go vet` jobs; fixed the mechanical findings it surfaced (unchecked deferred `Close` errors, redundant `http.HandlerFunc` conversions, three-clause counting loops rewritten to `range`).
 
 ## [0.2.0] - 2026-03-23
 
