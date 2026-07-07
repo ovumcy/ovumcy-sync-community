@@ -56,7 +56,11 @@ func runMigrate(cfg config.Config) error {
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
-	defer store.Close()
+	defer func() {
+		if closeErr := store.Close(); closeErr != nil {
+			log.Printf("close database: %v", closeErr)
+		}
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -73,7 +77,11 @@ func runServe(cfg config.Config) error {
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
-	defer store.Close()
+	defer func() {
+		if closeErr := store.Close(); closeErr != nil {
+			log.Printf("close database: %v", closeErr)
+		}
+	}()
 
 	readyCtx, readyCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer readyCancel()

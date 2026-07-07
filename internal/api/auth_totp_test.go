@@ -395,7 +395,7 @@ func TestTOTPChallengeBurnsAfterFiveWrongCodes(t *testing.T) {
 	challengeID := loginBody.TOTPChallenge.ChallengeID
 
 	// First four wrong attempts must stay retryable (totp_invalid_code).
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		resp := performJSONRequest(
 			t,
 			handler,
@@ -526,7 +526,7 @@ func TestTOTPMetricsExposeChallengeAndEnrollmentResults(t *testing.T) {
 	if loginBody.TOTPChallenge == nil {
 		t.Fatalf("expected challenge, got %#v", loginBody)
 	}
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		performJSONRequest(
 			t,
 			handler,

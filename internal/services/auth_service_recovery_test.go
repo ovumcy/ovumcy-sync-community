@@ -389,7 +389,7 @@ func TestResetPasswordConcurrentReuseRejectsAllButOne(t *testing.T) {
 	results := make([]error, fanout)
 	start := make(chan struct{})
 	var wg sync.WaitGroup
-	for i := 0; i < fanout; i++ {
+	for i := range fanout {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
