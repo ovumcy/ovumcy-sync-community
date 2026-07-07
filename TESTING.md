@@ -23,6 +23,11 @@ the repository and by CI.
 Currently **120+ Go test and fuzz functions** across `internal/`. Tests favor
 behavior and persisted state over implementation details.
 
+CI runs the unit, integration, persistence, security, and property-based layers
+under the Go race detector (`go test -race`) so concurrency bugs in
+authentication, session, and CAS logic surface as CI failures rather than
+intermittent production incidents.
+
 ### Fuzz targets
 
 Five native Go fuzz targets guard the inputs that sit on the trust boundary:
@@ -64,10 +69,13 @@ with a brittle test. We do not chase a fake 100%.
 | [`gosec`](https://github.com/securego/gosec) | Go security (SAST), results in the GitHub Security tab |
 | [CodeQL](https://codeql.github.com) | Semantic code scanning |
 | [Trivy](https://trivy.dev) | Dependency and container image scanning |
+| [`gitleaks`](https://github.com/gitleaks/gitleaks) | Secret scanning of the full git history on every PR, push to `main`, and weekly |
 | CycloneDX SBOM | Software bill of materials generated for the runtime image |
 
-The runtime image is a multi-stage build running as a non-root user with pinned
-base-image digests and dependency versions. Test code never ships in the image.
+The runtime image is a multi-stage build running as a non-root user. Both base
+images are pinned by digest (`FROM image:tag@sha256:...`, kept current by
+Dependabot's weekly `docker` update) and Go module dependencies are pinned via
+`go.sum`. Test code never ships in the image.
 
 ## What the server can see
 

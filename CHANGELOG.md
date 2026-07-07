@@ -21,6 +21,7 @@ Extensive auth and security work has landed on `main` since `v0.2.0` and is not 
 - **Relicensed** from AGPL-3.0 to the PolyForm Noncommercial License 1.0.0.
 - **Runtime image switched to distroless** to drop the vulnerable gnutls chain.
 - Tightened auth rate-limit ceilings.
+- **Compose baseline now binds to loopback by default.** `docker-compose.yml` publishes the service on `127.0.0.1:8080` instead of all host interfaces; use a `docker-compose.override.yml` to publish on `0.0.0.0` for remote/LAN access.
 
 ### Security
 
@@ -30,12 +31,15 @@ Extensive auth and security work has landed on `main` since `v0.2.0` and is not 
 - Bound the in-memory auth rate-limiter map with an amortized sweep of expired entries, so a sustained distributed attempt can no longer grow it without limit; in-window entries are never evicted, preserving throttling.
 - Move blob generation-freshness into an atomic SQL compare-and-swap; make password-reset-token consumption atomic.
 - Harden the TOTP login flow; annotate reviewed gosec findings (G202 in `DeleteAccount`, G505/G115 in TOTP).
+- Pin both Dockerfile base images (`golang`, `distroless/static-debian12`) by digest instead of tag alone, kept current by Dependabot's weekly `docker` update.
 
 ### Internal
 
+- Added a `gitleaks` secret-scanning CI lane (full-history, on every PR, push to `main`, and weekly) with a `.gitleaks.toml` allowlist scaffold.
 - Healthcheck self-probe plus container `HEALTHCHECK`; `govulncheck`, native fuzz, and advisory mutation (gremlins) CI lanes; fuzz and property tests for crypto, TOTP, and login/recovery helpers.
 - Pinned the Go toolchain to 1.25.11 and bumped `golang.org/x/crypto` to v0.53.0 for advisories; made the Codecov upload non-blocking on pull requests.
 - Added the `SECURITY.md` Test Enforcement Matrix; documented the optional TOTP second factor and the mutation/fuzz/property test stack.
+- Run the CI `test` job with `go test -race` to catch data races in the concurrency-sensitive auth/session/CAS logic; `-covermode=atomic` retained as required alongside `-race`.
 
 ## [0.2.0] - 2026-03-23
 
