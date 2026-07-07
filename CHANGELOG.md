@@ -29,6 +29,7 @@ Extensive auth and security work has landed on `main` since `v0.2.0` and is not 
 - Fail closed on login when a TOTP-enrolled account has no encryption key — no silent single-factor downgrade.
 - Equalize bcrypt timing on `Login` and `ForgotPassword` early-return paths (CWE-208).
 - Bound the in-memory auth rate-limiter map with an amortized sweep of expired entries, so a sustained distributed attempt can no longer grow it without limit; in-window entries are never evicted, preserving throttling.
+- Raise the bcrypt cost for password and recovery-code hashes from 10 to 12, regenerate the timing-equalization placeholder at the same cost so CWE-208 login-enumeration parity holds, and transparently re-hash legacy cost-10 password hashes on the next successful login (best-effort; a failed re-hash never fails the login).
 - Move blob generation-freshness into an atomic SQL compare-and-swap; make password-reset-token consumption atomic.
 - Harden the TOTP login flow; annotate reviewed gosec findings (G202 in `DeleteAccount`, G505/G115 in TOTP).
 - Pin both Dockerfile base images (`golang`, `distroless/static-debian12`) by digest instead of tag alone, kept current by Dependabot's weekly `docker` update.

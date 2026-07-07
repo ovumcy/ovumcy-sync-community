@@ -55,6 +55,14 @@ self-hosted accounts always register with `premium_active=false`.
 - **Timing-equalization tests assert call counts, not wall-clock latency.**
   The guarded property is "equalizing bcrypt work runs on every early-return
   path"; wall-clock assertions would be flaky on shared CI.
+- **Transitional bcrypt-cost skew for pre-upgrade accounts.** Hashes created
+  before the cost-12 bump verify at their embedded cost 10, so until such an
+  account's next successful login (which transparently re-hashes it at cost
+  12), a wrong-password attempt against it burns less bcrypt work than the
+  cost-12 equalization placeholder — a bounded window in which pre-upgrade
+  accounts are timing-distinguishable from unknown logins. Legacy
+  recovery-code hashes converge on the next rotation (password reset or
+  explicit regeneration) instead. Accepted as bounded and converging.
 - **`managed:` login namespace.** Public registration cannot claim the
   `managed:` prefix, while bridge-provisioned logins use it by design behind
   the `MANAGED_BRIDGE_TOKEN` gate.
@@ -76,10 +84,20 @@ live-server evidence, not a substitute for the rows below.
 
 ### Passwords
 
+Account passwords and recovery codes are hashed with bcrypt at cost 12
+(`PasswordHashCost` in `internal/security`). The login timing-equalization
+placeholder is pinned to the same cost (see Timing Parity below), and a hash
+stored at a lower legacy cost is transparently re-hashed at the current cost
+on the account's next successful login.
+
 | Claim | Enforced by |
 | --- | --- |
 | Passwords shorter than the minimum length are rejected | `TestHashPasswordRejectsWeakPassword` in [internal/security/security_test.go](internal/security/security_test.go) |
 | Hash/compare round-trip succeeds and a wrong password is rejected | `TestHashPasswordAndCompare` in [internal/security/security_test.go](internal/security/security_test.go) |
+| Freshly generated password and recovery-code hashes carry bcrypt cost 12 (`PasswordHashCost`) | `TestHashPasswordUsesConfiguredCost`, `TestNewRecoveryCodeUsesConfiguredCost` in [internal/security/security_test.go](internal/security/security_test.go) |
+| Only parseable lower-cost hashes are flagged for rehash; current-cost and unparseable hashes are not | `TestPasswordHashNeedsRehash` in [internal/security/security_test.go](internal/security/security_test.go) |
+| A successful login transparently upgrades a legacy lower-cost password hash to the current cost, on the session path and the TOTP-challenge path alike | `TestLoginRehashesLegacyLowerCostHash`, `TestLoginRehashesLegacyHashOnTOTPChallengePath` in [internal/services/auth_service_rehash_test.go](internal/services/auth_service_rehash_test.go) |
+| Login succeeds even when the transparent rehash cannot produce a new hash | `TestLoginSucceedsWhenRehashCannotProduceNewHash` in [internal/services/auth_service_rehash_test.go](internal/services/auth_service_rehash_test.go) |
 
 ### Login Normalization and Validation
 
@@ -127,6 +145,7 @@ live-server evidence, not a substitute for the rows below.
 | Forgot-password on an unknown login performs equalizing bcrypt work | `TestForgotPasswordEqualizesTimingForUnknownLogin` in [internal/services/auth_service_timing_test.go](internal/services/auth_service_timing_test.go) |
 | Forgot-password with no stored recovery hash performs equalizing bcrypt work | `TestForgotPasswordEqualizesTimingWhenRecoveryCodeUnset` in [internal/services/auth_service_timing_test.go](internal/services/auth_service_timing_test.go) |
 | The equalization placeholder hash stays bcrypt-compatible | `TestPasswordTimingEqualizationHashIsBcryptCompatible` in [internal/services/auth_service_timing_test.go](internal/services/auth_service_timing_test.go) |
+| The equalization placeholder's bcrypt cost equals the real hashing cost (`PasswordHashCost`) | `TestPasswordTimingEqualizationHashCostMatchesPasswordHashCost` in [internal/services/auth_service_timing_test.go](internal/services/auth_service_timing_test.go) |
 
 ### Sessions
 

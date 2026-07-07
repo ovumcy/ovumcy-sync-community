@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/ovumcy/ovumcy-sync-community/internal/security"
 )
 
 // These tests guard against the account-existence timing oracle: every
@@ -98,5 +100,27 @@ func TestPasswordTimingEqualizationHashIsBcryptCompatible(t *testing.T) {
 	}
 	if !errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
 		t.Fatalf("placeholder hash unparseable, equalizer would short-circuit: %v", err)
+	}
+}
+
+// TestPasswordTimingEqualizationHashCostMatchesPasswordHashCost pins the
+// CWE-208 parity invariant: the placeholder's embedded bcrypt cost must equal
+// the cost real hashes are generated with (security.PasswordHashCost). If the
+// two ever diverge, an unknown-login early return burns a measurably
+// different amount of bcrypt work than a real wrong-credential compare, and
+// the login-enumeration timing oracle this placeholder exists to close is
+// reintroduced. Whoever changes security.PasswordHashCost must regenerate
+// passwordTimingEqualizationHash at the new cost in the same commit.
+func TestPasswordTimingEqualizationHashCostMatchesPasswordHashCost(t *testing.T) {
+	cost, err := bcrypt.Cost([]byte(passwordTimingEqualizationHash))
+	if err != nil {
+		t.Fatalf("parse placeholder hash cost: %v", err)
+	}
+	if cost != security.PasswordHashCost {
+		t.Fatalf(
+			"placeholder cost %d != security.PasswordHashCost %d — timing parity broken (CWE-208)",
+			cost,
+			security.PasswordHashCost,
+		)
 	}
 }

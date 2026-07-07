@@ -163,6 +163,21 @@ func (s *AuthService) Login(ctx context.Context, login string, password string) 
 		return AuthResult{}, ErrInvalidCredentials
 	}
 
+	// Transparent hash-cost upgrade. Accounts hashed before a cost bump still
+	// verify (bcrypt embeds the cost per hash) but keep comparing at their
+	// old, cheaper cost, which is timing-distinguishable from the current-cost
+	// equalization placeholder on unknown-login paths. After a successful
+	// verification — and before the TOTP branch, so the challenge path
+	// upgrades too — re-hash at the current cost. Strictly best-effort: a
+	// failed re-hash or a failed persist must never fail a login that already
+	// verified, so both errors are deliberately discarded (this service also
+	// never logs, and a hash-upgrade skip is not an auth event).
+	if security.PasswordHashNeedsRehash(account.PasswordHash) {
+		if upgradedHash, rehashErr := security.HashPassword(password); rehashErr == nil {
+			_ = s.store.UpdateAccountPasswordHash(ctx, account.ID, upgradedHash)
+		}
+	}
+
 	if account.TOTPEnabled {
 		if s.totpChallenges == nil {
 			// Fail closed. The account opted into TOTP 2FA, but this server has
