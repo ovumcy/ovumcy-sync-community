@@ -74,3 +74,23 @@ func TestRemoveDeviceUnknownReturns404(t *testing.T) {
 		t.Fatalf("unexpected payload: %#v", payload)
 	}
 }
+
+func TestRemoveDeviceRateLimitedPerAccount(t *testing.T) {
+	handler := newTestServerWithOptions(t, serverTestOptions{authRateLimitCount: 1})
+	registered := registerOwner(t, handler)
+
+	attachTestDevice(t, handler, registered.SessionToken, "device-abcd1234", "Pixel 7")
+
+	// First removal consumes the single per-account slot and succeeds.
+	performJSONRequest(t, handler, http.MethodDelete, "/sync/devices/device-abcd1234", nil, registered.SessionToken, http.StatusOK)
+
+	// The rate-limit guard runs before the store, keyed on a stable string, so
+	// a second removal — even of a different id — is rejected, proving the path
+	// parameter cannot be used to sidestep the per-account ceiling.
+	response := performJSONRequest(t, handler, http.MethodDelete, "/sync/devices/device-other999", nil, registered.SessionToken, http.StatusTooManyRequests)
+	var payload map[string]string
+	decodeResponse(t, response.Body.Bytes(), &payload)
+	if payload["error"] != "rate_limited" {
+		t.Fatalf("unexpected rate limit payload: %#v", payload)
+	}
+}

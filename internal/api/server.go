@@ -650,6 +650,12 @@ func (s *Server) handleRemoveDevice(
 	request *http.Request,
 	account models.Account,
 ) {
+	// Mutating account op — rate-limit like attach, keyed on a stable
+	// route-scoped string (not the path, whose device_id segment varies).
+	if !s.allowAuthRequestWithKey(writer, "sync_devices_remove:"+account.ID) {
+		return
+	}
+
 	// device_id comes from the path; the delete is scoped to the authenticated
 	// account in the query, so a caller can only remove its own devices.
 	err := s.sync.RemoveDevice(request.Context(), account.ID, request.PathValue("device_id"))
@@ -861,7 +867,15 @@ func (s *Server) allowAuthRequestForAccount(
 	request *http.Request,
 	accountID string,
 ) bool {
-	key := request.URL.Path + ":" + accountID
+	return s.allowAuthRequestWithKey(writer, request.URL.Path+":"+accountID)
+}
+
+// allowAuthRequestWithKey applies the per-account auth limiter under an explicit
+// key. Routes with a path parameter (e.g. DELETE /sync/devices/{device_id})
+// must not key on request.URL.Path — the varying segment would give each id its
+// own bucket and let a caller sidestep the per-account ceiling — so they pass a
+// stable route-scoped key instead.
+func (s *Server) allowAuthRequestWithKey(writer http.ResponseWriter, key string) bool {
 	if s.authLimiter.Allow(key) {
 		return true
 	}

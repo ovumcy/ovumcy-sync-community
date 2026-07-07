@@ -912,6 +912,8 @@ paths:
               examples:
                 notFound:
                   value: { error: device_not_found }
+        "429":
+          $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/InternalError"
 
