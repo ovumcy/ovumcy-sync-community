@@ -39,6 +39,7 @@ A major auth, security-hardening, and supply-chain release since `v0.2.0`: optio
 - Harden the TOTP login flow; annotate reviewed gosec findings (G202 in `DeleteAccount`, G505/G115 in TOTP).
 - Pin both Dockerfile base images (`golang`, `distroless/static-debian12`) by digest instead of tag alone, kept current by Dependabot's weekly `docker` update.
 - Sign published release binaries. A `Release` workflow builds the `linux/amd64` and `linux/arm64` server binaries with the Dockerfile's flags, signs the `SHA256SUMS` manifest with keyless cosign, and attaches the binaries, manifest, signature, certificate, and SLSA build provenance to each GitHub Release. Verification steps for both release binaries and the container image are documented in [docs/self-hosting.md](docs/self-hosting.md).
+- Recover from handler panics at the transport layer: a panic now returns a clean `500 internal_error` instead of a dropped connection, and is logged as a controlled, secret-free line (method + path only) rather than `net/http`'s default unbounded stack trace — keeping the no-secret-in-logs contract even on the failure path.
 
 ### Internal
 
@@ -51,6 +52,7 @@ A major auth, security-hardening, and supply-chain release since `v0.2.0`: optio
 - Added a daily `fuzz-continuous` job to the `Fuzz` workflow that runs each native Go fuzz target for 10m with its generated corpus cached and restored between runs (`actions/cache`, keyed per target), so coverage accumulates instead of restarting from the seed corpus every time; the existing weekly 3m short pass is unchanged.
 - Added an `oss-fuzz/` scaffold (`project.yaml`, `Dockerfile`, `build.sh`) following the `google/oss-fuzz` Go project layout. This is preparation only — see [`oss-fuzz/ONBOARDING.md`](oss-fuzz/ONBOARDING.md); OSS-Fuzz does not run against this repository until a maintainer opens a separate PR against `google/oss-fuzz` and Google accepts it.
 - Moved workflow write permissions to the job level (OpenSSF Scorecard least-privilege), added `THIRD_PARTY_LICENSES.md`, and raised test coverage from ~63% to ~83% — `internal/db` error branches via fault injection (to 93%) and `internal/api` handler error paths (to 90%).
+- Credit cross-package coverage in CI with `-coverpkg`, matching ovumcy-web's coverage measurement, so code exercised by integration tests (e.g. `internal/db` methods driven through the service and API layers) is no longer scored 0% and the Codecov patch report reflects real coverage.
 
 ## [0.2.0] - 2026-03-23
 

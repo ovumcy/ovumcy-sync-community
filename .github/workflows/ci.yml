@@ -95,7 +95,13 @@ jobs:
           cache: true
 
       - name: Go test with coverage
-        run: go test -race ./... -coverprofile=coverage.out -covermode=atomic
+        # -coverpkg credits a line when ANY test exercises it, including
+        # cross-package integration tests (e.g. internal/db methods driven
+        # through internal/services and internal/api). Without it, per-package
+        # profiles score a line 0% unless its own package's tests call it
+        # directly, which understates real coverage and misleads the Codecov
+        # patch report.
+        run: go test -race ./... -coverprofile=coverage.out -covermode=atomic -coverpkg=./cmd/...,./internal/...
 
       - name: Upload coverage to Codecov
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
