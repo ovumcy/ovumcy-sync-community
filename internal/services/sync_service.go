@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"math"
 	"regexp"
 	"strings"
 	"time"
@@ -24,6 +25,16 @@ var ErrRecoveryPackageNotFound = errors.New("recovery_package_not_found")
 
 var checksumPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var lowercaseHexPattern = regexp.MustCompile(`^[a-f0-9]+$`)
+
+// maxBlobGeneration rejects a blob generation within 2^32 of the int64 ceiling.
+// The client derives generation from a millisecond timestamp (ovumcy-app's
+// nextRemoteGeneration), which is astronomically far below this bound, so
+// legitimate writes are never affected. Without the cap, a single crafted write
+// at math.MaxInt64 would strand the blob at a value that no future strictly-
+// greater write could reach — the UpsertEncryptedBlob CAS only accepts a higher
+// generation — permanently locking the owner out of their own blob. The 2^32
+// reserve keeps ample headroom for future increments below the bound.
+const maxBlobGeneration = math.MaxInt64 - (1 << 32)
 
 type SyncService struct {
 	store        *db.Store
@@ -160,7 +171,7 @@ func (s *SyncService) PutBlob(
 	accountID string,
 	input PutBlobInput,
 ) (models.EncryptedBlob, error) {
-	if input.SchemaVersion <= 0 || input.Generation <= 0 || len(input.Ciphertext) == 0 {
+	if input.SchemaVersion <= 0 || input.Generation <= 0 || input.Generation > maxBlobGeneration || len(input.Ciphertext) == 0 {
 		return models.EncryptedBlob{}, ErrInvalidBlob
 	}
 	if !checksumPattern.MatchString(strings.ToLower(strings.TrimSpace(input.ChecksumSHA256))) {

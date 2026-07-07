@@ -40,6 +40,7 @@ A major auth, security-hardening, and supply-chain release since `v0.2.0`: optio
 - Pin both Dockerfile base images (`golang`, `distroless/static-debian12`) by digest instead of tag alone, kept current by Dependabot's weekly `docker` update.
 - Sign published release binaries. A `Release` workflow builds the `linux/amd64` and `linux/arm64` server binaries with the Dockerfile's flags, signs the `SHA256SUMS` manifest with keyless cosign, and attaches the binaries, manifest, signature, certificate, and SLSA build provenance to each GitHub Release. Verification steps for both release binaries and the container image are documented in [docs/self-hosting.md](docs/self-hosting.md).
 - Recover from handler panics at the transport layer: a panic now returns a clean `500 internal_error` instead of a dropped connection, and is logged as a controlled, secret-free line (method + path only) rather than `net/http`'s default unbounded stack trace — keeping the no-secret-in-logs contract even on the failure path.
+- Cap the accepted blob generation below the int64 ceiling. Without it, a client holding its own valid session could write `generation = math.MaxInt64` and permanently lock itself out of its own blob (the monotonic-generation CAS could never find a strictly-greater value). Owner-only self-lockout hardening surfaced by an adversarial audit; the client's millisecond-timestamp generation is astronomically far below the cap, so legitimate writes are unaffected.
 
 ### Internal
 
