@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -780,6 +782,696 @@ func TestServerRejectsOversizedBlobByConfiguredLimit(t *testing.T) {
 	}
 }
 
+func TestServerRegisterRejectsInvalidRegistrationInput(t *testing.T) {
+	handler := newTestServer(t)
+
+	for _, testCase := range []struct {
+		name     string
+		login    string
+		password string
+	}{
+		{name: "weak password", login: "owner@example.com", password: "short"},
+		{name: "login too short", login: "ab", password: "correct horse battery staple"},
+		{name: "reserved managed namespace", login: "managed:squatter1234", password: "correct horse battery staple"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			response := performJSONRequest(
+				t,
+				handler,
+				http.MethodPost,
+				"/auth/register",
+				map[string]string{
+					"login":    testCase.login,
+					"password": testCase.password,
+				},
+				"",
+				http.StatusBadRequest,
+			)
+
+			var payload map[string]string
+			decodeResponse(t, response.Body.Bytes(), &payload)
+			if payload["error"] != "invalid_registration_input" {
+				t.Fatalf("unexpected register validation payload: %#v", payload)
+			}
+		})
+	}
+}
+
+func TestServerRegisterRejectsDuplicateLogin(t *testing.T) {
+	handler := newTestServer(t)
+
+	performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/auth/register",
+		map[string]string{
+			"login":    "owner@example.com",
+			"password": "correct horse battery staple",
+		},
+		"",
+		http.StatusCreated,
+	)
+
+	response := performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/auth/register",
+		map[string]string{
+			"login":    "owner@example.com",
+			"password": "another secure password!",
+		},
+		"",
+		http.StatusBadRequest,
+	)
+
+	var payload map[string]string
+	decodeResponse(t, response.Body.Bytes(), &payload)
+	if payload["error"] != "registration_failed" {
+		t.Fatalf("unexpected duplicate register payload: %#v", payload)
+	}
+}
+
+func TestServerRegisterRateLimitedPerClientIP(t *testing.T) {
+	handler := newTestServerWithOptions(t, serverTestOptions{
+		authRateLimitCount: 1,
+	})
+
+	performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/auth/register",
+		map[string]string{
+			"login":    "owner-a@example.com",
+			"password": "correct horse battery staple",
+		},
+		"",
+		http.StatusCreated,
+	)
+
+	// A different login from the same client IP: the per-IP gate fires before
+	// the handler ever reaches registration.
+	response := performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/auth/register",
+		map[string]string{
+			"login":    "owner-b@example.com",
+			"password": "correct horse battery staple",
+		},
+		"",
+		http.StatusTooManyRequests,
+	)
+
+	var payload map[string]string
+	decodeResponse(t, response.Body.Bytes(), &payload)
+	if payload["error"] != "rate_limited" {
+		t.Fatalf("unexpected register rate limit payload: %#v", payload)
+	}
+}
+
+func TestServerLoginRateLimitsPerIdentifierAcrossClientIPs(t *testing.T) {
+	handler := newTestServerWithOptions(t, serverTestOptions{
+		authRateLimitCount: 1,
+	})
+
+	// Same login identifier from two different source IPs: the per-IP gate
+	// passes both, but the per-identifier ceiling caps the combined attempts,
+	// which is what defeats a distributed brute force against one account.
+	performJSONRequestWithOptions(t, requestOptions{
+		handler:        handler,
+		method:         http.MethodPost,
+		path:           "/auth/login",
+		body:           map[string]string{"login": "victim@example.com", "password": "wrong password"},
+		expectedStatus: http.StatusUnauthorized,
+		remoteAddr:     "203.0.113.10:1111",
+	})
+
+	response := performJSONRequestWithOptions(t, requestOptions{
+		handler:        handler,
+		method:         http.MethodPost,
+		path:           "/auth/login",
+		body:           map[string]string{"login": "victim@example.com", "password": "wrong password"},
+		expectedStatus: http.StatusTooManyRequests,
+		remoteAddr:     "203.0.113.11:2222",
+	})
+
+	var payload map[string]string
+	decodeResponse(t, response.Body.Bytes(), &payload)
+	if payload["error"] != "rate_limited" {
+		t.Fatalf("unexpected per-identifier rate limit payload: %#v", payload)
+	}
+}
+
+func TestServerLoginWithBlankLoginReturnsGenericInvalidCredentials(t *testing.T) {
+	handler := newTestServer(t)
+
+	// A whitespace-only login normalizes to empty: it must skip the
+	// per-identifier limiter and still fail with the generic credentials
+	// error, never a limiter response or a more specific hint.
+	response := performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/auth/login",
+		map[string]string{
+			"login":    "   ",
+			"password": "whatever password",
+		},
+		"",
+		http.StatusUnauthorized,
+	)
+
+	var payload map[string]string
+	decodeResponse(t, response.Body.Bytes(), &payload)
+	if payload["error"] != "invalid_credentials" {
+		t.Fatalf("unexpected blank-login payload: %#v", payload)
+	}
+}
+
+func TestServerLogoutRejectsUnknownSessionToken(t *testing.T) {
+	handler := newTestServer(t)
+
+	for _, testCase := range []struct {
+		name         string
+		sessionToken string
+	}{
+		{name: "missing token", sessionToken: ""},
+		{name: "unknown token", sessionToken: "bogus-session-token"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			response := performJSONRequest(
+				t,
+				handler,
+				http.MethodDelete,
+				"/auth/session",
+				nil,
+				testCase.sessionToken,
+				http.StatusUnauthorized,
+			)
+
+			var payload map[string]string
+			decodeResponse(t, response.Body.Bytes(), &payload)
+			if payload["error"] != "unauthorized" {
+				t.Fatalf("unexpected logout payload: %#v", payload)
+			}
+		})
+	}
+}
+
+func TestServerManagedSessionRejectsMalformedJSON(t *testing.T) {
+	handler := newTestServer(t)
+
+	response := performRawRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/managed/session",
+		[]byte(`{"account_id":`),
+		"test-managed-bridge-token",
+		http.StatusBadRequest,
+	)
+
+	var payload map[string]string
+	decodeResponse(t, response.Body.Bytes(), &payload)
+	if payload["error"] != "invalid_json" {
+		t.Fatalf("unexpected managed session malformed payload: %#v", payload)
+	}
+}
+
+func TestServerManagedSessionRejectsInvalidAccountID(t *testing.T) {
+	handler := newTestServer(t)
+
+	response := performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/managed/session",
+		map[string]string{
+			"account_id": "bad",
+		},
+		"test-managed-bridge-token",
+		http.StatusBadRequest,
+	)
+
+	var payload map[string]string
+	decodeResponse(t, response.Body.Bytes(), &payload)
+	if payload["error"] != "invalid_managed_account" {
+		t.Fatalf("unexpected managed session payload: %#v", payload)
+	}
+}
+
+func TestServerManagedSessionRejectsWrongBridgeToken(t *testing.T) {
+	handler := newTestServer(t)
+
+	response := performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/managed/session",
+		map[string]string{
+			"account_id": "managedacct1234",
+		},
+		"wrong-bridge-token",
+		http.StatusUnauthorized,
+	)
+
+	var payload map[string]string
+	decodeResponse(t, response.Body.Bytes(), &payload)
+	if payload["error"] != "unauthorized" {
+		t.Fatalf("unexpected managed bridge auth payload: %#v", payload)
+	}
+}
+
+func TestServerSyncEndpointValidationErrors(t *testing.T) {
+	handler := newTestServer(t)
+	registered := registerOwner(t, handler)
+
+	// Device id shorter than the 8-character minimum.
+	deviceResponse := performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/sync/devices",
+		map[string]string{
+			"device_id":    "short",
+			"device_label": "Pixel 7",
+		},
+		registered.SessionToken,
+		http.StatusBadRequest,
+	)
+	var devicePayload map[string]string
+	decodeResponse(t, deviceResponse.Body.Bytes(), &devicePayload)
+	if devicePayload["error"] != "invalid_device" {
+		t.Fatalf("unexpected invalid device payload: %#v", devicePayload)
+	}
+
+	// Malformed JSON on the device route.
+	deviceJSONResponse := performRawRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/sync/devices",
+		[]byte(`{"device_id":`),
+		registered.SessionToken,
+		http.StatusBadRequest,
+	)
+	var deviceJSONPayload map[string]string
+	decodeResponse(t, deviceJSONResponse.Body.Bytes(), &deviceJSONPayload)
+	if deviceJSONPayload["error"] != "invalid_json" {
+		t.Fatalf("unexpected device malformed-json payload: %#v", deviceJSONPayload)
+	}
+
+	// Recovery-key package with an unsupported algorithm.
+	recoveryResponse := performJSONRequest(
+		t,
+		handler,
+		http.MethodPut,
+		"/sync/recovery-key",
+		map[string]any{
+			"algorithm":              "rot13",
+			"kdf":                    "bip39_seed_hkdf_sha256",
+			"mnemonic_word_count":    12,
+			"wrap_nonce_hex":         strings.Repeat("a", 48),
+			"wrapped_master_key_hex": strings.Repeat("b", 96),
+			"phrase_fingerprint_hex": strings.Repeat("c", 16),
+		},
+		registered.SessionToken,
+		http.StatusBadRequest,
+	)
+	var recoveryPayload map[string]string
+	decodeResponse(t, recoveryResponse.Body.Bytes(), &recoveryPayload)
+	if recoveryPayload["error"] != "invalid_recovery_package" {
+		t.Fatalf("unexpected invalid recovery package payload: %#v", recoveryPayload)
+	}
+
+	// Malformed JSON on the recovery-key route.
+	recoveryJSONResponse := performRawRequest(
+		t,
+		handler,
+		http.MethodPut,
+		"/sync/recovery-key",
+		[]byte(`{"algorithm":`),
+		registered.SessionToken,
+		http.StatusBadRequest,
+	)
+	var recoveryJSONPayload map[string]string
+	decodeResponse(t, recoveryJSONResponse.Body.Bytes(), &recoveryJSONPayload)
+	if recoveryJSONPayload["error"] != "invalid_json" {
+		t.Fatalf("unexpected recovery malformed-json payload: %#v", recoveryJSONPayload)
+	}
+
+	// Ciphertext that is not valid base64 fails before any store access.
+	blobResponse := performJSONRequest(
+		t,
+		handler,
+		http.MethodPut,
+		"/sync/blob",
+		map[string]any{
+			"schema_version":    1,
+			"generation":        1,
+			"checksum_sha256":   strings.Repeat("d", 64),
+			"ciphertext_base64": "!!!not-base64!!!",
+		},
+		registered.SessionToken,
+		http.StatusBadRequest,
+	)
+	var blobPayload map[string]string
+	decodeResponse(t, blobResponse.Body.Bytes(), &blobPayload)
+	if blobPayload["error"] != "invalid_ciphertext" {
+		t.Fatalf("unexpected invalid ciphertext payload: %#v", blobPayload)
+	}
+
+	// Reading a blob that was never uploaded is a stable not-found key.
+	missingBlobResponse := performJSONRequest(
+		t,
+		handler,
+		http.MethodGet,
+		"/sync/blob",
+		nil,
+		registered.SessionToken,
+		http.StatusNotFound,
+	)
+	var missingBlobPayload map[string]string
+	decodeResponse(t, missingBlobResponse.Body.Bytes(), &missingBlobPayload)
+	if missingBlobPayload["error"] != "blob_not_found" {
+		t.Fatalf("unexpected missing blob payload: %#v", missingBlobPayload)
+	}
+}
+
+func TestServerAttachDeviceRejectsTooManyDevices(t *testing.T) {
+	handler := newTestServerWithOptions(t, serverTestOptions{maxDevices: 1})
+	registered := registerOwner(t, handler)
+
+	performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/sync/devices",
+		map[string]string{
+			"device_id":    "device-1aaaa",
+			"device_label": "Pixel 7",
+		},
+		registered.SessionToken,
+		http.StatusOK,
+	)
+
+	response := performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/sync/devices",
+		map[string]string{
+			"device_id":    "device-2bbbb",
+			"device_label": "Tablet",
+		},
+		registered.SessionToken,
+		http.StatusConflict,
+	)
+
+	var payload map[string]string
+	decodeResponse(t, response.Body.Bytes(), &payload)
+	if payload["error"] != "too_many_devices" {
+		t.Fatalf("unexpected device limit payload: %#v", payload)
+	}
+}
+
+func TestServerAttachDeviceRateLimitedPerAccount(t *testing.T) {
+	handler := newTestServerWithOptions(t, serverTestOptions{
+		authRateLimitCount: 1,
+	})
+	registered := registerOwner(t, handler)
+
+	performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/sync/devices",
+		map[string]string{
+			"device_id":    "device-1aaaa",
+			"device_label": "Pixel 7",
+		},
+		registered.SessionToken,
+		http.StatusOK,
+	)
+
+	response := performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/sync/devices",
+		map[string]string{
+			"device_id":    "device-1aaaa",
+			"device_label": "Pixel 7",
+		},
+		registered.SessionToken,
+		http.StatusTooManyRequests,
+	)
+
+	var payload map[string]string
+	decodeResponse(t, response.Body.Bytes(), &payload)
+	if payload["error"] != "rate_limited" {
+		t.Fatalf("unexpected device rate limit payload: %#v", payload)
+	}
+}
+
+func TestServerPutRecoveryKeyRateLimitedPerAccount(t *testing.T) {
+	handler := newTestServerWithOptions(t, serverTestOptions{
+		authRateLimitCount: 1,
+	})
+	registered := registerOwner(t, handler)
+
+	body := map[string]any{
+		"algorithm":              "xchacha20poly1305",
+		"kdf":                    "bip39_seed_hkdf_sha256",
+		"mnemonic_word_count":    12,
+		"wrap_nonce_hex":         strings.Repeat("a", 48),
+		"wrapped_master_key_hex": strings.Repeat("b", 96),
+		"phrase_fingerprint_hex": strings.Repeat("c", 16),
+	}
+
+	performJSONRequest(
+		t,
+		handler,
+		http.MethodPut,
+		"/sync/recovery-key",
+		body,
+		registered.SessionToken,
+		http.StatusOK,
+	)
+
+	response := performJSONRequest(
+		t,
+		handler,
+		http.MethodPut,
+		"/sync/recovery-key",
+		body,
+		registered.SessionToken,
+		http.StatusTooManyRequests,
+	)
+
+	var payload map[string]string
+	decodeResponse(t, response.Body.Bytes(), &payload)
+	if payload["error"] != "rate_limited" {
+		t.Fatalf("unexpected recovery key rate limit payload: %#v", payload)
+	}
+}
+
+func TestServerSyncRoutesReturnInternalErrorWhenStoreFails(t *testing.T) {
+	store, dbPath := newFileBackedTestStore(t)
+	handler := newTestServerWithOptions(t, serverTestOptions{store: store})
+	registered := registerOwner(t, handler)
+
+	checksumBytes := sha256.Sum256([]byte("ciphertext"))
+
+	dropTable(t, dbPath, "devices")
+	deviceResponse := performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/sync/devices",
+		map[string]string{
+			"device_id":    "device-1aaaa",
+			"device_label": "Pixel 7",
+		},
+		registered.SessionToken,
+		http.StatusInternalServerError,
+	)
+	var devicePayload map[string]string
+	decodeResponse(t, deviceResponse.Body.Bytes(), &devicePayload)
+	if devicePayload["error"] != "internal_error" {
+		t.Fatalf("unexpected device store failure payload: %#v", devicePayload)
+	}
+
+	dropTable(t, dbPath, "encrypted_blobs")
+	getBlobResponse := performJSONRequest(
+		t,
+		handler,
+		http.MethodGet,
+		"/sync/blob",
+		nil,
+		registered.SessionToken,
+		http.StatusInternalServerError,
+	)
+	var getBlobPayload map[string]string
+	decodeResponse(t, getBlobResponse.Body.Bytes(), &getBlobPayload)
+	if getBlobPayload["error"] != "internal_error" {
+		t.Fatalf("unexpected blob read store failure payload: %#v", getBlobPayload)
+	}
+
+	putBlobResponse := performJSONRequest(
+		t,
+		handler,
+		http.MethodPut,
+		"/sync/blob",
+		map[string]any{
+			"schema_version":    1,
+			"generation":        1,
+			"checksum_sha256":   hex.EncodeToString(checksumBytes[:]),
+			"ciphertext_base64": base64.StdEncoding.EncodeToString([]byte("ciphertext")),
+		},
+		registered.SessionToken,
+		http.StatusInternalServerError,
+	)
+	var putBlobPayload map[string]string
+	decodeResponse(t, putBlobResponse.Body.Bytes(), &putBlobPayload)
+	if putBlobPayload["error"] != "internal_error" {
+		t.Fatalf("unexpected blob write store failure payload: %#v", putBlobPayload)
+	}
+
+	dropTable(t, dbPath, "recovery_key_packages")
+	recoveryResponse := performJSONRequest(
+		t,
+		handler,
+		http.MethodPut,
+		"/sync/recovery-key",
+		map[string]any{
+			"algorithm":              "xchacha20poly1305",
+			"kdf":                    "bip39_seed_hkdf_sha256",
+			"mnemonic_word_count":    12,
+			"wrap_nonce_hex":         strings.Repeat("a", 48),
+			"wrapped_master_key_hex": strings.Repeat("b", 96),
+			"phrase_fingerprint_hex": strings.Repeat("c", 16),
+		},
+		registered.SessionToken,
+		http.StatusInternalServerError,
+	)
+	var recoveryPayload map[string]string
+	decodeResponse(t, recoveryResponse.Body.Bytes(), &recoveryPayload)
+	if recoveryPayload["error"] != "internal_error" {
+		t.Fatalf("unexpected recovery key store failure payload: %#v", recoveryPayload)
+	}
+}
+
+func TestServerDeleteAccountReturnsInternalErrorAndRateLimitsRetry(t *testing.T) {
+	store, dbPath := newFileBackedTestStore(t)
+	handler := newTestServerWithOptions(t, serverTestOptions{
+		store:              store,
+		authRateLimitCount: 1,
+	})
+	registered := registerOwner(t, handler)
+
+	// The account-erasure transaction deletes from every child table; with
+	// one of them gone it must fail and roll back, so the caller's session
+	// survives to retry.
+	dropTable(t, dbPath, "devices")
+
+	firstResponse := performJSONRequest(
+		t,
+		handler,
+		http.MethodDelete,
+		"/account",
+		nil,
+		registered.SessionToken,
+		http.StatusInternalServerError,
+	)
+	var firstPayload map[string]string
+	decodeResponse(t, firstResponse.Body.Bytes(), &firstPayload)
+	if firstPayload["error"] != "internal_error" {
+		t.Fatalf("unexpected delete-account store failure payload: %#v", firstPayload)
+	}
+
+	// The rolled-back session still authenticates, so the retry reaches the
+	// per-account gate and is throttled rather than hammering the store.
+	secondResponse := performJSONRequest(
+		t,
+		handler,
+		http.MethodDelete,
+		"/account",
+		nil,
+		registered.SessionToken,
+		http.StatusTooManyRequests,
+	)
+	var secondPayload map[string]string
+	decodeResponse(t, secondResponse.Body.Bytes(), &secondPayload)
+	if secondPayload["error"] != "rate_limited" {
+		t.Fatalf("unexpected delete-account rate limit payload: %#v", secondPayload)
+	}
+}
+
+func TestServerAuthRoutesReturnInternalErrorWhenStoreFails(t *testing.T) {
+	store, dbPath := newFileBackedTestStore(t)
+	handler := newTestServerWithOptions(t, serverTestOptions{store: store})
+
+	dropTable(t, dbPath, "accounts")
+
+	registerResponse := performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/auth/register",
+		map[string]string{
+			"login":    "owner@example.com",
+			"password": "correct horse battery staple",
+		},
+		"",
+		http.StatusInternalServerError,
+	)
+	var registerPayload map[string]string
+	decodeResponse(t, registerResponse.Body.Bytes(), &registerPayload)
+	if registerPayload["error"] != "internal_error" {
+		t.Fatalf("unexpected register store failure payload: %#v", registerPayload)
+	}
+
+	loginResponse := performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/auth/login",
+		map[string]string{
+			"login":    "owner@example.com",
+			"password": "correct horse battery staple",
+		},
+		"",
+		http.StatusInternalServerError,
+	)
+	var loginPayload map[string]string
+	decodeResponse(t, loginResponse.Body.Bytes(), &loginPayload)
+	if loginPayload["error"] != "internal_error" {
+		t.Fatalf("unexpected login store failure payload: %#v", loginPayload)
+	}
+
+	managedResponse := performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/managed/session",
+		map[string]string{
+			"account_id": "managedacct1234",
+		},
+		"test-managed-bridge-token",
+		http.StatusInternalServerError,
+	)
+	var managedPayload map[string]string
+	decodeResponse(t, managedResponse.Body.Bytes(), &managedPayload)
+	if managedPayload["error"] != "internal_error" {
+		t.Fatalf("unexpected managed session store failure payload: %#v", managedPayload)
+	}
+}
+
 func newTestServer(t *testing.T, allowedOrigins ...string) http.Handler {
 	return newTestServerWithOptions(t, serverTestOptions{
 		allowedOrigins: allowedOrigins,
@@ -797,12 +1489,23 @@ type serverTestOptions struct {
 	metricsBearerToken string
 	disableManaged     bool
 	enableTOTP         bool
+	// store, when non-nil, is used instead of opening a private in-memory
+	// database. The caller owns its lifecycle (open, migrations, close). This
+	// lets a test share one database between two server instances or keep the
+	// file path around for failure injection (see dropTable).
+	store *db.Store
+	// totpKey overrides the default TOTP field-encryption key when enableTOTP
+	// is set, so two servers over a shared store can disagree on the key.
+	totpKey []byte
 }
 
-func newTestServerWithOptions(t *testing.T, options serverTestOptions) http.Handler {
+// newTestStore opens a migrated store and registers its cleanup. Tests pass
+// ":memory:" for a private throwaway database, or a file path when a second
+// raw connection must reach the same database (see newFileBackedTestStore).
+func newTestStore(t *testing.T, path string) *db.Store {
 	t.Helper()
 
-	store, err := db.Open(":memory:")
+	store, err := db.Open(path)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -812,6 +1515,52 @@ func newTestServerWithOptions(t *testing.T, options serverTestOptions) http.Hand
 
 	if err := store.ApplyMigrations(context.Background()); err != nil {
 		t.Fatalf("apply migrations: %v", err)
+	}
+
+	return store
+}
+
+// newFileBackedTestStore opens a migrated store on a temp file and returns it
+// together with the database path, so a test can open an independent raw
+// connection to the same database for failure injection.
+func newFileBackedTestStore(t *testing.T) (*db.Store, string) {
+	t.Helper()
+
+	dbPath := filepath.Join(t.TempDir(), "sync-community-test.db")
+	return newTestStore(t, dbPath), dbPath
+}
+
+// dropTable removes one table out from under a live server through a second
+// connection to the same database file, simulating a persistent-store failure
+// for exactly the routes that touch that table. Every other table — notably
+// sessions and accounts, which bearer-token authentication reads — keeps
+// working, so the test reaches the handler's internal-error branch instead of
+// failing earlier in the auth middleware.
+func dropTable(t *testing.T, dbPath string, table string) {
+	t.Helper()
+
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw sqlite: %v", err)
+	}
+	defer func() {
+		_ = raw.Close()
+	}()
+
+	if _, err := raw.Exec(`PRAGMA busy_timeout = 5000;`); err != nil {
+		t.Fatalf("configure raw sqlite: %v", err)
+	}
+	if _, err := raw.Exec("DROP TABLE " + table); err != nil { // #nosec G202 -- table is a test-fixture constant chosen by the test, never user input
+		t.Fatalf("drop table %s: %v", table, err)
+	}
+}
+
+func newTestServerWithOptions(t *testing.T, options serverTestOptions) http.Handler {
+	t.Helper()
+
+	store := options.store
+	if store == nil {
+		store = newTestStore(t, ":memory:")
 	}
 
 	maxDevices := options.maxDevices
@@ -840,9 +1589,12 @@ func newTestServerWithOptions(t *testing.T, options serverTestOptions) http.Hand
 
 	var totpService *services.TOTPService
 	if options.enableTOTP {
-		key := make([]byte, 32)
-		for i := range key {
-			key[i] = byte(i + 1)
+		key := options.totpKey
+		if key == nil {
+			key = make([]byte, 32)
+			for i := range key {
+				key[i] = byte(i + 1)
+			}
 		}
 		totpService = services.NewTOTPService(
 			store,
