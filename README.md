@@ -164,9 +164,11 @@ The compose baseline publishes the service on `127.0.0.1:8080` only (loopback, v
 ```yaml
 services:
   ovumcy-sync-community:
-    ports:
+    ports: !override
       - "8080:8080"
 ```
+
+The `!override` tag replaces the baseline loopback mapping. A plain `ports:` list in an override file would be merged by appending, leaving two bindings of host port 8080 (loopback plus all interfaces) and the container would fail to start with a port-allocation conflict.
 
 For local browser-preview work with `ovumcy-app`, use the dedicated override:
 
