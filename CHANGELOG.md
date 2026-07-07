@@ -52,6 +52,7 @@ A major auth, security-hardening, and supply-chain release since `v0.2.0`: optio
 - Added a daily `fuzz-continuous` job to the `Fuzz` workflow that runs each native Go fuzz target for 10m with its generated corpus cached and restored between runs (`actions/cache`, keyed per target), so coverage accumulates instead of restarting from the seed corpus every time; the existing weekly 3m short pass is unchanged.
 - Added an `oss-fuzz/` scaffold (`project.yaml`, `Dockerfile`, `build.sh`) following the `google/oss-fuzz` Go project layout. This is preparation only — see [`oss-fuzz/ONBOARDING.md`](oss-fuzz/ONBOARDING.md); OSS-Fuzz does not run against this repository until a maintainer opens a separate PR against `google/oss-fuzz` and Google accepts it.
 - Moved workflow write permissions to the job level (OpenSSF Scorecard least-privilege), added `THIRD_PARTY_LICENSES.md`, and raised test coverage from ~63% to ~83% — `internal/db` error branches via fault injection (to 93%) and `internal/api` handler error paths (to 90%).
+- Credit cross-package coverage in CI with `-coverpkg`, matching ovumcy-web's coverage measurement, so code exercised by integration tests (e.g. `internal/db` methods driven through the service and API layers) is no longer scored 0% and the Codecov patch report reflects real coverage.
 
 ## [0.2.0] - 2026-03-23
 
