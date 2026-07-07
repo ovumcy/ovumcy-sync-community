@@ -64,6 +64,7 @@ with a brittle test. We do not chase a fake 100%.
 | [`gosec`](https://github.com/securego/gosec) | Go security (SAST), results in the GitHub Security tab |
 | [CodeQL](https://codeql.github.com) | Semantic code scanning |
 | [Trivy](https://trivy.dev) | Dependency and container image scanning |
+| [`gitleaks`](https://github.com/gitleaks/gitleaks) | Secret scanning of the full git history on every PR, push to `main`, and weekly |
 | CycloneDX SBOM | Software bill of materials generated for the runtime image |
 
 The runtime image is a multi-stage build running as a non-root user. Both base
