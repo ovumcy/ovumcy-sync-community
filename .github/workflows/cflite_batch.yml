@@ -1,0 +1,29 @@
+name: ClusterFuzzLite batch fuzzing
+
+on:
+  schedule:
+    # Daily 06:00 UTC, distinct from the existing native fuzz.yml crons
+    # (03:17 and Sunday 12:00) so the runs don't collide.
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  Batch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Build fuzzers
+        id: build
+        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          language: go
+      - name: Run fuzzers
+        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          fuzz-seconds: 600
+          mode: "batch"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
