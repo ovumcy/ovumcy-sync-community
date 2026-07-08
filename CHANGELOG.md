@@ -7,10 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Removed
-
-- **Release-binary distribution.** Dropped the `Release` workflow that built, signed, and attached `linux/amd64`/`linux/arm64` server binaries to GitHub Releases. The container image (signed with keyless cosign, carrying SLSA build provenance) is now the sole distribution channel; see [docs/self-hosting.md](docs/self-hosting.md#verifying-release-integrity).
-
 ## [0.3.0] - 2026-07-07
 
 A major auth, security-hardening, and supply-chain release since `v0.2.0`: optional TOTP 2FA, account recovery and password management, authenticated account deletion, signed release artifacts, and a substantially hardened CI and quality bar.
@@ -42,7 +38,7 @@ A major auth, security-hardening, and supply-chain release since `v0.2.0`: optio
 - Move blob generation-freshness into an atomic SQL compare-and-swap; make password-reset-token consumption atomic.
 - Harden the TOTP login flow; annotate reviewed gosec findings (G202 in `DeleteAccount`, G505/G115 in TOTP).
 - Pin both Dockerfile base images (`golang`, `distroless/static-debian12`) by digest instead of tag alone, kept current by Dependabot's weekly `docker` update.
-- Sign published release binaries. A `Release` workflow builds the `linux/amd64` and `linux/arm64` server binaries with the Dockerfile's flags, signs the `SHA256SUMS` manifest with keyless cosign, and attaches the binaries, manifest, signature, certificate, and SLSA build provenance to each GitHub Release. Verification steps for both release binaries and the container image are documented in [docs/self-hosting.md](docs/self-hosting.md).
+- Sign the published container image. The `Docker Image` workflow signs the runtime image with keyless cosign and attaches SLSA build provenance. Verification steps are documented in [docs/self-hosting.md](docs/self-hosting.md).
 - Recover from handler panics at the transport layer: a panic now returns a clean `500 internal_error` instead of a dropped connection, and is logged as a controlled, secret-free line (method + path only) rather than `net/http`'s default unbounded stack trace — keeping the no-secret-in-logs contract even on the failure path.
 - Cap the accepted blob generation below the int64 ceiling. Without it, a client holding its own valid session could write `generation = math.MaxInt64` and permanently lock itself out of its own blob (the monotonic-generation CAS could never find a strictly-greater value). Owner-only self-lockout hardening surfaced by an adversarial audit; the client's millisecond-timestamp generation is astronomically far below the cap, so legitimate writes are unaffected.
 
