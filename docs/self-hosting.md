@@ -151,32 +151,12 @@ See [backup-restore.md](backup-restore.md) for a simple restore drill and operat
 
 ## Verifying Release Integrity
 
-Release binaries and the container image are signed with [Sigstore](https://www.sigstore.dev/)
-keyless signing (no long-lived keys to manage) and carry SLSA build provenance. Verifying an
-artifact before you run it confirms it was built by this repository's CI from this source and was
-not tampered with in transit. (Releases published before this was in place may not yet carry these
-assets.)
+The container image is signed with [Sigstore](https://www.sigstore.dev/) keyless signing (no
+long-lived keys to manage) and carries SLSA build provenance. Verifying the image before you run it
+confirms it was built by this repository's CI from this source and was not tampered with in
+transit. (Images published before this was in place may not yet carry these assets.)
 
-**Release binaries.** Each GitHub Release attaches the server binaries, a `SHA256SUMS` manifest, and
-its cosign signature (`SHA256SUMS.sig`) and certificate (`SHA256SUMS.pem`):
-
-```bash
-# 1. Confirm the checksum manifest was signed by this repo's release workflow:
-cosign verify-blob \
-  --certificate SHA256SUMS.pem \
-  --signature SHA256SUMS.sig \
-  --certificate-identity-regexp '^https://github.com/ovumcy/ovumcy-sync-community/\.github/workflows/release\.yml@.*' \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  SHA256SUMS
-
-# 2. Confirm your downloaded binary matches the signed manifest:
-sha256sum --check --ignore-missing SHA256SUMS
-
-# 3. (Optional) Verify SLSA build provenance:
-gh attestation verify ovumcy-sync-community_<version>_linux_amd64 --repo ovumcy/ovumcy-sync-community
-```
-
-**Container image.** The published image is cosign-signed and carries the same provenance:
+The published image is cosign-signed and carries build provenance:
 
 ```bash
 cosign verify ghcr.io/ovumcy/ovumcy-sync-community:<tag> \
