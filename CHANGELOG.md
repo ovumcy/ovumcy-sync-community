@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- The dormant `oss-fuzz/` scaffold (`project.yaml`, `Dockerfile`, `build.sh`, `ONBOARDING.md`). It never ran in this repo's own CI and required a separate, un-taken `google/oss-fuzz` onboarding step; the existing native `go test -fuzz` workflow (`fuzz.yml`) remains the fuzzing this project actually runs.
+
 ## [0.3.0] - 2026-07-07
 
 A major auth, security-hardening, and supply-chain release since `v0.2.0`: optional TOTP 2FA, account recovery and password management, authenticated account deletion, signed release artifacts, and a substantially hardened CI and quality bar.
