@@ -43,9 +43,7 @@ CI runs the seed corpus on every push. The `Fuzz` workflow additionally runs
 active fuzzing on GitHub Actions: a short (3m/target) weekly pass over every
 target, and a longer (10m/target) daily pass whose generated corpus is cached
 and restored between runs so coverage accumulates — both also runnable on
-demand via `workflow_dispatch`. An `oss-fuzz/` scaffold prepares this project
-for Google's OSS-Fuzz infrastructure but is not itself active; see
-[`oss-fuzz/ONBOARDING.md`](oss-fuzz/ONBOARDING.md).
+demand via `workflow_dispatch`.
 
 ## We test our tests
 
@@ -79,7 +77,7 @@ with a brittle test. We do not chase a fake 100%.
 | [Trivy](https://trivy.dev) | Dependency and container image scanning |
 | [`gitleaks`](https://github.com/gitleaks/gitleaks) | Secret scanning of the full git history on every PR, push to `main`, and weekly |
 | CycloneDX SBOM | Software bill of materials generated for the runtime image |
-| [`cosign`](https://docs.sigstore.dev/cosign/overview/) | Keyless Sigstore signatures for the runtime image and for release-binary checksums, plus SLSA build provenance |
+| [`cosign`](https://docs.sigstore.dev/cosign/overview/) | Keyless Sigstore signatures for the runtime image, plus SLSA build provenance |
 
 The runtime image is a multi-stage build running as a non-root user. Both base
 images are pinned by digest (`FROM image:tag@sha256:...`, kept current by
