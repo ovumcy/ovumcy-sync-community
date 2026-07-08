@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **Release-binary distribution.** Dropped the `Release` workflow that built, signed, and attached `linux/amd64`/`linux/arm64` server binaries to GitHub Releases. The container image (signed with keyless cosign, carrying SLSA build provenance) is now the sole distribution channel; see [docs/self-hosting.md](docs/self-hosting.md#verifying-release-integrity).
+
 ## [0.3.0] - 2026-07-07
 
 A major auth, security-hardening, and supply-chain release since `v0.2.0`: optional TOTP 2FA, account recovery and password management, authenticated account deletion, signed release artifacts, and a substantially hardened CI and quality bar.
