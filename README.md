@@ -57,7 +57,7 @@ The server **never** holds:
 
 **Do I have to trust the operator?** For confidentiality of your health data, no — that is the point of the zero-knowledge design. The operator does control availability and sees account/device *metadata* (see the boundary above).
 
-**Can I verify a release?** Yes. Release binaries and the container image are signed with keyless [cosign](https://www.sigstore.dev/) and carry SLSA build provenance. See [Verifying release integrity](docs/self-hosting.md#verifying-release-integrity).
+**Can I verify a release?** Yes. The container image is signed with keyless [cosign](https://www.sigstore.dev/) and carries SLSA build provenance. See [Verifying release integrity](docs/self-hosting.md#verifying-release-integrity).
 
 ## Features
 
@@ -175,7 +175,7 @@ internal/api  →  internal/services  →  internal/db     (+ internal/security,
 - **Language:** Go 1.26, `net/http`, CGO-free build.
 - **Storage:** SQLite in WAL mode; forward-only SQL migrations (explicit `migrate` before `serve`).
 - **Runtime image:** multi-stage, distroless, non-root, digest-pinned base images.
-- **Supply chain:** cosign-signed image and release binaries, SLSA provenance, CycloneDX SBOM, digest-pinned GitHub Actions.
+- **Supply chain:** cosign-signed image, SLSA provenance, CycloneDX SBOM, digest-pinned GitHub Actions.
 
 ## Advanced: managed bridge
 
@@ -203,6 +203,6 @@ CI runs staticcheck, `go vet`, golangci-lint, race-enabled tests with coverage, 
 
 ## Releases & license
 
-This README tracks the `main` branch. Tagged versions, release notes, and signed artifacts are on the [Releases](https://github.com/ovumcy/ovumcy-sync-community/releases) page; notable changes are in [CHANGELOG.md](CHANGELOG.md).
+This README tracks the `main` branch. Tagged versions and release notes are on the [Releases](https://github.com/ovumcy/ovumcy-sync-community/releases) page; the signed, provenance-carrying artifact is the container image on [GHCR](https://github.com/ovumcy/ovumcy-sync-community/pkgs/container/ovumcy-sync-community). Notable changes are in [CHANGELOG.md](CHANGELOG.md).
 
 Source-available under the **PolyForm Noncommercial License 1.0.0** — view, self-host, use, and modify for any noncommercial purpose, and share noncommercially. Commercial use is not granted; contact Ovumcy for a commercial license. See [LICENSE](LICENSE). Third-party dependency licenses are listed in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
