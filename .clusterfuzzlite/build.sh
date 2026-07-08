@@ -1,0 +1,7 @@
+#!/bin/bash -eu
+
+compile_native_go_fuzzer github.com/ovumcy/ovumcy-sync-community/internal/security FuzzNormalizeLogin FuzzNormalizeLogin
+compile_native_go_fuzzer github.com/ovumcy/ovumcy-sync-community/internal/security FuzzNormalizeRecoveryCode FuzzNormalizeRecoveryCode
+compile_native_go_fuzzer github.com/ovumcy/ovumcy-sync-community/internal/security FuzzValidateLogin FuzzValidateLogin
+compile_native_go_fuzzer github.com/ovumcy/ovumcy-sync-community/internal/security FuzzDecodeTOTPSecretBase32 FuzzDecodeTOTPSecretBase32
+compile_native_go_fuzzer github.com/ovumcy/ovumcy-sync-community/internal/security FuzzFieldCryptoRoundTrip FuzzFieldCryptoRoundTrip
