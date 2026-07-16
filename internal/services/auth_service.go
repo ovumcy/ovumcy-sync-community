@@ -159,6 +159,20 @@ func (s *AuthService) Login(ctx context.Context, login string, password string) 
 		return AuthResult{}, err
 	}
 
+	if account.Mode == "managed" {
+		// Managed-bridge accounts (login "managed:<id>", see
+		// managed_bridge_service.go) store the non-bcrypt "managed_service_only"
+		// sentinel as PasswordHash — they never authenticate via password, only
+		// through the managed bridge session exchange. Comparing a real password
+		// against that sentinel fails while bcrypt is still parsing the hash,
+		// before any KDF rounds run, which is far cheaper than a real cost-12
+		// compare and would let an attacker fingerprint "managed:" accounts by
+		// response latency. Equalize so this path costs the same as every other
+		// invalid-credentials path (CWE-208).
+		equalizePasswordTiming(password)
+		return AuthResult{}, ErrInvalidCredentials
+	}
+
 	if err := security.ComparePasswordHash(account.PasswordHash, password); err != nil {
 		return AuthResult{}, ErrInvalidCredentials
 	}
