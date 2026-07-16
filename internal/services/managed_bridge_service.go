@@ -65,6 +65,54 @@ func (s *ManagedBridgeService) CreateManagedSession(
 	return s.auth.CreateSessionForAccount(ctx, accountID)
 }
 
+// PurgeManagedAccount permanently erases the managed account and every row
+// this server holds for it — sessions, devices, the encrypted sync blob, the
+// wrapped recovery-key package, pending password-reset tokens, and TOTP
+// challenges — via Store.DeleteAccount's single transaction. It is the
+// sync-plane half of managed-cloud account deletion: the separate managed
+// service calls it before purging its own database so no ciphertext is ever
+// orphaned here.
+//
+// The id is matched raw against accounts.id after the same normalization and
+// pattern gate as CreateManagedSession — the "managed:" namespace lives only
+// in the login column, never in the id. Only mode=managed accounts are
+// erasable through this path: a self-hosted account whose id collides is
+// refused with ErrInvalidManagedAccount and left untouched, so the bridge
+// credential can never erase a self-hosted user's data.
+//
+// Idempotent: an account that never existed or is already gone (including a
+// concurrent-delete race) returns nil, so the managed caller can safely retry
+// after a dropped response.
+func (s *ManagedBridgeService) PurgeManagedAccount(
+	ctx context.Context,
+	accountID string,
+) error {
+	accountID = strings.TrimSpace(strings.ToLower(accountID))
+	if !managedAccountIDPattern.MatchString(accountID) {
+		return ErrInvalidManagedAccount
+	}
+
+	account, err := s.store.FindAccountByID(ctx, accountID)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	if account.Mode != "managed" {
+		return ErrInvalidManagedAccount
+	}
+
+	if err := s.store.DeleteAccount(ctx, accountID); err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+
+	return nil
+}
+
 func existingOrCreatedAt(account models.Account, fallback time.Time) time.Time {
 	if !account.CreatedAt.IsZero() {
 		return account.CreatedAt

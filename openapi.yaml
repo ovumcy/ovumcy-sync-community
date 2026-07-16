@@ -785,6 +785,76 @@ paths:
                 bridgeDisabled:
                   value: { error: managed_bridge_disabled }
 
+  /managed/accounts/{account_id}:
+    delete:
+      tags: [managed-bridge]
+      operationId: purgeManagedAccount
+      summary: Permanently erase a managed account's sync-plane data
+      description: |
+        Machine-to-machine only: called by the separate trusted managed-auth
+        service when a managed-cloud user deletes their account, so every row
+        this server holds for that account — the account row, sessions,
+        devices, the encrypted sync blob, the wrapped recovery-key package,
+        pending password-reset tokens, and TOTP challenges — is erased in a
+        single transaction and nothing is orphaned on the sync plane. Requires
+        the same `MANAGED_BRIDGE_TOKEN` bearer credential as
+        `POST /managed/session`; the route is disabled (503) whenever that
+        token is not configured on this server.
+
+        Only `mode=managed` accounts are erasable through this path: a
+        self-hosted account whose id collides is refused with
+        `invalid_managed_account` and left untouched. Idempotent: an account
+        that never existed or is already gone still reports success, so the
+        managed caller can safely retry after a dropped response.
+      security:
+        - managedBridgeAuth: []
+      parameters:
+        - name: account_id
+          in: path
+          required: true
+          description: Opaque managed-account identifier (lowercased/trimmed server-side); must match `^[a-z0-9][a-z0-9_-]{7,127}$`, the same shape as the `POST /managed/session` account_id.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Managed account and every row referencing it erased (or already gone).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+              examples:
+                purged:
+                  value: { status: account_purged }
+        "400":
+          description: account_id fails the managed-account id pattern, or names an existing non-managed account.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidManagedAccount:
+                  value: { error: invalid_managed_account }
+        "401":
+          description: Missing/invalid MANAGED_BRIDGE_TOKEN bearer credential.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  value: { error: unauthorized }
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          description: MANAGED_BRIDGE_TOKEN is not configured on this server; the bridge is disabled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                bridgeDisabled:
+                  value: { error: managed_bridge_disabled }
+
   /sync/capabilities:
     get:
       tags: [sync]
@@ -1154,7 +1224,7 @@ components:
       properties:
         status:
           type: string
-          description: 'Short status key, e.g. "ok", "password_changed", "totp_enabled", "totp_disabled", "revoked", "account_deleted".'
+          description: 'Short status key, e.g. "ok", "password_changed", "totp_enabled", "totp_disabled", "revoked", "account_deleted", "account_purged".'
       required: [status]
       additionalProperties: false
 
