@@ -190,6 +190,35 @@ func TestServerManagedAccountPurgeCascades(t *testing.T) {
 	}
 }
 
+func TestServerManagedAccountPurgeReturnsInternalErrorOnStoreFailure(t *testing.T) {
+	store, dbPath := newFileBackedTestStore(t)
+	handler := newTestServerWithOptions(t, serverTestOptions{store: store})
+
+	// Drop the accounts table out from under the live server so the purge's
+	// account lookup fails with a generic store error (not ErrNotFound). The
+	// handler must map that to a 500 internal_error, distinct from the 400
+	// invalid_managed_account path — the bridge-token guard does not read the
+	// accounts table, so authorization still succeeds and the request reaches
+	// the purge.
+	dropTable(t, dbPath, "accounts")
+
+	response := performJSONRequest(
+		t,
+		handler,
+		http.MethodDelete,
+		"/managed/accounts/managedacct1234",
+		nil,
+		"test-managed-bridge-token",
+		http.StatusInternalServerError,
+	)
+
+	var payload map[string]string
+	decodeResponse(t, response.Body.Bytes(), &payload)
+	if payload["error"] != "internal_error" {
+		t.Fatalf("unexpected internal error payload: %#v", payload)
+	}
+}
+
 func TestServerManagedAccountPurgeIsIdempotent(t *testing.T) {
 	handler := newTestServer(t)
 

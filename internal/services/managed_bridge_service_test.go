@@ -135,6 +135,48 @@ func TestManagedBridgePurgeUnknownAccountIsIdempotentNoOp(t *testing.T) {
 	}
 }
 
+func TestManagedBridgePurgeSurfacesAccountLookupStoreError(t *testing.T) {
+	store := openTestStore(t)
+	authService := NewAuthService(store, 24*time.Hour)
+	bridgeService := NewManagedBridgeService(store, authService)
+
+	// Close the store so the account lookup fails with a generic store error
+	// rather than db.ErrNotFound: the purge must surface it, never report a
+	// false idempotent success that would tell the managed caller the account
+	// is gone when it may still hold ciphertext.
+	if err := store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	err := bridgeService.PurgeManagedAccount(context.Background(), "managedacct1234")
+	if err == nil || errors.Is(err, ErrInvalidManagedAccount) {
+		t.Fatalf("expected a store error from the account lookup, got %v", err)
+	}
+}
+
+func TestManagedBridgePurgeSurfacesAccountDeleteStoreError(t *testing.T) {
+	store, dbPath := openFileBackedTestStore(t)
+	authService := NewAuthService(store, 24*time.Hour)
+	bridgeService := NewManagedBridgeService(store, authService)
+
+	ctx := context.Background()
+	const accountID = "managedacct1234"
+	if _, err := bridgeService.CreateManagedSession(ctx, accountID); err != nil {
+		t.Fatalf("create managed session: %v", err)
+	}
+
+	// Drop a child table the account-delete transaction writes to while leaving
+	// the accounts row intact: the lookup and managed-mode guard pass, then
+	// DeleteAccount fails with a generic store error. The purge must surface it
+	// instead of swallowing it as an idempotent no-op.
+	dropTable(t, dbPath, "sessions")
+
+	err := bridgeService.PurgeManagedAccount(ctx, accountID)
+	if err == nil || errors.Is(err, ErrInvalidManagedAccount) {
+		t.Fatalf("expected a store error from the account deletion, got %v", err)
+	}
+}
+
 func TestManagedBridgePurgeRefusesSelfHostedAccount(t *testing.T) {
 	store := openTestStore(t)
 	authService := NewAuthService(store, 24*time.Hour)
