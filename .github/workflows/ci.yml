@@ -135,7 +135,12 @@ jobs:
         # noise, so the full module tree races cleanly.
         env:
           CGO_ENABLED: "1"
-        run: go test -race ./...
+        # Explicit -timeout above Go's 10m default: instrumented under -race the
+        # internal/api and internal/services suites (bcrypt cost 12 on every
+        # account) run close to the wall, and the default limit leaves no
+        # headroom. This only widens the deadline; it never relaxes the race
+        # detector itself.
+        run: go test -race -timeout=25m ./...
 
   coverage-upload:
     name: coverage-upload
