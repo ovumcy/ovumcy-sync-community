@@ -93,6 +93,7 @@ on the account's next successful login.
 | Claim | Enforced by |
 | --- | --- |
 | Passwords shorter than the minimum length are rejected | `TestHashPasswordRejectsWeakPassword` in [internal/security/security_test.go](internal/security/security_test.go) |
+| Minimum length counts Unicode runes, not UTF-8 bytes — matches `ovumcy-managed`'s `HashPassword` so the same password can't pass one backend and fail the other | `TestHashPasswordCountsRunesNotBytes` in [internal/security/security_test.go](internal/security/security_test.go) |
 | Hash/compare round-trip succeeds and a wrong password is rejected | `TestHashPasswordAndCompare` in [internal/security/security_test.go](internal/security/security_test.go) |
 | Freshly generated password and recovery-code hashes carry bcrypt cost 12 (`PasswordHashCost`) | `TestHashPasswordUsesConfiguredCost`, `TestNewRecoveryCodeUsesConfiguredCost` in [internal/security/security_test.go](internal/security/security_test.go) |
 | Only parseable lower-cost hashes are flagged for rehash; current-cost and unparseable hashes are not | `TestPasswordHashNeedsRehash` in [internal/security/security_test.go](internal/security/security_test.go) |
