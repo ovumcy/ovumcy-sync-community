@@ -3,6 +3,7 @@ module github.com/ovumcy/ovumcy-sync-community
 go 1.26.5
 
 require (
+	github.com/AdamKorcz/go-118-fuzz-build v0.0.0-20250520111509-a70c2aa677fa
 	github.com/prometheus/client_golang v1.23.2
 	golang.org/x/crypto v0.53.0
 	modernc.org/sqlite v1.53.0
@@ -11,7 +12,6 @@ require (
 
 require (
 	github.com/AdaLogics/go-fuzz-headers v0.0.0-20230811130428-ced1acdcaa24 // indirect
-	github.com/AdamKorcz/go-118-fuzz-build v0.0.0-20250520111509-a70c2aa677fa // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
