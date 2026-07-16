@@ -112,6 +112,7 @@ func (s *Server) routes() {
 	s.handleRoute("DELETE /auth/session", "auth_logout", http.HandlerFunc(s.handleLogout))
 	s.handleRoute("DELETE /account", "account_delete", s.withAuth(s.handleDeleteAccount))
 	s.handleRoute("POST /managed/session", "managed_session", s.withManagedBridge(s.handleManagedSession))
+	s.handleRoute("DELETE /managed/accounts/{account_id}", "managed_account_purge", s.withManagedBridge(s.handleManagedAccountPurge))
 	s.handleRoute("GET /sync/capabilities", "sync_capabilities", s.withAuth(s.handleCapabilities))
 	s.handleRoute("POST /sync/devices", "sync_devices", s.withAuth(s.handleAttachDevice))
 	s.handleRoute("GET /sync/devices", "sync_devices_list", s.withAuth(s.handleListDevices))
@@ -615,6 +616,28 @@ func (s *Server) handleManagedSession(writer http.ResponseWriter, request *http.
 	}
 
 	writeJSON(writer, http.StatusOK, result)
+}
+
+// handleManagedAccountPurge implements DELETE /managed/accounts/{account_id}:
+// the machine-to-machine purge half of managed-cloud account deletion. It is
+// gated by withManagedBridge (the same MANAGED_BRIDGE_TOKEN bearer as
+// POST /managed/session) and relays the path id to the service, which owns
+// normalization, the managed-mode guard, and idempotency — a repeat purge of
+// an already-erased account reports success, so the managed caller can retry
+// after a dropped response.
+func (s *Server) handleManagedAccountPurge(writer http.ResponseWriter, request *http.Request) {
+	err := s.managedBridge.PurgeManagedAccount(request.Context(), request.PathValue("account_id"))
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrInvalidManagedAccount):
+			writeError(writer, http.StatusBadRequest, "invalid_managed_account")
+		default:
+			writeError(writer, http.StatusInternalServerError, "internal_error")
+		}
+		return
+	}
+
+	writeJSON(writer, http.StatusOK, map[string]string{"status": "account_purged"})
 }
 
 func (s *Server) handleCapabilities(writer http.ResponseWriter, _ *http.Request, account models.Account) {

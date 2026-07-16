@@ -49,6 +49,32 @@ func TestLoginEqualizesTimingForUnknownLogin(t *testing.T) {
 	}
 }
 
+func TestLoginEqualizesTimingForManagedAccountSentinelHash(t *testing.T) {
+	store := openTestStore(t)
+	authService := NewAuthService(store, 24*time.Hour)
+	bridgeService := NewManagedBridgeService(store, authService)
+
+	if _, err := bridgeService.CreateManagedSession(context.Background(), "managedacct1234"); err != nil {
+		t.Fatalf("CreateManagedSession: %v", err)
+	}
+
+	count := withCountingPasswordEqualizer(t)
+
+	// A managed-bridge account's PasswordHash is the non-bcrypt
+	// "managed_service_only" sentinel, so ComparePasswordHash fails during
+	// bcrypt's hash parsing rather than after a real cost-12 compare. Without
+	// equalizing here, this path would be measurably faster than both the
+	// unknown-login path and a real wrong-password compare, letting an
+	// attacker fingerprint "managed:" accounts by latency.
+	_, err := authService.Login(context.Background(), "managed:managedacct1234", "any password 12345")
+	if err != ErrInvalidCredentials {
+		t.Fatalf("expected ErrInvalidCredentials, got %v", err)
+	}
+	if *count != 1 {
+		t.Fatalf("expected exactly 1 timing-equalization call on managed-account sentinel-hash path, got %d", *count)
+	}
+}
+
 func TestForgotPasswordEqualizesTimingForUnknownLogin(t *testing.T) {
 	store := openTestStore(t)
 	service := NewAuthService(store, 24*time.Hour)
