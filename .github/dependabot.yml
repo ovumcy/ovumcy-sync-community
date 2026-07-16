@@ -26,3 +26,11 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+
+  # The ClusterFuzzLite build base is digest-pinned (OpenSSF Scorecard
+  # Pinned-Dependencies); keep that pin maintained instead of letting it rot.
+  - package-ecosystem: "docker"
+    directory: "/.clusterfuzzlite"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
