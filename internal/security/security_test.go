@@ -36,6 +36,19 @@ func TestHashPasswordRejectsWeakPassword(t *testing.T) {
 	}
 }
 
+func TestHashPasswordCountsRunesNotBytes(t *testing.T) {
+	// 6 Cyrillic letters are 12 UTF-8 bytes but only 6 user-perceived
+	// characters — byte counting would wrongly accept this password.
+	if _, err := HashPassword("пароль"); !errors.Is(err, ErrWeakPassword) {
+		t.Fatalf("expected ErrWeakPassword for 6-rune multi-byte password, got %v", err)
+	}
+
+	// 12 Cyrillic letters satisfy the minimum regardless of byte length.
+	if _, err := HashPassword("парольпароль"); err != nil {
+		t.Fatalf("expected 12-rune multi-byte password to be accepted, got %v", err)
+	}
+}
+
 func TestHashPasswordAndCompare(t *testing.T) {
 	hash, err := HashPassword("correct horse battery staple")
 	if err != nil {

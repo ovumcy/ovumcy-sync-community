@@ -5,10 +5,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"strings"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/bcrypt"
 )
 
+// ErrWeakPassword is returned by HashPassword when the password fails the
+// minimum-strength rule (at least 12 runes after trimming). Its message is the
+// stable "weak_password" error key callers map to a client response.
 var ErrWeakPassword = errors.New("weak_password")
 
 // PasswordHashCost is the bcrypt cost for every hash this server generates:
@@ -47,8 +51,12 @@ func ValidateLogin(login string) bool {
 	return true
 }
 
+// HashPassword validates the password's minimum strength and returns its bcrypt
+// hash at PasswordHashCost. The 12 minimum counts runes (user-perceived
+// characters), not bytes — the same semantics as the managed backend — so a
+// multi-byte (e.g. Cyrillic) password cannot satisfy "12" with only 6 letters.
 func HashPassword(password string) (string, error) {
-	if len(strings.TrimSpace(password)) < 12 {
+	if utf8.RuneCountInString(strings.TrimSpace(password)) < 12 {
 		return "", ErrWeakPassword
 	}
 
