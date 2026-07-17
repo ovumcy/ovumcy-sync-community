@@ -36,6 +36,41 @@ func TestHashPasswordRejectsWeakPassword(t *testing.T) {
 	}
 }
 
+// TestHashPasswordCountsRunesNotBytes pins the minimum-strength rule to
+// Unicode runes, not UTF-8 bytes, matching ovumcy-managed's HashPassword
+// exactly (see internal/security/password.go there). A byte-length check
+// would wrongly accept a short multi-byte password — e.g. 6 Cyrillic letters
+// encode to 12 bytes — letting the same password pass one backend's
+// registration and fail the other's.
+func TestHashPasswordCountsRunesNotBytes(t *testing.T) {
+	// 6 Cyrillic letters = 12 UTF-8 bytes but only 6 runes: must be rejected.
+	if _, err := HashPassword("пароль"); !errors.Is(err, ErrWeakPassword) {
+		t.Fatalf("expected ErrWeakPassword for a 6-rune password, got %v", err)
+	}
+
+	// 12 Cyrillic letters = 12 runes (24 bytes): must be accepted.
+	if _, err := HashPassword("парольпароль"); err != nil {
+		t.Fatalf("expected a 12-rune password to be accepted, got %v", err)
+	}
+
+	// 12 ASCII characters (12 bytes = 12 runes): still accepted.
+	if _, err := HashPassword("correct pass"); err != nil {
+		t.Fatalf("expected a 12-character ASCII password to be accepted, got %v", err)
+	}
+
+	// 11 ASCII characters: still rejected.
+	if _, err := HashPassword("correct pas"); !errors.Is(err, ErrWeakPassword) {
+		t.Fatalf("expected ErrWeakPassword for an 11-character password, got %v", err)
+	}
+
+	// Trim-interaction: 6 Cyrillic letters plus 6 trailing spaces reach 12
+	// runes only *before* trimming (6 letters + 6 spaces); TrimSpace must run
+	// before the rune count so this still resolves to 6 and is rejected.
+	if _, err := HashPassword("пароль" + strings.Repeat(" ", 6)); !errors.Is(err, ErrWeakPassword) {
+		t.Fatalf("expected ErrWeakPassword for a password only reaching 12 runes before trimming, got %v", err)
+	}
+}
+
 func TestHashPasswordAndCompare(t *testing.T) {
 	hash, err := HashPassword("correct horse battery staple")
 	if err != nil {

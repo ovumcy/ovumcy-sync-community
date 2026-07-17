@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"strings"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -47,8 +48,12 @@ func ValidateLogin(login string) bool {
 	return true
 }
 
+// HashPassword enforces the minimum-strength rule (at least 12 Unicode runes
+// after trimming whitespace, not bytes) before returning the bcrypt hash.
+// Rune-counting matches ovumcy-managed's HashPassword exactly, so the same
+// password is never accepted by one backend and rejected by the other.
 func HashPassword(password string) (string, error) {
-	if len(strings.TrimSpace(password)) < 12 {
+	if utf8.RuneCountInString(strings.TrimSpace(password)) < 12 {
 		return "", ErrWeakPassword
 	}
 
