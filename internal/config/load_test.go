@@ -25,6 +25,7 @@ var loadEnvVars = []string{
 	"TRUSTED_PROXY_CIDRS",
 	"FIELD_ENCRYPTION_KEY",
 	"TOTP_ISSUER",
+	"LAPSED_ACCOUNT_GRACE_PERIOD",
 }
 
 // clearLoadEnv resets every Load-relevant environment variable to empty via
@@ -47,20 +48,21 @@ func TestLoadReturnsDefaultsWhenEnvironmentIsEmpty(t *testing.T) {
 	}
 
 	want := Config{
-		BindAddr:            ":8080",
-		DBPath:              "./data/ovumcy-sync-community.sqlite",
-		SessionTTL:          720 * time.Hour,
-		MaxDevices:          5,
-		MaxBlobBytes:        16 << 20,
-		AuthRateLimitCount:  10,
-		AuthRateLimitWindow: time.Minute,
-		ManagedBridgeToken:  "",
-		MetricsEnabled:      false,
-		MetricsBearerToken:  "",
-		AllowedOrigins:      nil,
-		TrustedProxyCIDRs:   nil,
-		FieldEncryptionKey:  nil,
-		TOTPIssuer:          "ovumcy-sync-community",
+		BindAddr:                 ":8080",
+		DBPath:                   "./data/ovumcy-sync-community.sqlite",
+		SessionTTL:               720 * time.Hour,
+		MaxDevices:               5,
+		MaxBlobBytes:             16 << 20,
+		AuthRateLimitCount:       10,
+		AuthRateLimitWindow:      time.Minute,
+		ManagedBridgeToken:       "",
+		MetricsEnabled:           false,
+		MetricsBearerToken:       "",
+		AllowedOrigins:           nil,
+		TrustedProxyCIDRs:        nil,
+		FieldEncryptionKey:       nil,
+		TOTPIssuer:               "ovumcy-sync-community",
+		LapsedAccountGracePeriod: 60 * 24 * time.Hour,
 	}
 
 	if cfg.BindAddr != want.BindAddr {
@@ -105,6 +107,9 @@ func TestLoadReturnsDefaultsWhenEnvironmentIsEmpty(t *testing.T) {
 	if cfg.TOTPIssuer != want.TOTPIssuer {
 		t.Errorf("TOTPIssuer = %q, want %q", cfg.TOTPIssuer, want.TOTPIssuer)
 	}
+	if cfg.LapsedAccountGracePeriod != want.LapsedAccountGracePeriod {
+		t.Errorf("LapsedAccountGracePeriod = %s, want %s", cfg.LapsedAccountGracePeriod, want.LapsedAccountGracePeriod)
+	}
 }
 
 func TestLoadAppliesEveryEnvOverride(t *testing.T) {
@@ -129,6 +134,7 @@ func TestLoadAppliesEveryEnvOverride(t *testing.T) {
 	t.Setenv("TRUSTED_PROXY_CIDRS", "10.0.0.0/24,127.0.0.1")
 	t.Setenv("FIELD_ENCRYPTION_KEY", fakeHexKey)
 	t.Setenv("TOTP_ISSUER", "custom-issuer")
+	t.Setenv("LAPSED_ACCOUNT_GRACE_PERIOD", "720h")
 
 	cfg, err := Load()
 	if err != nil {
@@ -176,6 +182,9 @@ func TestLoadAppliesEveryEnvOverride(t *testing.T) {
 	}
 	if cfg.TOTPIssuer != "custom-issuer" {
 		t.Errorf("TOTPIssuer = %q, want %q", cfg.TOTPIssuer, "custom-issuer")
+	}
+	if cfg.LapsedAccountGracePeriod != 720*time.Hour {
+		t.Errorf("LapsedAccountGracePeriod = %s, want %s", cfg.LapsedAccountGracePeriod, 720*time.Hour)
 	}
 }
 
@@ -273,6 +282,18 @@ func TestLoadSurfacesEveryValidationAndParseError(t *testing.T) {
 			envName: "METRICS_BEARER_TOKEN",
 			envValu: "metrics-token-fixture",
 			wantErr: "METRICS_BEARER_TOKEN",
+		},
+		{
+			name:    "malformed lapsed account grace period duration",
+			envName: "LAPSED_ACCOUNT_GRACE_PERIOD",
+			envValu: "not-a-duration",
+			wantErr: "LAPSED_ACCOUNT_GRACE_PERIOD",
+		},
+		{
+			name:    "non-positive lapsed account grace period fails validation",
+			envName: "LAPSED_ACCOUNT_GRACE_PERIOD",
+			envValu: "0h",
+			wantErr: "LAPSED_ACCOUNT_GRACE_PERIOD",
 		},
 	}
 

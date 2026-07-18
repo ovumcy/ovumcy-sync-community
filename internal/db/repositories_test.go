@@ -290,3 +290,323 @@ func TestDeleteAccountErasesEveryChildRowAndIsIdempotent(t *testing.T) {
 		t.Fatalf("expected ErrNotFound on repeat delete, got %v", err)
 	}
 }
+
+// createLapseTestAccount seeds a bare account row (no session/device/blob
+// children) at the given mode, with premium_active seeded true so tests can
+// observe SetAccountLapsed actually clearing it.
+func createLapseTestAccount(t *testing.T, store *Store, accountID string, mode string) {
+	t.Helper()
+
+	if _, err := store.CreateAccount(context.Background(), models.Account{
+		ID:            accountID,
+		Login:         accountID + "@example.com",
+		PasswordHash:  "hash",
+		Mode:          mode,
+		PremiumActive: true,
+		CreatedAt:     time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("create %s account %s: %v", mode, accountID, err)
+	}
+}
+
+// TestSetAccountLapsedRecordsMarkerPreservesOnReplayAndScopesToManaged covers
+// SetAccountLapsed's full contract: it records lapsed_at and clears
+// premium_active on a managed account; a replay with a later timestamp must
+// NOT push lapsed_at forward (the COALESCE — this is what keeps a repeated
+// lapse signal from ever extending the purge sweep's grace deadline); it
+// refuses a self-hosted account (mode scoping) and a missing account, both
+// via ErrNotFound, leaving the self-hosted account's marker permanently nil.
+func TestSetAccountLapsedRecordsMarkerPreservesOnReplayAndScopesToManaged(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	const managedID = "managed-lapse-target"
+	const selfHostedID = "self-hosted-lapse-bystander"
+	createLapseTestAccount(t, store, managedID, "managed")
+	createLapseTestAccount(t, store, selfHostedID, "self_hosted")
+
+	firstLapse := time.Now().UTC().Add(-48 * time.Hour)
+	if err := store.SetAccountLapsed(ctx, managedID, firstLapse); err != nil {
+		t.Fatalf("set account lapsed: %v", err)
+	}
+
+	account, err := store.FindAccountByID(ctx, managedID)
+	if err != nil {
+		t.Fatalf("find managed account after lapse: %v", err)
+	}
+	if account.PremiumActive {
+		t.Fatal("expected premium_active cleared after SetAccountLapsed")
+	}
+
+	lapsedAt, err := store.GetAccountLapsedAt(ctx, managedID)
+	if err != nil {
+		t.Fatalf("get account lapsed at: %v", err)
+	}
+	if lapsedAt == nil || !lapsedAt.Equal(firstLapse) {
+		t.Fatalf("expected lapsed_at %s, got %v", firstLapse, lapsedAt)
+	}
+
+	// Replay with a later timestamp must not move the recorded marker.
+	laterLapse := firstLapse.Add(24 * time.Hour)
+	if err := store.SetAccountLapsed(ctx, managedID, laterLapse); err != nil {
+		t.Fatalf("replay set account lapsed: %v", err)
+	}
+	replayedLapsedAt, err := store.GetAccountLapsedAt(ctx, managedID)
+	if err != nil {
+		t.Fatalf("get account lapsed at after replay: %v", err)
+	}
+	if replayedLapsedAt == nil || !replayedLapsedAt.Equal(firstLapse) {
+		t.Fatalf("expected lapsed_at to stay pinned at %s after replay, got %v", firstLapse, replayedLapsedAt)
+	}
+
+	// A self-hosted account can never be marked lapsed, even by id.
+	if err := store.SetAccountLapsed(ctx, selfHostedID, firstLapse); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound marking a self-hosted account lapsed, got %v", err)
+	}
+	selfHostedLapsedAt, err := store.GetAccountLapsedAt(ctx, selfHostedID)
+	if err != nil {
+		t.Fatalf("get self-hosted account lapsed at: %v", err)
+	}
+	if selfHostedLapsedAt != nil {
+		t.Fatalf("expected self-hosted account lapsed_at to stay nil, got %v", selfHostedLapsedAt)
+	}
+
+	if err := store.SetAccountLapsed(ctx, "missing-account", firstLapse); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for missing account, got %v", err)
+	}
+}
+
+// TestClearAccountLapseRetractsMarkerWithoutTouchingPremiumActive covers the
+// active=true retraction path: it clears lapsed_at but must leave
+// premium_active exactly as it found it (reactivating premium is the mint
+// path's job, not this method's), is a no-op success when there is no
+// marker to clear, and is scoped to mode='managed' the same way
+// SetAccountLapsed is.
+func TestClearAccountLapseRetractsMarkerWithoutTouchingPremiumActive(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	const managedID = "managed-clear-target"
+	const selfHostedID = "self-hosted-clear-bystander"
+	createLapseTestAccount(t, store, managedID, "managed")
+	createLapseTestAccount(t, store, selfHostedID, "self_hosted")
+
+	if err := store.SetAccountLapsed(ctx, managedID, time.Now().UTC()); err != nil {
+		t.Fatalf("set account lapsed: %v", err)
+	}
+
+	if err := store.ClearAccountLapse(ctx, managedID); err != nil {
+		t.Fatalf("clear account lapse: %v", err)
+	}
+
+	lapsedAt, err := store.GetAccountLapsedAt(ctx, managedID)
+	if err != nil {
+		t.Fatalf("get account lapsed at after clear: %v", err)
+	}
+	if lapsedAt != nil {
+		t.Fatalf("expected lapsed_at cleared, got %v", lapsedAt)
+	}
+	account, err := store.FindAccountByID(ctx, managedID)
+	if err != nil {
+		t.Fatalf("find managed account after clear: %v", err)
+	}
+	if account.PremiumActive {
+		t.Fatal("expected premium_active to remain false after ClearAccountLapse — reactivation is the mint path's job")
+	}
+
+	// Clearing an already-clear marker is a no-op success.
+	if err := store.ClearAccountLapse(ctx, managedID); err != nil {
+		t.Fatalf("expected no-op success clearing an already-clear marker, got %v", err)
+	}
+
+	if err := store.ClearAccountLapse(ctx, selfHostedID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound clearing a self-hosted account's lapse, got %v", err)
+	}
+	if err := store.ClearAccountLapse(ctx, "missing-account"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for missing account, got %v", err)
+	}
+}
+
+// TestUpsertManagedAccountClearsLapsedAtOnMint pins the "mint clears the
+// marker" half of the entitlement-lapse contract: a session-mint refresh
+// through UpsertManagedAccount (the same call CreateManagedSession makes on
+// every mint, not just first provisioning) must clear a previously recorded
+// lapsed_at and restore premium_active, so a resubscribed account is safe
+// from the purge sweep again without a separate call.
+func TestUpsertManagedAccountClearsLapsedAtOnMint(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	const managedID = "managed-mint-clears-lapse"
+	createLapseTestAccount(t, store, managedID, "managed")
+
+	if err := store.SetAccountLapsed(ctx, managedID, now.Add(-72*time.Hour)); err != nil {
+		t.Fatalf("set account lapsed: %v", err)
+	}
+	if lapsedAt, err := store.GetAccountLapsedAt(ctx, managedID); err != nil || lapsedAt == nil {
+		t.Fatalf("expected lapsed_at set before mint, got %v err=%v", lapsedAt, err)
+	}
+
+	if _, err := store.UpsertManagedAccount(ctx, models.Account{
+		ID:            managedID,
+		Login:         "managed:" + managedID,
+		PasswordHash:  "managed_service_only",
+		Mode:          "managed",
+		PremiumActive: true,
+		CreatedAt:     now,
+	}); err != nil {
+		t.Fatalf("upsert managed account (mint refresh): %v", err)
+	}
+
+	lapsedAt, err := store.GetAccountLapsedAt(ctx, managedID)
+	if err != nil {
+		t.Fatalf("get account lapsed at after mint: %v", err)
+	}
+	if lapsedAt != nil {
+		t.Fatalf("expected mint to clear lapsed_at, got %v", lapsedAt)
+	}
+	account, err := store.FindAccountByID(ctx, managedID)
+	if err != nil {
+		t.Fatalf("find managed account after mint: %v", err)
+	}
+	if !account.PremiumActive {
+		t.Fatal("expected premium_active restored true after mint")
+	}
+}
+
+// TestListAndDeleteLapsedManagedAccountRespectCutoffAndManagedScope covers
+// the sweep's candidate query and delete-time re-check together: an account
+// lapsed well past the grace cutoff is listed and deletable (whole-account
+// cascade, including a seeded session row); an account lapsed inside the
+// grace window is never listed and DeleteLapsedManagedAccount refuses it
+// (ErrNotFound, untouched); and — the required regression — a self-hosted
+// account, which structurally can never carry a lapsed_at marker, is never
+// listed and can never be selected by DeleteLapsedManagedAccount either.
+func TestListAndDeleteLapsedManagedAccountRespectCutoffAndManagedScope(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	cutoff := now.Add(-60 * 24 * time.Hour)
+
+	const pastGraceID = "managed-past-grace"
+	const withinGraceID = "managed-within-grace"
+	const selfHostedID = "self-hosted-never-eligible"
+
+	createLapseTestAccount(t, store, pastGraceID, "managed")
+	createLapseTestAccount(t, store, withinGraceID, "managed")
+	createLapseTestAccount(t, store, selfHostedID, "self_hosted")
+
+	if _, err := store.CreateSession(ctx, models.Session{
+		ID:         pastGraceID + "-session",
+		AccountID:  pastGraceID,
+		TokenHash:  pastGraceID + "-token-hash",
+		CreatedAt:  now,
+		LastSeenAt: now,
+		ExpiresAt:  now.Add(24 * time.Hour),
+	}); err != nil {
+		t.Fatalf("seed session for past-grace account: %v", err)
+	}
+
+	if err := store.SetAccountLapsed(ctx, pastGraceID, now.Add(-90*24*time.Hour)); err != nil {
+		t.Fatalf("lapse past-grace account: %v", err)
+	}
+	if err := store.SetAccountLapsed(ctx, withinGraceID, now.Add(-10*24*time.Hour)); err != nil {
+		t.Fatalf("lapse within-grace account: %v", err)
+	}
+
+	candidateIDs, err := store.ListLapsedManagedAccountIDs(ctx, cutoff, 0)
+	if err != nil {
+		t.Fatalf("list lapsed managed account ids: %v", err)
+	}
+	if len(candidateIDs) != 1 || candidateIDs[0] != pastGraceID {
+		t.Fatalf("expected only %q as a candidate, got %#v", pastGraceID, candidateIDs)
+	}
+
+	// Within-grace: not eligible yet, delete is refused and the account
+	// survives untouched.
+	if err := store.DeleteLapsedManagedAccount(ctx, withinGraceID, cutoff); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound deleting a within-grace account, got %v", err)
+	}
+	if _, err := store.FindAccountByID(ctx, withinGraceID); err != nil {
+		t.Fatalf("expected within-grace account to survive, got %v", err)
+	}
+
+	// Self-hosted: structurally never eligible (no marker was ever set, and
+	// SetAccountLapsed would have refused it too — see the dedicated test).
+	// This is the regression: it can never be selected by the sweep delete.
+	if err := store.DeleteLapsedManagedAccount(ctx, selfHostedID, cutoff); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound deleting a self-hosted account, got %v", err)
+	}
+	if _, err := store.FindAccountByID(ctx, selfHostedID); err != nil {
+		t.Fatalf("expected self-hosted account to survive, got %v", err)
+	}
+
+	// Past-grace: eligible, whole-account cascade including the seeded
+	// session row.
+	if err := store.DeleteLapsedManagedAccount(ctx, pastGraceID, cutoff); err != nil {
+		t.Fatalf("delete past-grace account: %v", err)
+	}
+	if _, err := store.FindAccountByID(ctx, pastGraceID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected past-grace account row gone, got %v", err)
+	}
+	if _, err := store.FindSessionByTokenHash(ctx, pastGraceID+"-token-hash"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected past-grace account's session gone, got %v", err)
+	}
+
+	// Idempotent repeat: already gone.
+	if err := store.DeleteLapsedManagedAccount(ctx, pastGraceID, cutoff); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound on repeat delete, got %v", err)
+	}
+}
+
+// TestDeleteLapsedManagedAccountRecheckInsideTransactionPreservesRacingMint
+// is the core safety property the ADR requires: a session mint that races
+// the sweep — clearing lapsed_at via ClearAccountLapse/UpsertManagedAccount
+// AFTER the sweep already computed its cutoff and selected this account as a
+// candidate, but BEFORE the delete transaction commits — must make the
+// delete a no-op. Both the account row and its child data (a seeded session)
+// must survive completely: the child-table deletes inside the transaction
+// must never reach disk when the final conditional DELETE affects zero rows.
+func TestDeleteLapsedManagedAccountRecheckInsideTransactionPreservesRacingMint(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	cutoff := now.Add(-60 * 24 * time.Hour)
+
+	const racerID = "managed-racing-mint"
+	createLapseTestAccount(t, store, racerID, "managed")
+	if _, err := store.CreateSession(ctx, models.Session{
+		ID:         racerID + "-session",
+		AccountID:  racerID,
+		TokenHash:  racerID + "-token-hash",
+		CreatedAt:  now,
+		LastSeenAt: now,
+		ExpiresAt:  now.Add(24 * time.Hour),
+	}); err != nil {
+		t.Fatalf("seed session for racing account: %v", err)
+	}
+
+	if err := store.SetAccountLapsed(ctx, racerID, now.Add(-90*24*time.Hour)); err != nil {
+		t.Fatalf("lapse racing account: %v", err)
+	}
+
+	// The sweep would list racerID as a candidate at this cutoff (lapsed_at
+	// is 90 days old, well past the 60-day cutoff) — simulate that having
+	// already happened, then race a mint's marker-clear in before the
+	// delete transaction runs.
+	if err := store.ClearAccountLapse(ctx, racerID); err != nil {
+		t.Fatalf("simulate racing mint clearing lapse: %v", err)
+	}
+
+	if err := store.DeleteLapsedManagedAccount(ctx, racerID, cutoff); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound when a mint races the sweep, got %v", err)
+	}
+
+	if _, err := store.FindAccountByID(ctx, racerID); err != nil {
+		t.Fatalf("expected racing account row to survive completely, got %v", err)
+	}
+	if _, err := store.FindSessionByTokenHash(ctx, racerID+"-token-hash"); err != nil {
+		t.Fatalf("expected racing account's session to survive (transaction must fully roll back), got %v", err)
+	}
+}

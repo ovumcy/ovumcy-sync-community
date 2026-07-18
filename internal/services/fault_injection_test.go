@@ -55,3 +55,32 @@ func dropTable(t *testing.T, dbPath, table string) {
 		t.Fatalf("drop table %s: %v", table, err)
 	}
 }
+
+// dropAccountsLapsedAtColumn removes accounts.lapsed_at out from under a
+// live store through a second connection, leaving the accounts table (and
+// every other column) otherwise intact. This isolates a store-failure in
+// exactly the lapse-marker methods (SetAccountLapsed, ClearAccountLapse,
+// etc.) that name lapsed_at directly, without disturbing FindAccountByID's
+// own column list (which never selects lapsed_at) or any other account
+// field — so the account-lookup half of a lapse-signal call still succeeds
+// and only the subsequent write fails. Mirrors internal/db's identically
+// -named test helper (duplicated per this repo's existing per-package
+// fault-injection-helper convention rather than shared across packages).
+func dropAccountsLapsedAtColumn(t *testing.T, dbPath string) {
+	t.Helper()
+
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw sqlite: %v", err)
+	}
+	defer func() {
+		_ = raw.Close()
+	}()
+
+	if _, err := raw.Exec(`PRAGMA busy_timeout = 5000;`); err != nil {
+		t.Fatalf("configure raw sqlite: %v", err)
+	}
+	if _, err := raw.Exec(`ALTER TABLE accounts DROP COLUMN lapsed_at`); err != nil {
+		t.Fatalf("drop accounts.lapsed_at column: %v", err)
+	}
+}

@@ -7,9 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Entitlement-lapse cleanup for managed accounts.** New bridge endpoint `POST /managed/accounts/{account_id}/premium` lets the managed-auth service signal an entitlement lapse (`active: false`) or retract one (`active: true`); a new `purge-lapsed-accounts` CLI subcommand (`-dry-run`, `-limit`) erases a managed account's data once its lapse has exceeded the configurable `LAPSED_ACCOUNT_GRACE_PERIOD` (default 60 days). Self-hosted/community accounts are entirely unaffected — the lapse marker can only ever be set on a `mode=managed` account. See [docs/self-hosting.md](docs/self-hosting.md#entitlement-lapse-cleanup).
+
 ### Removed
 
 - The dormant `oss-fuzz/` scaffold (`project.yaml`, `Dockerfile`, `build.sh`, `ONBOARDING.md`). It never ran in this repo's own CI and required a separate, un-taken `google/oss-fuzz` onboarding step; the existing native `go test -fuzz` workflow (`fuzz.yml`) remains the fuzzing this project actually runs.
+
+### Security
+
+- The entitlement-lapse signal immediately revokes every still-valid session on a lapsed managed account (no entitlement, no sync), independent of the data-retention grace period.
+- The purge sweep re-checks the lapse marker and grace cutoff inside the same transaction as the deletion itself, so a session mint that races a scheduled sweep run always preserves the account intact.
 
 ## [0.3.0] - 2026-07-07
 

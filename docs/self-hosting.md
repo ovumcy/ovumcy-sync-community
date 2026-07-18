@@ -53,6 +53,7 @@ This service itself does not terminate TLS. Production deployments should not ex
 - `TRUSTED_PROXY_CIDRS=` set this to your reverse-proxy IP or CIDR when you want forwarded client IPs to participate in auth rate limiting
 - `FIELD_ENCRYPTION_KEY=` optional hex-encoded master key (>=32 bytes / 64 hex chars) that enables the TOTP second-factor surface; leave unset to disable 2FA entirely (see *Optional Two-Factor Authentication* below)
 - `TOTP_ISSUER=ovumcy-sync-community` optional label embedded in `otpauth://` provisioning URIs so authenticator apps know which instance the secret belongs to
+- `LAPSED_ACCOUNT_GRACE_PERIOD=1440h` (60 days) how long a managed account's data is kept after the managed bridge signals an entitlement lapse, before `purge-lapsed-accounts` erases it; irrelevant unless you run the managed bridge (see *Entitlement-Lapse Cleanup* below)
 
 Adjust limits only when you understand the tradeoff between usability and abuse resistance.
 
@@ -182,3 +183,38 @@ Operational notes:
 - It is not needed for normal self-hosted community usage.
 - It should not be exposed as an end-user login flow.
 - If you do not run a managed-auth service, leave `MANAGED_BRIDGE_TOKEN` unset.
+
+## Entitlement-Lapse Cleanup
+
+This section only applies if you run the managed bridge (`MANAGED_BRIDGE_TOKEN` set). Plain self-hosted/community accounts are entirely unaffected — they can never carry the lapse marker described below.
+
+When a managed account's subscription lapses, the separate managed-auth service calls `POST /managed/accounts/{account_id}/premium` with `{"active": false}`. This server responds by:
+
+1. Clearing `premium_active` and recording the lapse timestamp.
+2. Immediately revoking every still-valid session the account holds — no entitlement, no sync, from that moment on.
+3. Leaving the account's encrypted data (`encrypted_blobs`, the wrapped recovery-key package, devices) exactly where it is.
+
+The retained data is erased only after `LAPSED_ACCOUNT_GRACE_PERIOD` (default 60 days) has elapsed, via a separate operator-run subcommand:
+
+```bash
+ovumcy-sync-community purge-lapsed-accounts            # deletes eligible accounts
+ovumcy-sync-community purge-lapsed-accounts -dry-run    # report only, deletes nothing
+ovumcy-sync-community purge-lapsed-accounts -limit 200  # cap how many candidates one run examines
+```
+
+This is a cron/scheduler vehicle, not a background ticker inside `serve` — wire it up with cron, a systemd timer, or a Kubernetes CronJob, running once daily is sufficient. Each run prints a stable, greppable summary to stdout and never logs anything beyond account ids:
+
+```
+lapsed_account_sweep_dry_run=false
+lapsed_account_sweep_examined=3
+lapsed_account_sweep_deleted=1
+lapsed_account_sweep_deleted_account_id=<account id>
+```
+
+Operational notes:
+
+- **A resubscribe within the grace period is always safe.** The very next `POST /managed/session` mint for the account clears the lapse marker and restores `premium_active` on its own — no separate "un-lapse" call is required, and the device's encrypted snapshot is never touched.
+- **The signal is idempotent.** Replaying `{"active": false}` for an already-lapsed account never pushes the recorded lapse timestamp forward, so a retried or duplicated signal can never extend the retention window past the configured grace period.
+- **The sweep re-checks eligibility at the moment of deletion, not at the moment of listing.** If a resubscribe races a scheduled sweep run, the account and every row it owns survive intact — the delete is scoped inside one transaction that re-verifies the account is still lapsed and still past grace before anything is removed.
+- **This erases the whole account**, the same as `DELETE /account` or the managed-bridge purge: sessions, devices, the encrypted blob, the recovery-key package, and the account row itself, in one transaction. The device re-uploads its snapshot on the next sync after resubscribing past the grace period.
+- Deploy `ovumcy-sync-community` before the managed service starts calling this endpoint — it is purely additive and safe to have present-but-unused on an older managed deployment.

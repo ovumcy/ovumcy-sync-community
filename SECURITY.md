@@ -33,7 +33,15 @@ and returned byte-for-byte without interpretation.
 The service does not issue or verify premium entitlements. The
 `premium_active` capability flag is written only by `ovumcy-managed` through
 the bearer-gated managed bridge and is reflected to the client unchanged;
-self-hosted accounts always register with `premium_active=false`.
+self-hosted accounts always register with `premium_active=false`. When a
+managed account's entitlement lapses, the bridge's lifecycle signal
+(`POST /managed/accounts/{account_id}/premium`) records the lapse and
+revokes sync access immediately, but the account's own encrypted data is
+retained for a grace period (data minimization, not a security boundary —
+see *Managed Bridge* below and the entitlement-lapse grace-period bullet
+under *Accepted Residual Risks*) rather than erased on the spot, so a
+resubscribe within the grace period never loses the device's encrypted
+snapshot.
 
 ## Accepted Residual Risks
 
@@ -66,6 +74,19 @@ self-hosted accounts always register with `premium_active=false`.
 - **`managed:` login namespace.** Public registration cannot claim the
   `managed:` prefix, while bridge-provisioned logins use it by design behind
   the `MANAGED_BRIDGE_TOKEN` gate.
+- **Entitlement-lapse grace-period retention window.** After the managed
+  bridge signals a lapse, this server keeps the account's `encrypted_blobs`,
+  `recovery_key_packages`, `devices`, and shadow `accounts` row for
+  `LAPSED_ACCOUNT_GRACE_PERIOD` (default 60 days, operator-tunable) before
+  `purge-lapsed-accounts` erases them. This is a deliberate data-minimization
+  trade-off, not a plaintext-exposure risk — the retained blobs are the same
+  end-to-end-encrypted ciphertext an active account holds, this server never
+  gains any additional ability to read them, and sync access itself is cut
+  immediately at lapse (session revocation), not deferred to the grace
+  period. The window exists solely so a resubscribe does not cost the device
+  its encrypted snapshot. Community-mode (self-hosted, non-bridge) accounts
+  are entirely unaffected: the lapse marker can only ever be set by the
+  bridge, on a `mode=managed` account.
 
 ## Test Enforcement Matrix
 
@@ -215,6 +236,14 @@ on the account's next successful login.
 | The bridge purge erases every row held for a managed account — including `encrypted_blobs` — in one transaction | `TestServerManagedAccountPurgeCascades` in [internal/api/managed_account_purge_test.go](internal/api/managed_account_purge_test.go); `TestManagedBridgePurgeErasesBlobDeviceAndSessionThenIsIdempotent` in [internal/services/managed_bridge_service_test.go](internal/services/managed_bridge_service_test.go) |
 | The bridge purge is idempotent: a repeat purge and a never-existed account id both report success | `TestServerManagedAccountPurgeIsIdempotent` in [internal/api/managed_account_purge_test.go](internal/api/managed_account_purge_test.go); `TestManagedBridgePurgeUnknownAccountIsIdempotentNoOp` in [internal/services/managed_bridge_service_test.go](internal/services/managed_bridge_service_test.go) |
 | The bridge purge refuses to erase a self-hosted account and leaves its rows untouched | `TestManagedBridgePurgeRefusesSelfHostedAccount` in [internal/services/managed_bridge_service_test.go](internal/services/managed_bridge_service_test.go); `TestServerManagedAccountPurgeRefusesSelfHostedAccount` in [internal/api/managed_account_purge_test.go](internal/api/managed_account_purge_test.go) |
+| `POST /managed/accounts/{account_id}/premium` is disabled unless `MANAGED_BRIDGE_TOKEN` is configured and refuses a missing or wrong bearer | `TestServerRejectsManagedAccountPremiumWhenDisabled`, `TestServerManagedAccountPremiumRejectsWrongBridgeToken` in [internal/api/managed_account_premium_test.go](internal/api/managed_account_premium_test.go) |
+| `active=false` records `lapsed_at`, clears `premium_active`, and immediately revokes every still-valid session on the account (no entitlement, no sync); replaying the same signal is idempotent and never pushes `lapsed_at` forward | `TestSetAccountLapsedRecordsMarkerPreservesOnReplayAndScopesToManaged` in [internal/db/repositories_test.go](internal/db/repositories_test.go); `TestSetAccountLapseSignalRecordsLapseRevokesSessionsAndReplayIsIdempotent` in [internal/services/managed_bridge_service_test.go](internal/services/managed_bridge_service_test.go); `TestServerManagedAccountPremiumRecordsLapseRevokesSessionAndReplayIsIdempotent` in [internal/api/managed_account_premium_test.go](internal/api/managed_account_premium_test.go) |
+| `active=true` retracts a previously recorded lapse marker without touching `premium_active` or any session — reactivating premium and issuing a session stay the mint path's exclusive job | `TestClearAccountLapseRetractsMarkerWithoutTouchingPremiumActive` in [internal/db/repositories_test.go](internal/db/repositories_test.go); `TestSetAccountLapseSignalActiveTrueRetractsWithoutTouchingSessionsOrPremium` in [internal/services/managed_bridge_service_test.go](internal/services/managed_bridge_service_test.go); `TestServerManagedAccountPremiumClearsMarker` in [internal/api/managed_account_premium_test.go](internal/api/managed_account_premium_test.go) |
+| A session mint (`POST /managed/session`) always clears `lapsed_at` and restores `premium_active`, so a resubscribe is safe without a separate retraction call | `TestUpsertManagedAccountClearsLapsedAtOnMint` in [internal/db/repositories_test.go](internal/db/repositories_test.go); `TestSetAccountLapseSignalMintAfterLapseClearsMarkerAndReenables` in [internal/services/managed_bridge_service_test.go](internal/services/managed_bridge_service_test.go); `TestServerManagedAccountPremiumMintAfterLapseReenablesSync` in [internal/api/managed_account_premium_test.go](internal/api/managed_account_premium_test.go) |
+| The lapse signal refuses a self-hosted account and leaves it completely untouched; an unknown account id (either direction) is an idempotent no-op | `TestSetAccountLapseSignalRefusesSelfHostedAccount`, `TestSetAccountLapseSignalUnknownAccountIsIdempotentNoOp` in [internal/services/managed_bridge_service_test.go](internal/services/managed_bridge_service_test.go); `TestServerManagedAccountPremiumRefusesSelfHostedAccount`, `TestServerManagedAccountPremiumUnknownAccountIsIdempotentSuccess` in [internal/api/managed_account_premium_test.go](internal/api/managed_account_premium_test.go) |
+| The `purge-lapsed-accounts` sweep deletes a managed account — every row it owns, including `encrypted_blobs` — only once `lapsed_at` is older than the configured grace period; an account still inside the grace window is left untouched | `TestLapsedAccountSweepServiceDeletesPastGraceSurvivesWithinGraceAndSkipsCommunityAccounts`, `TestLapsedAccountSweepServiceCutoffIsFixedForTheWholeRun` in [internal/services/lapsed_account_sweep_service_test.go](internal/services/lapsed_account_sweep_service_test.go); `TestListAndDeleteLapsedManagedAccountRespectCutoffAndManagedScope` in [internal/db/repositories_test.go](internal/db/repositories_test.go) |
+| The sweep re-checks the lapse marker and grace cutoff INSIDE the same delete transaction as the erasure itself, so a session mint racing the sweep always preserves the account and every row it owns | `TestDeleteLapsedManagedAccountRecheckInsideTransactionPreservesRacingMint` in [internal/db/repositories_test.go](internal/db/repositories_test.go) |
+| A self-hosted (community-mode) account can never carry a lapse marker and can never be selected by the sweep, even by id — `SetAccountLapsed` itself refuses any non-managed account | `TestSetAccountLapsedRecordsMarkerPreservesOnReplayAndScopesToManaged`, `TestListAndDeleteLapsedManagedAccountRespectCutoffAndManagedScope` in [internal/db/repositories_test.go](internal/db/repositories_test.go); `TestLapsedAccountSweepServiceDeletesPastGraceSurvivesWithinGraceAndSkipsCommunityAccounts` in [internal/services/lapsed_account_sweep_service_test.go](internal/services/lapsed_account_sweep_service_test.go) |
 
 ### No Premium Entitlement Logic (Community Mode)
 

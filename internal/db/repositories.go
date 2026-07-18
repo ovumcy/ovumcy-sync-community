@@ -43,6 +43,14 @@ func (s *Store) CreateAccount(ctx context.Context, account models.Account) (mode
 	return account, nil
 }
 
+// UpsertManagedAccount provisions or refreshes a mode=managed account. Every
+// call — including a plain session-mint refresh, not just first provisioning
+// — clears lapsed_at unconditionally: this is the "mint clears the marker"
+// half of the entitlement-lapse cleanup contract (see SetAccountLapsed and
+// LapsedAccountSweepService), so an account that resubscribes and mints a
+// new session is immediately safe from the purge sweep again, without
+// needing a separate call. The INSERT branch never needs to set lapsed_at
+// explicitly: the column defaults to NULL for a brand-new row.
 func (s *Store) UpsertManagedAccount(ctx context.Context, account models.Account) (models.Account, error) {
 	_, err := s.db.ExecContext(
 		ctx,
@@ -53,7 +61,8 @@ ON CONFLICT(id) DO UPDATE SET
   login = excluded.login,
   password_hash = excluded.password_hash,
   mode = excluded.mode,
-  premium_active = excluded.premium_active
+  premium_active = excluded.premium_active,
+  lapsed_at = NULL
 `,
 		account.ID,
 		account.Login,
@@ -195,22 +204,8 @@ func (s *Store) DeleteAccount(ctx context.Context, accountID string) error {
 		_ = tx.Rollback()
 	}()
 
-	childTables := []string{
-		"sessions",
-		"devices",
-		"encrypted_blobs",
-		"recovery_key_packages",
-		"password_reset_tokens",
-		"totp_challenges",
-	}
-	for _, table := range childTables {
-		if _, err := tx.ExecContext(
-			ctx,
-			`DELETE FROM `+table+` WHERE account_id = ?`, // #nosec G202 -- table ranges only over the fixed childTables allowlist above, never user input; account_id is bound as a placeholder
-			accountID,
-		); err != nil {
-			return fmt.Errorf("delete account %s rows: %w", table, err)
-		}
+	if err := deleteAccountChildRows(ctx, tx, accountID); err != nil {
+		return err
 	}
 
 	result, err := tx.ExecContext(ctx, `DELETE FROM accounts WHERE id = ?`, accountID)
@@ -228,6 +223,232 @@ func (s *Store) DeleteAccount(ctx context.Context, accountID string) error {
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit delete account: %w", err)
+	}
+
+	return nil
+}
+
+// deleteAccountChildRows deletes every row keyed by account_id across the
+// tables accounts.id cascades to (sessions, devices, the encrypted sync
+// blob, the wrapped recovery-key package, pending password reset tokens, and
+// pending TOTP login challenges), inside the caller's transaction. It is the
+// shared body of DeleteAccount and DeleteLapsedManagedAccount: both erase
+// exactly the same child rows before deciding, via their own differently
+// -guarded final DELETE FROM accounts, whether the transaction actually
+// commits. Factored out so "which tables a full account erasure touches" has
+// one definition instead of two copies that could silently drift apart.
+func deleteAccountChildRows(ctx context.Context, tx *sql.Tx, accountID string) error {
+	childTables := []string{
+		"sessions",
+		"devices",
+		"encrypted_blobs",
+		"recovery_key_packages",
+		"password_reset_tokens",
+		"totp_challenges",
+	}
+	for _, table := range childTables {
+		if _, err := tx.ExecContext(
+			ctx,
+			`DELETE FROM `+table+` WHERE account_id = ?`, // #nosec G202 -- table ranges only over the fixed childTables allowlist above, never user input; account_id is bound as a placeholder
+			accountID,
+		); err != nil {
+			return fmt.Errorf("delete account %s rows: %w", table, err)
+		}
+	}
+	return nil
+}
+
+// DefaultLapsedAccountSweepLimit bounds how many candidate lapsed accounts
+// ListLapsedManagedAccountIDs returns when the caller (the
+// purge-lapsed-accounts CLI subcommand) does not request an explicit -limit.
+// Mirrors the intent of ovumcy-managed's ListGuestAccountIDs default: an
+// operator invocation with no flags must never attempt to load an unbounded
+// candidate set in one call.
+const DefaultLapsedAccountSweepLimit = 500
+
+// SetAccountLapsed records accountID's entitlement lapse for the purge sweep
+// (LapsedAccountSweepService): premium_active is cleared and lapsed_at is set
+// to lapsedAt UNLESS a lapse is already recorded, in which case the
+// already-stored lapsed_at is preserved (the COALESCE) rather than
+// overwritten. This is what makes a replayed lapse signal idempotent without
+// weakening the grace-period contract: repeating the signal can never push
+// the sweep's grace deadline further out, only a session mint
+// (UpsertManagedAccount) or an explicit active=true retraction
+// (ClearAccountLapse) resets the marker.
+//
+// Scoped to mode = 'managed' so the bridge credential can never mark a
+// self-hosted account lapsed even if the id collides — the same defense
+// PurgeManagedAccount already applies to deletion. Returns ErrNotFound when
+// accountID does not exist or is not a managed account (RowsAffected == 0);
+// callers use this the same way DeleteAccount's callers use ErrNotFound, to
+// make the write idempotent for an account this server has never heard of.
+func (s *Store) SetAccountLapsed(ctx context.Context, accountID string, lapsedAt time.Time) error {
+	result, err := s.db.ExecContext(
+		ctx,
+		`UPDATE accounts SET premium_active = 0, lapsed_at = COALESCE(lapsed_at, ?) WHERE id = ? AND mode = 'managed'`,
+		lapsedAt.UTC().Format(time.RFC3339Nano),
+		accountID,
+	)
+	if err != nil {
+		return fmt.Errorf("set account lapsed: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("set account lapsed rows: %w", err)
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+
+	return nil
+}
+
+// ClearAccountLapse retracts a previously recorded lapse marker WITHOUT
+// touching premium_active — turning premium back on and issuing a session
+// both remain the mint path's job (UpsertManagedAccount, called from
+// CreateManagedSession), which already clears lapsed_at on every successful
+// mint. This method backs the explicit active=true retraction path
+// (ManagedBridgeService.SetAccountLapseSignal): a managed-side false
+// positive corrected before the account's next session mint. Scoped to
+// mode = 'managed' for the same reason as SetAccountLapsed. Clearing an
+// already-clear marker is a no-op success. Returns ErrNotFound when
+// accountID does not exist or is not a managed account.
+func (s *Store) ClearAccountLapse(ctx context.Context, accountID string) error {
+	result, err := s.db.ExecContext(
+		ctx,
+		`UPDATE accounts SET lapsed_at = NULL WHERE id = ? AND mode = 'managed'`,
+		accountID,
+	)
+	if err != nil {
+		return fmt.Errorf("clear account lapse: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("clear account lapse rows: %w", err)
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+
+	return nil
+}
+
+// GetAccountLapsedAt returns accountID's current lapsed_at marker, or nil
+// when the account is not lapsed. There is no corresponding field on
+// models.Account — lapsed_at is written and read only by the narrow
+// lapse-cleanup call paths above and by tests asserting their contract,
+// mirroring how password_reset_tokens.consumed_at has no Go struct field
+// either. Returns ErrNotFound when accountID does not exist.
+func (s *Store) GetAccountLapsedAt(ctx context.Context, accountID string) (*time.Time, error) {
+	var lapsedAt sql.NullString
+	err := s.db.QueryRowContext(
+		ctx,
+		`SELECT lapsed_at FROM accounts WHERE id = ?`,
+		accountID,
+	).Scan(&lapsedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("get account lapsed_at: %w", err)
+	}
+	if !lapsedAt.Valid {
+		return nil, nil
+	}
+
+	parsed := mustParseTime(lapsedAt.String)
+	return &parsed, nil
+}
+
+// ListLapsedManagedAccountIDs returns up to limit managed account ids whose
+// lapsed_at marker is set and strictly older than cutoff (lapsed_at <
+// cutoff), oldest lapse first. A non-positive limit falls back to
+// DefaultLapsedAccountSweepLimit. mode = 'managed' is an explicit
+// defense-in-depth filter, not the only thing keeping self-hosted accounts
+// out of this list — SetAccountLapsed's own WHERE clause means a
+// self-hosted account's lapsed_at can never be non-NULL in the first place.
+func (s *Store) ListLapsedManagedAccountIDs(ctx context.Context, cutoff time.Time, limit int) ([]string, error) {
+	if limit <= 0 {
+		limit = DefaultLapsedAccountSweepLimit
+	}
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id FROM accounts WHERE mode = 'managed' AND lapsed_at IS NOT NULL AND lapsed_at < ? ORDER BY lapsed_at LIMIT ?`,
+		cutoff.UTC().Format(time.RFC3339Nano),
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list lapsed managed account ids: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan lapsed managed account id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list lapsed managed account ids rows: %w", err)
+	}
+
+	return ids, nil
+}
+
+// DeleteLapsedManagedAccount erases accountID exactly like DeleteAccount —
+// every row this server holds for it, in one transaction — but ONLY when it
+// is still a managed account whose lapsed_at marker is set and strictly
+// older than cutoff at the moment the transaction runs. This is the
+// delete-time entitlement re-check the lapse-cleanup design requires: a
+// session mint between the sweep's candidate listing (
+// ListLapsedManagedAccountIDs) and this call clears lapsed_at
+// (UpsertManagedAccount), which makes the final conditional DELETE affect
+// zero rows, so the whole transaction rolls back — including the
+// unconditional child-table deletes above, which then never reach disk — and
+// the account (and its data) survives completely intact.
+//
+// Returns ErrNotFound both when the account no longer exists AND when it no
+// longer qualifies (self-hosted, un-lapsed, or lapsed less than cutoff ago)
+// — deliberately indistinguishable, since the caller's response to either is
+// identical: skip it, it is not eligible for deletion right now.
+func (s *Store) DeleteLapsedManagedAccount(ctx context.Context, accountID string, cutoff time.Time) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin delete lapsed account: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if err := deleteAccountChildRows(ctx, tx, accountID); err != nil {
+		return err
+	}
+
+	result, err := tx.ExecContext(
+		ctx,
+		`DELETE FROM accounts WHERE id = ? AND mode = 'managed' AND lapsed_at IS NOT NULL AND lapsed_at < ?`,
+		accountID,
+		cutoff.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return fmt.Errorf("delete lapsed account row: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete lapsed account row rows: %w", err)
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit delete lapsed account: %w", err)
 	}
 
 	return nil

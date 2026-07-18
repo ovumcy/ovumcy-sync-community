@@ -855,6 +855,106 @@ paths:
                 bridgeDisabled:
                   value: { error: managed_bridge_disabled }
 
+  /managed/accounts/{account_id}/premium:
+    post:
+      tags: [managed-bridge]
+      operationId: setManagedAccountPremiumLapse
+      summary: Record or retract a managed account's entitlement-lapse signal
+      description: |
+        Machine-to-machine only: called by the separate trusted managed-auth
+        service when a managed-cloud account's subscription lapses (or a
+        previously reported lapse turns out to be a false positive).
+        Requires the same `MANAGED_BRIDGE_TOKEN` bearer credential as
+        `POST /managed/session` and the account-purge endpoint; the route is
+        disabled (503) whenever that token is not configured on this server.
+        A lifecycle signal only — the request and response never carry
+        anything beyond the account id and the boolean flag.
+
+        `active: false` records the lapse (`lapsed_at`), clears
+        `premium_active`, and immediately revokes every still-valid session
+        the account holds — no entitlement, no sync, from that moment on.
+        The account's encrypted data (blobs, recovery-key package, devices)
+        is left alone; it is erased only once `lapsed_at` is older than the
+        server's configured `LAPSED_ACCOUNT_GRACE_PERIOD` (default 60 days),
+        by the separate `purge-lapsed-accounts` operator subcommand.
+
+        `active: true` retracts a previously recorded lapse marker WITHOUT
+        touching `premium_active` or any session — reactivating premium and
+        issuing a session both remain `POST /managed/session`'s job, which
+        already clears the marker on every successful mint. A resubscribed
+        account therefore never needs this call: the next session mint alone
+        is sufficient.
+
+        Idempotent: replaying the same `active` value again is a no-op that
+        still reports success. Replaying `active: false` never pushes the
+        recorded `lapsed_at` forward, so a duplicated or retried signal can
+        never extend the retention window past the configured grace period.
+
+        Only `mode=managed` accounts can be affected: a self-hosted account
+        whose id collides is refused with `invalid_managed_account` and left
+        untouched. An account this server has never heard of, or one that is
+        gone by the time the write runs, is a benign no-op success in either
+        direction — the managed caller does not need to know whether this
+        server has ever seen the account.
+      security:
+        - managedBridgeAuth: []
+      parameters:
+        - name: account_id
+          in: path
+          required: true
+          description: Opaque managed-account identifier (lowercased/trimmed server-side); must match `^[a-z0-9][a-z0-9_-]{7,127}$`, the same shape as the `POST /managed/session` account_id.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ManagedAccountPremiumRequest"
+      responses:
+        "200":
+          description: Lapse signal processed (recorded, retracted, or already in that state).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+              examples:
+                lapseRecorded:
+                  summary: active=false
+                  value: { status: lapse_recorded }
+                lapseCleared:
+                  summary: active=true
+                  value: { status: lapse_cleared }
+        "400":
+          description: account_id fails the managed-account id pattern, or names an existing non-managed account.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidManagedAccount:
+                  value: { error: invalid_managed_account }
+        "401":
+          description: Missing/invalid MANAGED_BRIDGE_TOKEN bearer credential.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  value: { error: unauthorized }
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          description: MANAGED_BRIDGE_TOKEN is not configured on this server; the bridge is disabled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                bridgeDisabled:
+                  value: { error: managed_bridge_disabled }
+
   /sync/capabilities:
     get:
       tags: [sync]
@@ -1427,6 +1527,14 @@ components:
           type: string
           description: Opaque managed-account identifier (lowercased/trimmed server-side); must match `^[a-z0-9][a-z0-9_-]{7,127}$`.
       required: [account_id]
+      additionalProperties: false
+
+    ManagedAccountPremiumRequest:
+      type: object
+      properties:
+        active:
+          type: boolean
+          description: 'false records an entitlement lapse (clears premium_active, revokes sessions); true retracts a previously recorded lapse without touching premium_active or sessions. Omitted decodes to false.'
       additionalProperties: false
 
     CapabilityDocument:

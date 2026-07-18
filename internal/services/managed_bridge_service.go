@@ -113,6 +113,80 @@ func (s *ManagedBridgeService) PurgeManagedAccount(
 	return nil
 }
 
+// SetAccountLapseSignal implements the sync-plane half of the
+// entitlement-lapse bridge contract (POST /managed/accounts/{account_id}/
+// premium, {"active": bool}):
+//
+//   - active == false records accountID's lapse (db.Store.SetAccountLapsed)
+//     and immediately revokes every still-valid session it holds — owner
+//     decision: no entitlement, no sync. The encrypted data itself is left
+//     alone; it waits out LapsedAccountSweepService's grace period.
+//   - active == true retracts a previously recorded lapse marker
+//     (db.Store.ClearAccountLapse) — e.g. a managed-side false positive
+//     caught before the account's next session mint — WITHOUT touching
+//     premium_active or sessions. Turning premium_active back on and
+//     re-issuing a session both remain CreateManagedSession's job, so a bare
+//     retraction here can never grant sync access on its own.
+//
+// Idempotent: replaying the SAME active value again is a no-op that still
+// reports success. In particular, a repeated active=false can never push the
+// recorded lapse timestamp forward — SetAccountLapsed preserves whichever
+// lapsed_at was recorded first — so replay can never re-extend the purge
+// grace deadline.
+//
+// An account this server has never heard of, or one that vanished between
+// the lookup and the write, is treated the same as PurgeManagedAccount: a
+// benign no-op success, not an error — the managed caller does not need to
+// know whether this server has ever seen the account. A self-hosted account
+// whose id collides is refused with ErrInvalidManagedAccount and left
+// completely untouched, mirroring PurgeManagedAccount's own refusal for the
+// same reason: the bridge credential must never be able to affect a
+// self-hosted user's account.
+func (s *ManagedBridgeService) SetAccountLapseSignal(
+	ctx context.Context,
+	accountID string,
+	active bool,
+) error {
+	accountID = strings.TrimSpace(strings.ToLower(accountID))
+	if !managedAccountIDPattern.MatchString(accountID) {
+		return ErrInvalidManagedAccount
+	}
+
+	account, err := s.store.FindAccountByID(ctx, accountID)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	if account.Mode != "managed" {
+		return ErrInvalidManagedAccount
+	}
+
+	if active {
+		if err := s.store.ClearAccountLapse(ctx, accountID); err != nil {
+			if errors.Is(err, db.ErrNotFound) {
+				return nil // codecov:ignore -- TOCTOU race: account deleted (or its mode/marker changed) between the lookup above and this clear; an idempotent no-op that is not deterministically reachable in-process without a fragile hack (see testing rules), while a store failure lands on the covered return below.
+			}
+			return err
+		}
+		return nil
+	}
+
+	if err := s.store.SetAccountLapsed(ctx, accountID, s.now().UTC()); err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return nil // codecov:ignore -- TOCTOU race: account deleted (or its mode changed) between the lookup above and this write; an idempotent no-op that is not deterministically reachable in-process without a fragile hack (see testing rules), while a store failure lands on the covered return below.
+		}
+		return err
+	}
+
+	if err := s.store.DeleteAllSessionsForAccount(ctx, accountID); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func existingOrCreatedAt(account models.Account, fallback time.Time) time.Time {
 	if !account.CreatedAt.IsZero() {
 		return account.CreatedAt

@@ -46,8 +46,10 @@ func run(args []string) error {
 		return runMigrate(cfg)
 	case "healthcheck":
 		return runHealthcheck(cfg.BindAddr, 0)
+	case "purge-lapsed-accounts":
+		return runPurgeLapsedAccounts(cfg, args[1:], os.Stdout)
 	default:
-		return fmt.Errorf("unknown command %q; use `serve`, `migrate`, or `healthcheck`", command)
+		return fmt.Errorf("unknown command %q; use `serve`, `migrate`, `healthcheck`, or `purge-lapsed-accounts`", command)
 	}
 }
 

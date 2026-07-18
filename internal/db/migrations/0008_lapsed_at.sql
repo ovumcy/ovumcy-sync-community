@@ -1,0 +1,13 @@
+-- Adds the entitlement-lapse marker for managed accounts. NULL means "not
+-- lapsed" (the only value any self-hosted account will ever carry, since no
+-- code path sets this column for mode != 'managed'). A non-NULL value is set
+-- by the managed bridge's lapse signal (POST /managed/accounts/{account_id}/
+-- premium with {"active": false}, see ManagedBridgeService.
+-- SetAccountLapseSignal) and cleared by the very next successful session
+-- mint (UpsertManagedAccount, called from CreateManagedSession) so a
+-- resubscribed account is safe. The purge-lapsed-accounts CLI subcommand
+-- (see LapsedAccountSweepService) erases the whole shadow account once
+-- lapsed_at is older than the configured grace period, re-checking this same
+-- marker inside its delete transaction so a mint that races the sweep always
+-- wins.
+ALTER TABLE accounts ADD COLUMN lapsed_at TEXT;

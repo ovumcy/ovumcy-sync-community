@@ -39,6 +39,32 @@ func seedFaultInjectionAccount(t *testing.T, store *Store, accountID string) mod
 	return account
 }
 
+// dropAccountsLapsedAtColumn removes accounts.lapsed_at out from under a
+// live *Store through a second connection, leaving the accounts table (and
+// every other column and table) otherwise intact. Unlike dropTable's
+// whole-table removal, this targets a single column so foreign-key
+// resolution for tables that reference accounts(id) keeps working — only
+// SQL that names lapsed_at directly starts failing. Requires SQLite's
+// ALTER TABLE ... DROP COLUMN (available since SQLite 3.35).
+func dropAccountsLapsedAtColumn(t *testing.T, dbPath string) {
+	t.Helper()
+
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw sqlite: %v", err)
+	}
+	defer func() {
+		_ = raw.Close()
+	}()
+
+	if _, err := raw.Exec(`PRAGMA busy_timeout = 5000;`); err != nil {
+		t.Fatalf("configure raw sqlite: %v", err)
+	}
+	if _, err := raw.Exec(`ALTER TABLE accounts DROP COLUMN lapsed_at`); err != nil {
+		t.Fatalf("drop accounts.lapsed_at column: %v", err)
+	}
+}
+
 // TestAccountFieldUpdatesHappyPathAndNotFound exercises the success and
 // not-found branches of the three account-field update methods
 // (UpdateAccountPasswordHash, UpdateAccountPasswordAndRecoveryHash,
@@ -965,4 +991,132 @@ func TestScanAccountReturnsGenericErrorOnTypeMismatch(t *testing.T) {
 	} else if errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected a scan-error, not ErrNotFound, got %v", err)
 	}
+}
+
+// TestGetAccountLapsedAtReturnsNotFoundForMissingAccount exercises
+// GetAccountLapsedAt's sql.ErrNoRows -> ErrNotFound branch, distinct from
+// its "column is NULL" (not lapsed) and generic scan-error branches covered
+// elsewhere.
+func TestGetAccountLapsedAtReturnsNotFoundForMissingAccount(t *testing.T) {
+	store := openTestStore(t)
+
+	if _, err := store.GetAccountLapsedAt(context.Background(), "missing-account"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for missing account, got %v", err)
+	}
+}
+
+// TestLapseMarkerMethodsReturnErrorWhenAccountsTableIsDropped exercises the
+// generic ExecContext/QueryRowContext/QueryContext-error branches of
+// SetAccountLapsed, ClearAccountLapse, GetAccountLapsedAt, and
+// ListLapsedManagedAccountIDs by dropping the accounts table out from under
+// a live store.
+func TestLapseMarkerMethodsReturnErrorWhenAccountsTableIsDropped(t *testing.T) {
+	store, dbPath := newFileBackedTestStore(t)
+	ctx := context.Background()
+	target := seedFaultInjectionAccount(t, store, "account-target")
+
+	dropTable(t, dbPath, "accounts")
+
+	if err := store.SetAccountLapsed(ctx, target.ID, time.Now().UTC()); err == nil {
+		t.Fatal("expected error setting account lapsed after accounts table is dropped")
+	} else if errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected a store-failure error, not ErrNotFound, got %v", err)
+	}
+
+	if err := store.ClearAccountLapse(ctx, target.ID); err == nil {
+		t.Fatal("expected error clearing account lapse after accounts table is dropped")
+	} else if errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected a store-failure error, not ErrNotFound, got %v", err)
+	}
+
+	if _, err := store.GetAccountLapsedAt(ctx, target.ID); err == nil {
+		t.Fatal("expected error getting account lapsed_at after accounts table is dropped")
+	} else if errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected a store-failure error, not ErrNotFound, got %v", err)
+	}
+
+	if _, err := store.ListLapsedManagedAccountIDs(ctx, time.Now().UTC(), 0); err == nil {
+		t.Fatal("expected error listing lapsed managed account ids after accounts table is dropped")
+	}
+}
+
+// TestDeleteLapsedManagedAccountFaultInjection covers
+// DeleteLapsedManagedAccount's transactional error branches: a dropped child
+// table aborts and rolls back before the accounts row is ever touched (the
+// account and its remaining child rows all survive), a dropped accounts
+// table fails the final conditional DELETE itself once every child table has
+// already been cleared, and a closed store fails at BeginTx before the
+// transaction ever starts.
+func TestDeleteLapsedManagedAccountFaultInjection(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	cutoff := now.Add(-60 * 24 * time.Hour)
+
+	t.Run("child table dropped rolls back and survives", func(t *testing.T) {
+		store, dbPath := newFileBackedTestStore(t)
+		const targetID = "account-target-managed"
+		createLapseTestAccount(t, store, targetID, "managed")
+		if err := store.SetAccountLapsed(ctx, targetID, now.Add(-90*24*time.Hour)); err != nil {
+			t.Fatalf("set account lapsed: %v", err)
+		}
+
+		dropTable(t, dbPath, "sessions")
+
+		err := store.DeleteLapsedManagedAccount(ctx, targetID, cutoff)
+		if err == nil {
+			t.Fatal("expected DeleteLapsedManagedAccount to fail when a child table is dropped")
+		}
+		if !strings.Contains(err.Error(), "delete account sessions rows") {
+			t.Fatalf("expected the sessions child-delete error to surface, got %v", err)
+		}
+
+		if _, findErr := store.FindAccountByID(ctx, targetID); findErr != nil {
+			t.Fatalf("expected account row to survive the rolled-back delete, got %v", findErr)
+		}
+	})
+
+	t.Run("accounts.lapsed_at column dropped fails the final delete", func(t *testing.T) {
+		// Unlike dropping the whole accounts table (which breaks the EARLIER
+		// child-table deletes too: sessions/devices/etc. all declare
+		// FOREIGN KEY(account_id) REFERENCES accounts(id), and SQLite's FK
+		// enforcement fails to compile a DELETE against any such child table
+		// once the referenced table no longer exists at all, well before
+		// reaching the accounts row itself), dropping only the lapsed_at
+		// COLUMN leaves the accounts table and its FK target intact — every
+		// child delete still succeeds — while the final conditional DELETE's
+		// own WHERE clause, which names lapsed_at directly, fails to
+		// compile. This isolates exactly the "delete lapsed account row"
+		// branch.
+		store, dbPath := newFileBackedTestStore(t)
+		const targetID = "account-target-managed"
+		createLapseTestAccount(t, store, targetID, "managed")
+		if err := store.SetAccountLapsed(ctx, targetID, now.Add(-90*24*time.Hour)); err != nil {
+			t.Fatalf("set account lapsed: %v", err)
+		}
+
+		dropAccountsLapsedAtColumn(t, dbPath)
+
+		err := store.DeleteLapsedManagedAccount(ctx, targetID, cutoff)
+		if err == nil || errors.Is(err, ErrNotFound) {
+			t.Fatalf("expected a store-failure error from the final delete, got %v", err)
+		}
+		if !strings.Contains(err.Error(), "delete lapsed account row") {
+			t.Fatalf("expected the accounts-row delete error to surface, got %v", err)
+		}
+	})
+
+	t.Run("closed store fails at begin transaction", func(t *testing.T) {
+		store := openTestStore(t)
+		if err := store.Close(); err != nil {
+			t.Fatalf("close store: %v", err)
+		}
+
+		err := store.DeleteLapsedManagedAccount(ctx, "account-target", cutoff)
+		if err == nil || errors.Is(err, ErrNotFound) {
+			t.Fatalf("expected a store-failure error from BeginTx on a closed store, got %v", err)
+		}
+		if !strings.Contains(err.Error(), "begin delete lapsed account") {
+			t.Fatalf("expected the begin-transaction error to surface, got %v", err)
+		}
+	})
 }
