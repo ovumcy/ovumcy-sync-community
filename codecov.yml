@@ -13,13 +13,16 @@ coverage:
         informational: false
     patch:
       default:
-        # Require every modified, coverable line in a PR to be covered by tests
-        # ("All modified and coverable lines are covered by tests"). Genuinely
-        # unreachable lines can be excluded inline with a `// codecov:ignore`
-        # comment rather than lowering this gate.
+        # The 100% modified-lines rule is ENFORCED by the in-CI
+        # scripts/patchcov job (required status "patch-coverage"), which
+        # understands this repo's inline `// codecov:ignore` convention for
+        # genuinely unreachable lines. The Codecov service cannot parse those
+        # annotations and would double-report them as failures, so its patch
+        # status is informational: dashboards and PR annotations only, never
+        # a second gate.
         target: 100%
         threshold: 0%
-        informational: false
+        informational: true
 
 # Tooling is excluded from coverage reporting, matching the in-CI
 # scripts/patchcov gate. This is not product code. (Unlike the sibling
