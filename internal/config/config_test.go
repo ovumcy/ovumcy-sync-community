@@ -243,3 +243,37 @@ func TestEnvHelperParsersUseFallbacksAndRejectInvalidInput(t *testing.T) {
 		t.Fatal("expected trusted proxy parser to reject invalid input")
 	}
 }
+
+// TestParseTrustedProxyCIDRRejectsEmptyValue exercises the empty-input guard
+// directly (an env entry that collapsed to "" after trimming, e.g. a stray
+// comma in TRUSTED_PROXY_CIDRS).
+func TestParseTrustedProxyCIDRRejectsEmptyValue(t *testing.T) {
+	if _, err := ParseTrustedProxyCIDR("   "); err == nil {
+		t.Fatal("expected an empty/whitespace-only value to be rejected")
+	}
+}
+
+// TestParseTrustedProxyCIDRRejectsMalformedCIDRSuffix exercises the
+// netip.ParsePrefix error branch specifically: a value containing "/" takes
+// the CIDR parse path, distinct from the bare-address path already covered
+// by TestEnvHelperParsersUseFallbacksAndRejectInvalidInput's "invalid-cidr"
+// case (which has no "/" and so exercises netip.ParseAddr instead).
+func TestParseTrustedProxyCIDRRejectsMalformedCIDRSuffix(t *testing.T) {
+	if _, err := ParseTrustedProxyCIDR("10.0.0.0/999"); err == nil {
+		t.Fatal("expected an out-of-range CIDR suffix to be rejected")
+	}
+}
+
+// TestParseTrustedProxyCIDRAcceptsBareIPv6Address exercises the IPv6 branch
+// of the bare-address path (PrefixFrom(addr, 128)): every existing test only
+// exercises a bare IPv4 address (-> /32), so the IPv6 /128 branch was never
+// reached.
+func TestParseTrustedProxyCIDRAcceptsBareIPv6Address(t *testing.T) {
+	prefix, err := ParseTrustedProxyCIDR("::1")
+	if err != nil {
+		t.Fatalf("unexpected error parsing a bare IPv6 address: %v", err)
+	}
+	if prefix.String() != "::1/128" {
+		t.Fatalf("expected ::1/128, got %q", prefix.String())
+	}
+}

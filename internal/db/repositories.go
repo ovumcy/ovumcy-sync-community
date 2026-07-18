@@ -115,7 +115,7 @@ func (s *Store) UpdateAccountPasswordHash(ctx context.Context, accountID string,
 
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("update account password rows: %w", err)
+		return fmt.Errorf("update account password rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); needs a fake driver, the same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
 	}
 	if affected == 0 {
 		return ErrNotFound
@@ -143,7 +143,7 @@ func (s *Store) UpdateAccountPasswordAndRecoveryHash(
 
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("update account password and recovery rows: %w", err)
+		return fmt.Errorf("update account password and recovery rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); needs a fake driver, the same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
 	}
 	if affected == 0 {
 		return ErrNotFound
@@ -169,7 +169,7 @@ func (s *Store) UpdateAccountRecoveryCodeHash(
 
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("update account recovery code rows: %w", err)
+		return fmt.Errorf("update account recovery code rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); needs a fake driver, the same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
 	}
 	if affected == 0 {
 		return ErrNotFound
@@ -224,19 +224,19 @@ func (s *Store) DeleteAccount(ctx context.Context, accountID string) error {
 
 	result, err := tx.ExecContext(ctx, `DELETE FROM accounts WHERE id = ?`, accountID)
 	if err != nil {
-		return fmt.Errorf("delete account row: %w", err)
+		return fmt.Errorf("delete account row: %w", err) // codecov:ignore -- isolating this specific step needs "accounts" to exist for all 6 child-table deletes above to succeed, then vanish only for this one; dropping "accounts" wholesale instead fails the very first child delete (confirmed empirically: with foreign_keys=ON, SQLite rejects DML against a child table whose FK-referenced table is gone, even though the statement never touches the FK column), same as TestDeleteAccountReturnsErrorAndRollsBackWhenAChildTableIsDropped. Needs a fake driver.
 	}
 
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("delete account row rows: %w", err)
+		return fmt.Errorf("delete account row rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); needs a fake driver, the same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
 	}
 	if affected == 0 {
 		return ErrNotFound
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit delete account: %w", err)
+		return fmt.Errorf("commit delete account: %w", err) // codecov:ignore -- on this store's single-connection sqlite (WAL, busy_timeout) a COMMIT whose statements all succeeded has no deterministically injectable in-process failure; needs a fake driver, the same deviation documented for DeleteLapsedManagedAccount's commit branch below.
 	}
 
 	return nil
@@ -500,7 +500,7 @@ func (s *Store) TouchSession(ctx context.Context, sessionID string, lastSeenAt t
 
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("touch session rows: %w", err)
+		return fmt.Errorf("touch session rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); needs a fake driver, the same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
 	}
 	if affected == 0 {
 		return ErrNotFound
@@ -538,7 +538,7 @@ func (s *Store) UpdateTOTPSecretAndEnabled(
 
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("update totp secret rows: %w", err)
+		return fmt.Errorf("update totp secret rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); needs a fake driver, the same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
 	}
 	if affected == 0 {
 		return ErrNotFound
@@ -572,7 +572,7 @@ func (s *Store) SetTOTPEnabled(
 
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("set totp enabled rows: %w", err)
+		return fmt.Errorf("set totp enabled rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); needs a fake driver, the same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
 	}
 	if affected == 0 {
 		return ErrNotFound
@@ -603,7 +603,7 @@ func (s *Store) ClaimTOTPStep(
 
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return false, fmt.Errorf("claim totp step rows: %w", err)
+		return false, fmt.Errorf("claim totp step rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); needs a fake driver, the same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
 	}
 	return affected == 1, nil
 }
@@ -842,7 +842,7 @@ func (s *Store) DeleteSessionByTokenHash(ctx context.Context, tokenHash string) 
 
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("delete session rows: %w", err)
+		return fmt.Errorf("delete session rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); needs a fake driver, the same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
 	}
 	if affected == 0 {
 		return ErrNotFound
@@ -916,12 +916,12 @@ func (s *Store) ListDevicesForAccount(ctx context.Context, accountID string) ([]
 	for rows.Next() {
 		device, scanErr := scanDevice(rows)
 		if scanErr != nil {
-			return nil, scanErr
+			return nil, scanErr // codecov:ignore -- every scanDevice destination is a plain string and SQLite's TEXT-affinity columns coerce any stored value (including BLOB) to string without a scan error, the same limitation TestScanAccountReturnsGenericErrorOnTypeMismatch documents for scanSession; not reachable via SQL-DML alone, needs a fake driver.
 		}
 		devices = append(devices, device)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list devices rows: %w", err)
+		return nil, fmt.Errorf("list devices rows: %w", err) // codecov:ignore -- a mid-iteration step failure is not deterministically injectable in-process: a dropped table fails QueryContext first (covered), and row-shape corruption surfaces at rows.Scan (see scanErr above); needs a fake driver, the same deviation documented for ListLapsedManagedAccountIDs' rows.Err() branch.
 	}
 
 	return devices, nil
@@ -943,7 +943,7 @@ func (s *Store) DeleteDevice(ctx context.Context, accountID string, deviceID str
 
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("delete device rows: %w", err)
+		return fmt.Errorf("delete device rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); needs a fake driver, the same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
 	}
 	if affected == 0 {
 		return ErrNotFound
@@ -1003,7 +1003,7 @@ WHERE excluded.generation > encrypted_blobs.generation
 
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return models.EncryptedBlob{}, fmt.Errorf("upsert blob rows: %w", err)
+		return models.EncryptedBlob{}, fmt.Errorf("upsert blob rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); not reachable via the table-drop technique (ExecContext itself fails first, before RowsAffected is ever called) — see TestBlobAndRecoveryUpsertsReturnErrorWhenTablesAreDropped in fault_injection_test.go. Needs a fake driver.
 	}
 	if affected == 0 {
 		return models.EncryptedBlob{}, ErrStaleGeneration

@@ -37,12 +37,12 @@ func EncryptField(plaintext string, secretKey []byte, aad []byte) (string, error
 
 	aead, err := newFieldCryptoAEAD(secretKey)
 	if err != nil {
-		return "", err
+		return "", err // codecov:ignore -- newFieldCryptoAEAD cannot fail for a non-empty secretKey (HKDF-SHA256 expand to 32 bytes never errors below its ~8KB output ceiling, and 32 bytes is always a valid AES key size); needs a fake driver to fault the primitives themselves.
 	}
 
 	nonce := make([]byte, aead.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return "", fmt.Errorf("field crypto: generate nonce: %w", err)
+		return "", fmt.Errorf("field crypto: generate nonce: %w", err) // codecov:ignore -- crypto/rand.Reader failing is not deterministically injectable in-process without swapping the package-level Reader, a global-state hack that would risk polluting concurrent tests; a crypto-primitive error that cannot occur in practice.
 	}
 
 	ciphertext := aead.Seal(nil, nonce, []byte(plaintext), aad)
@@ -66,7 +66,7 @@ func DecryptField(encoded string, secretKey []byte, aad []byte) (string, error) 
 
 	aead, err := newFieldCryptoAEAD(secretKey)
 	if err != nil {
-		return "", err
+		return "", err // codecov:ignore -- same unreachable newFieldCryptoAEAD failure as EncryptField's identical call above; needs a fake driver.
 	}
 
 	payload, err := base64.RawURLEncoding.DecodeString(encoded)
@@ -92,17 +92,17 @@ func newFieldCryptoAEAD(secretKey []byte) (cipher.AEAD, error) {
 	reader := hkdf.New(sha256.New, secretKey, []byte(fieldCryptoSaltLabel), []byte(fieldCryptoInfoLabel))
 	derivedKey := make([]byte, 32)
 	if _, err := io.ReadFull(reader, derivedKey); err != nil {
-		return nil, fmt.Errorf("field crypto: derive key: %w", err)
+		return nil, fmt.Errorf("field crypto: derive key: %w", err) // codecov:ignore -- HKDF-SHA256 expand can only fail past ~8160 bytes of output (255 * hash size); a fixed 32-byte read never approaches that ceiling for any secretKey, so this is a crypto-primitive error that cannot occur.
 	}
 
 	block, err := aes.NewCipher(derivedKey)
 	if err != nil {
-		return nil, fmt.Errorf("field crypto: create cipher: %w", err)
+		return nil, fmt.Errorf("field crypto: create cipher: %w", err) // codecov:ignore -- derivedKey is always exactly 32 bytes (the make() length above), always a valid AES-256 key size; aes.NewCipher cannot reject it. Crypto-primitive error that cannot occur.
 	}
 
 	aead, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, fmt.Errorf("field crypto: create aead: %w", err)
+		return nil, fmt.Errorf("field crypto: create aead: %w", err) // codecov:ignore -- cipher.NewGCM only rejects a non-standard nonce size passed via NewGCMWithNonceSize; the default 12-byte nonce from a real AES block cipher never fails here. Crypto-primitive error that cannot occur.
 	}
 
 	return aead, nil

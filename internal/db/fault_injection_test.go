@@ -719,6 +719,33 @@ func TestMustParseTimeAcceptsSQLiteDefaultTimestampFormat(t *testing.T) {
 	}
 }
 
+// TestMustParseTimePanicsOnUnparseableTimestamp exercises mustParseTime's
+// panic branch directly. Every write path in this package formats
+// timestamps via time.RFC3339Nano, with the SQLite default format as the
+// only documented fallback (see the test above); a value matching neither
+// is corruption a raw write into the database file could genuinely produce,
+// and mustParseTime's contract is to fail loudly rather than silently
+// propagate a zero time. Called directly (mustParseTime is unexported, same
+// as the happy-path test above), not through a repository method: no
+// production write path can ever persist a value shaped like this, so
+// reaching the panic through a real column read would need a raw-connection
+// corruption test that adds nothing beyond what this direct call already
+// proves about the panic itself.
+func TestMustParseTimePanicsOnUnparseableTimestamp(t *testing.T) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected mustParseTime to panic on an unparseable timestamp")
+		}
+		message, ok := r.(string)
+		if !ok || !strings.Contains(message, "parse stored timestamp") {
+			t.Fatalf("expected a 'parse stored timestamp' panic message, got %v", r)
+		}
+	}()
+
+	mustParseTime("not-a-timestamp-at-all")
+}
+
 // TestUpsertEncryptedBlobRejectsStaleGeneration exercises
 // UpsertEncryptedBlob's CAS-rejection branch directly: once a blob exists
 // at generation N, a write at generation <= N must be rejected as
@@ -859,8 +886,8 @@ func TestBlobAndRecoveryUpsertsReturnErrorWhenTablesAreDropped(t *testing.T) {
 
 // TestDeviceAndSessionQueriesReturnErrorWhenTablesAreDropped exercises the
 // generic error branches of CountDevicesForAccount, UpsertDevice,
-// CreateSession, and TouchSession that dropTable-based tests elsewhere in
-// this file do not already reach.
+// ListDevicesForAccount, DeleteDevice, CreateSession, and TouchSession that
+// dropTable-based tests elsewhere in this file do not already reach.
 func TestDeviceAndSessionQueriesReturnErrorWhenTablesAreDropped(t *testing.T) {
 	store, dbPath := newFileBackedTestStore(t)
 	ctx := context.Background()
@@ -883,6 +910,14 @@ func TestDeviceAndSessionQueriesReturnErrorWhenTablesAreDropped(t *testing.T) {
 	}
 	if _, err := store.FindDevice(ctx, target.ID, "device-1"); err == nil {
 		t.Fatal("expected error finding device after devices table is dropped")
+	} else if errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected a store-failure error, not ErrNotFound, got %v", err)
+	}
+	if _, err := store.ListDevicesForAccount(ctx, target.ID); err == nil {
+		t.Fatal("expected error listing devices after devices table is dropped")
+	}
+	if err := store.DeleteDevice(ctx, target.ID, "device-1"); err == nil {
+		t.Fatal("expected error deleting device after devices table is dropped")
 	} else if errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected a store-failure error, not ErrNotFound, got %v", err)
 	}
@@ -1157,4 +1192,25 @@ func TestDeleteLapsedManagedAccountFaultInjection(t *testing.T) {
 			t.Fatalf("expected the begin-transaction error to surface, got %v", err)
 		}
 	})
+}
+
+// TestDeleteAccountFailsAtBeginTransactionOnClosedStore exercises
+// DeleteAccount's BeginTx error branch, mirroring
+// TestDeleteLapsedManagedAccountFaultInjection's identical "closed store"
+// sub-test for its sibling method: BeginTx is DeleteAccount's very first
+// store call, so closing the store faults it directly with no earlier
+// branch in the way.
+func TestDeleteAccountFailsAtBeginTransactionOnClosedStore(t *testing.T) {
+	store := openTestStore(t)
+	if err := store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	err := store.DeleteAccount(context.Background(), "account-target")
+	if err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected a store-failure error from BeginTx on a closed store, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "begin delete account") {
+		t.Fatalf("expected the begin-transaction error to surface, got %v", err)
+	}
 }

@@ -145,7 +145,7 @@ func (s *TOTPService) StartEnrollment(
 
 	encrypted, err := security.EncryptField(string(secret), s.secretKey, aadForTOTPSecret(accountID))
 	if err != nil {
-		return TOTPEnrollmentStart{}, fmt.Errorf("%w: %v", ErrTOTPSecretEncrypt, err)
+		return TOTPEnrollmentStart{}, fmt.Errorf("%w: %v", ErrTOTPSecretEncrypt, err) // codecov:ignore -- s.secretKey is always non-empty (Configured() above already gated on it) and aadForTOTPSecret always returns a non-empty aad, so EncryptField only ever fails on its underlying crypto primitives, which cannot occur in practice (see internal/security/field_crypto.go's own codecov:ignore annotations on that path).
 	}
 
 	// Write the fresh pending secret with totp_enabled=false. This resets
@@ -155,12 +155,21 @@ func (s *TOTPService) StartEnrollment(
 	// The step claim is only meaningful for the secret that earned it, so a
 	// new secret starts from a clean step. (The enable flip in
 	// CompleteEnrollment, by contrast, preserves the step — see SetTOTPEnabled.)
+	// codecov:ignore:start -- both branches below need the account row or the
+	// accounts table to fail specifically for THIS write, after the
+	// FindAccountByID lookup above has already succeeded against the same
+	// table within this one synchronous call: the ErrNotFound case is a
+	// TOCTOU (account deleted mid-call, same class as the
+	// managed_bridge_service.go precedents) and the generic case needs a
+	// fake driver (same same-table-multi-step limitation as the
+	// RowsAffected/COMMIT deviations in internal/db/fault_injection_test.go).
 	if err := s.store.UpdateTOTPSecretAndEnabled(ctx, accountID, encrypted, false); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			return TOTPEnrollmentStart{}, ErrUnauthorized
 		}
 		return TOTPEnrollmentStart{}, err
 	}
+	// codecov:ignore:end
 
 	return TOTPEnrollmentStart{
 		SecretBase32: security.EncodeTOTPSecretBase32(secret),
@@ -219,13 +228,22 @@ func (s *TOTPService) CompleteEnrollment(
 
 	claimed, err := s.store.ClaimTOTPStep(ctx, accountID, step)
 	if err != nil {
-		return err
+		return err // codecov:ignore -- FindAccountByID above already touches "accounts" as this function's first store call, so isolating a second, later accounts-table failure here needs a fake driver.
 	}
 	if !claimed {
 		s.observeEnrollmentCompletion("replayed")
 		return ErrTOTPReplayed
 	}
 
+	// codecov:ignore:start -- both branches below need the account row or the
+	// accounts table to fail specifically for THIS write, after
+	// FindAccountByID and ClaimTOTPStep above have already succeeded against
+	// the same table within this one synchronous call: the ErrNotFound case
+	// is a TOCTOU (account deleted mid-call, same class as the
+	// managed_bridge_service.go precedents) and the generic case needs a
+	// fake driver (same same-table-multi-step limitation as the
+	// RowsAffected/COMMIT deviations in internal/db/fault_injection_test.go).
+	//
 	// Flip to enabled WITHOUT resetting totp_last_used_step: the step just
 	// claimed above must stay consumed, or this same enrollment code would be
 	// accepted again by the login-challenge and disable paths within its
@@ -237,6 +255,7 @@ func (s *TOTPService) CompleteEnrollment(
 		}
 		return err
 	}
+	// codecov:ignore:end
 
 	// Enabling 2FA changes the account's security posture; invalidate other
 	// sessions. The caller's session stays valid via currentSessionTokenHash.
@@ -294,18 +313,27 @@ func (s *TOTPService) Disable(
 
 	claimed, err := s.store.ClaimTOTPStep(ctx, accountID, step)
 	if err != nil {
-		return err
+		return err // codecov:ignore -- FindAccountByID above already touches "accounts" as this function's first store call, so isolating a second, later accounts-table failure here needs a fake driver.
 	}
 	if !claimed {
 		return ErrTOTPReplayed
 	}
 
+	// codecov:ignore:start -- both branches below need the account row or the
+	// accounts table to fail specifically for THIS write, after
+	// FindAccountByID and ClaimTOTPStep above have already succeeded against
+	// the same table within this one synchronous call: the ErrNotFound case
+	// is a TOCTOU (same class as the managed_bridge_service.go precedents)
+	// and the generic case needs a fake driver (same same-table-multi-step
+	// limitation as the RowsAffected/COMMIT deviations in
+	// internal/db/fault_injection_test.go).
 	if err := s.store.UpdateTOTPSecretAndEnabled(ctx, accountID, "", false); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			return ErrUnauthorized
 		}
 		return err
 	}
+	// codecov:ignore:end
 
 	if err := s.store.DeleteAllSessionsForAccount(ctx, accountID); err != nil {
 		return err
@@ -329,7 +357,7 @@ func (s *TOTPService) IssueChallenge(
 ) (challengeID string, expiresAt time.Time, err error) {
 	plain, hash, tokenErr := security.NewOpaqueToken()
 	if tokenErr != nil {
-		return "", time.Time{}, tokenErr
+		return "", time.Time{}, tokenErr // codecov:ignore -- crypto/rand.Read failing is not deterministically injectable in-process without swapping the package-level Reader, a global-state hack that would risk polluting concurrent tests; a crypto-primitive error that cannot occur in practice (see internal/security/token.go's own codecov:ignore annotation on NewOpaqueToken's internal rand.Read).
 	}
 
 	// A fresh login challenge supersedes any earlier in-flight (or already
@@ -424,7 +452,7 @@ func (s *TOTPService) VerifyChallenge(
 		if incrErr != nil {
 			if errors.Is(incrErr, db.ErrNotFound) {
 				s.observeChallengeCompletion("challenge_invalid")
-				return AuthResult{}, ErrTOTPChallengeInvalid
+				return AuthResult{}, ErrTOTPChallengeInvalid // codecov:ignore -- the challenge row would need to be deleted by a second, concurrent request between this VerifyChallenge call's own wrong-code check and this increment step, within one synchronous call; a TOCTOU not deterministically reachable in-process without a fragile hack (see testing rules), same class as the managed_bridge_service.go precedents.
 			}
 			return AuthResult{}, incrErr
 		}
@@ -441,7 +469,7 @@ func (s *TOTPService) VerifyChallenge(
 
 	claimed, err := s.store.ClaimTOTPStep(ctx, account.ID, step)
 	if err != nil {
-		return AuthResult{}, err
+		return AuthResult{}, err // codecov:ignore -- the account lookup above already touches "accounts" within this same call, so isolating a second, later accounts-table failure here needs a fake driver.
 	}
 	if !claimed {
 		s.observeChallengeCompletion("replayed")
@@ -449,7 +477,7 @@ func (s *TOTPService) VerifyChallenge(
 	}
 
 	if err := s.store.DeleteTOTPChallengeByHash(ctx, security.HashToken(challengeID)); err != nil {
-		return AuthResult{}, err
+		return AuthResult{}, err // codecov:ignore -- FindTOTPChallengeByHash above already touches "totp_challenges" as this function's first store call, so isolating a second, later totp_challenges failure here needs a fake driver.
 	}
 
 	s.observeChallengeCompletion("ok")

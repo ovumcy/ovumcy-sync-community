@@ -210,6 +210,88 @@ func TestSyncServiceRejectsChecksumMismatchAndStaleGeneration(t *testing.T) {
 	}
 }
 
+// TestSyncServicePutBlobRejectsMalformedChecksumFormat exercises the
+// checksumPattern format guard directly, distinct from
+// TestSyncServiceRejectsChecksumMismatchAndStaleGeneration's
+// strings.Repeat("a", 64) case, which is 64 valid lowercase-hex characters
+// (so it passes the format check) that simply do not match the ciphertext's
+// real SHA-256 sum — a different downstream branch entirely.
+func TestSyncServicePutBlobRejectsMalformedChecksumFormat(t *testing.T) {
+	store := openTestStore(t)
+	auth := NewAuthService(store, 24*time.Hour)
+	syncService := NewSyncService(store, SyncOptions{MaxDevices: 2, MaxBlobBytes: 16 << 20})
+
+	result, err := auth.Register(
+		context.Background(),
+		"owner@example.com",
+		"correct horse battery staple",
+	)
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	if _, err := syncService.PutBlob(context.Background(), result.AccountID, PutBlobInput{
+		SchemaVersion:  1,
+		Generation:     1,
+		ChecksumSHA256: "not-a-valid-checksum",
+		Ciphertext:     []byte("ciphertext"),
+	}); err != ErrInvalidBlob {
+		t.Fatalf("expected ErrInvalidBlob for a malformed checksum format, got %v", err)
+	}
+}
+
+// TestSyncServiceRemoveDeviceSurfacesStoreError exercises RemoveDevice's
+// generic (non-ErrNotFound) store-error branch: DeleteDevice is the only
+// store call this method makes, so dropping the devices table faults it
+// directly.
+func TestSyncServiceRemoveDeviceSurfacesStoreError(t *testing.T) {
+	store, dbPath := openFileBackedTestStore(t)
+	auth := NewAuthService(store, 24*time.Hour)
+	syncService := NewSyncService(store, SyncOptions{MaxDevices: 2, MaxBlobBytes: 16 << 20})
+
+	result, err := auth.Register(
+		context.Background(),
+		"owner@example.com",
+		"correct horse battery staple",
+	)
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	dropTable(t, dbPath, "devices")
+
+	err = syncService.RemoveDevice(context.Background(), result.AccountID, "device-12345678")
+	if err == nil || errors.Is(err, ErrDeviceNotFound) {
+		t.Fatalf("expected a store error removing a device after the devices table is dropped, got %v", err)
+	}
+}
+
+// TestSyncServiceGetRecoveryKeyPackageSurfacesStoreError exercises
+// GetRecoveryKeyPackage's generic (non-ErrNotFound) store-error branch:
+// GetRecoveryKeyPackage is the only store call this method makes, so
+// dropping the recovery_key_packages table faults it directly.
+func TestSyncServiceGetRecoveryKeyPackageSurfacesStoreError(t *testing.T) {
+	store, dbPath := openFileBackedTestStore(t)
+	auth := NewAuthService(store, 24*time.Hour)
+	syncService := NewSyncService(store, SyncOptions{MaxDevices: 2, MaxBlobBytes: 16 << 20})
+
+	result, err := auth.Register(
+		context.Background(),
+		"owner@example.com",
+		"correct horse battery staple",
+	)
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	dropTable(t, dbPath, "recovery_key_packages")
+
+	_, err = syncService.GetRecoveryKeyPackage(context.Background(), result.AccountID)
+	if err == nil || errors.Is(err, ErrRecoveryPackageNotFound) {
+		t.Fatalf("expected a store error getting the recovery key package after its table is dropped, got %v", err)
+	}
+}
+
 func TestSyncServiceRejectsInvalidRecoveryKeyPackage(t *testing.T) {
 	store := openTestStore(t)
 	auth := NewAuthService(store, 24*time.Hour)
@@ -233,6 +315,99 @@ func TestSyncServiceRejectsInvalidRecoveryKeyPackage(t *testing.T) {
 		PhraseFingerprintHex: "short",
 	}); err != ErrInvalidRecoveryPackage {
 		t.Fatalf("expected ErrInvalidRecoveryPackage, got %v", err)
+	}
+}
+
+// TestSyncServiceRejectsEachRecoveryKeyPackageFieldIndependently exercises
+// the four format checks that TestSyncServiceRejectsInvalidRecoveryKeyPackage
+// above never reaches: validation returns on the *first* failing field, so an
+// input invalid in every field only ever exercises the algorithm/KDF check.
+// Each case here is otherwise fully valid so the specific field under test is
+// what fails.
+func TestSyncServiceRejectsEachRecoveryKeyPackageFieldIndependently(t *testing.T) {
+	store := openTestStore(t)
+	auth := NewAuthService(store, 24*time.Hour)
+	syncService := NewSyncService(store, SyncOptions{MaxDevices: 2, MaxBlobBytes: 16 << 20})
+
+	result, err := auth.Register(
+		context.Background(),
+		"owner@example.com",
+		"correct horse battery staple",
+	)
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	validInput := PutRecoveryKeyPackageInput{
+		Algorithm:            "xchacha20poly1305",
+		KDF:                  "bip39_seed_hkdf_sha256",
+		MnemonicWordCount:    12,
+		WrapNonceHex:         strings.Repeat("a", 48),
+		WrappedMasterKeyHex:  strings.Repeat("b", 64),
+		PhraseFingerprintHex: strings.Repeat("c", 16),
+	}
+
+	cases := []struct {
+		name   string
+		mutate func(in PutRecoveryKeyPackageInput) PutRecoveryKeyPackageInput
+	}{
+		{
+			name: "wrong mnemonic word count",
+			mutate: func(in PutRecoveryKeyPackageInput) PutRecoveryKeyPackageInput {
+				in.MnemonicWordCount = 8
+				return in
+			},
+		},
+		{
+			name: "wrap nonce hex wrong length",
+			mutate: func(in PutRecoveryKeyPackageInput) PutRecoveryKeyPackageInput {
+				in.WrapNonceHex = strings.Repeat("a", 47)
+				return in
+			},
+		},
+		{
+			name: "wrap nonce hex not lowercase hex",
+			mutate: func(in PutRecoveryKeyPackageInput) PutRecoveryKeyPackageInput {
+				in.WrapNonceHex = strings.Repeat("Z", 48)
+				return in
+			},
+		},
+		{
+			name: "wrapped master key hex too short",
+			mutate: func(in PutRecoveryKeyPackageInput) PutRecoveryKeyPackageInput {
+				in.WrappedMasterKeyHex = strings.Repeat("b", 63)
+				return in
+			},
+		},
+		{
+			name: "wrapped master key hex odd length",
+			mutate: func(in PutRecoveryKeyPackageInput) PutRecoveryKeyPackageInput {
+				in.WrappedMasterKeyHex = strings.Repeat("b", 65)
+				return in
+			},
+		},
+		{
+			name: "phrase fingerprint hex wrong length",
+			mutate: func(in PutRecoveryKeyPackageInput) PutRecoveryKeyPackageInput {
+				in.PhraseFingerprintHex = strings.Repeat("c", 15)
+				return in
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := syncService.PutRecoveryKeyPackage(context.Background(), result.AccountID, tc.mutate(validInput)); err != ErrInvalidRecoveryPackage {
+				t.Fatalf("expected ErrInvalidRecoveryPackage, got %v", err)
+			}
+		})
+	}
+
+	// Sanity check: the shared valid input actually succeeds, so the cases
+	// above are each isolating exactly one bad field rather than resting on
+	// an already-broken baseline.
+	if _, err := syncService.PutRecoveryKeyPackage(context.Background(), result.AccountID, validInput); err != nil {
+		t.Fatalf("expected the shared valid baseline input to succeed, got %v", err)
 	}
 }
 

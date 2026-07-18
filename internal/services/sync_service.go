@@ -122,7 +122,7 @@ func (s *SyncService) AttachDevice(
 		if errors.Is(err, db.ErrNotFound) {
 			count, countErr := s.store.CountDevicesForAccount(ctx, accountID)
 			if countErr != nil {
-				return models.Device{}, countErr
+				return models.Device{}, countErr // codecov:ignore -- CountDevicesForAccount and the FindDevice call just above both query the "devices" table, so isolating a failure here while FindDevice's own not-found lookup already succeeded needs the table to vanish mid-call; needs a fake driver.
 			}
 			if count >= s.maxDevices {
 				return models.Device{}, ErrTooManyDevices

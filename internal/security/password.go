@@ -90,13 +90,13 @@ func PasswordHashNeedsRehash(hash string) bool {
 func NewRecoveryCode() (plain string, hash string, err error) {
 	raw := make([]byte, 16)
 	if _, err = rand.Read(raw); err != nil {
-		return "", "", err
+		return "", "", err // codecov:ignore -- crypto/rand.Read failing is not deterministically injectable in-process without swapping the package-level Reader, a global-state hack that would risk polluting concurrent tests; a crypto-primitive error that cannot occur in practice.
 	}
 
 	plain = hex.EncodeToString(raw)
 	bcryptHash, err := bcrypt.GenerateFromPassword([]byte(plain), PasswordHashCost)
 	if err != nil {
-		return "", "", err
+		return "", "", err // codecov:ignore -- unlike HashPassword's caller-controlled input, plain is always exactly 32 hex chars (16 bytes hex-encoded), far under bcrypt's 72-byte ErrPasswordTooLong ceiling, and PasswordHashCost is a fixed valid cost; bcrypt cannot fail on this fixed-shape input.
 	}
 	return plain, string(bcryptHash), nil
 }
