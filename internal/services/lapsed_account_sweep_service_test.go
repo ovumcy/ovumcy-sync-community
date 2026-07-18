@@ -213,7 +213,7 @@ func TestLapsedAccountSweepServiceContinuesPastPerCandidateDeleteErrorsAndJoinsT
 	seedLapsedCandidateWithFullData(t, store, authService, syncService, bridgeService, "managederrjoinb01", 91*24*time.Hour)
 
 	// Dropping a child table breaks DeleteLapsedManagedAccount's transaction
-	// for EVERY candidate identically (deleteAccountChildRows touches
+	// for EVERY candidate identically (its child-table loop touches
 	// "sessions" unconditionally) — this is a real infrastructure fault
 	// that must not stop the sweep from attempting the rest of the batch.
 	dropTable(t, dbPath, "sessions")
@@ -283,5 +283,73 @@ func TestLapsedAccountSweepServiceCutoffIsFixedForTheWholeRun(t *testing.T) {
 	}
 	if _, err := store.FindAccountByID(ctx, justInsideID); err != nil {
 		t.Fatalf("expected the just-inside-grace account to survive, got %v", err)
+	}
+}
+
+// mintRacingSweepStore wraps the real store and stages the resubscribe race
+// the sweep must tolerate: a session mint landing between the sweep's
+// candidate listing and its per-candidate delete. Before delegating each
+// delete it clears the account's lapse marker exactly the way a real mint
+// does (lapsed_at = NULL), so the REAL DeleteLapsedManagedAccount's
+// in-transaction re-check sees an un-lapsed account and refuses with
+// db.ErrNotFound — nothing about the refusal itself is faked.
+type mintRacingSweepStore struct {
+	inner *db.Store
+	t     *testing.T
+}
+
+func (s *mintRacingSweepStore) ListLapsedManagedAccountIDs(ctx context.Context, cutoff time.Time, limit int) ([]string, error) {
+	return s.inner.ListLapsedManagedAccountIDs(ctx, cutoff, limit)
+}
+
+func (s *mintRacingSweepStore) DeleteLapsedManagedAccount(ctx context.Context, accountID string, cutoff time.Time) error {
+	s.t.Helper()
+	if err := s.inner.ClearAccountLapse(ctx, accountID); err != nil {
+		s.t.Fatalf("clear lapse to stage the racing mint: %v", err)
+	}
+	return s.inner.DeleteLapsedManagedAccount(ctx, accountID, cutoff)
+}
+
+// TestLapsedAccountSweepServiceTreatsMintRacedCandidateAsBenignSkip proves
+// the sweep treats a candidate whose lapse marker vanished between listing
+// and delete (a resubscribe mint racing the sweep) as the benign, by-design
+// skip it is: examined but not deleted, no error reported, and the account
+// plus every row it owns survive completely intact.
+func TestLapsedAccountSweepServiceTreatsMintRacedCandidateAsBenignSkip(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	authService := NewAuthService(store, 24*time.Hour)
+	syncService := NewSyncService(store, SyncOptions{MaxDevices: 5, MaxBlobBytes: 16 << 20})
+	bridgeService := NewManagedBridgeService(store, authService)
+	sweepService := NewLapsedAccountSweepService(store, lapsedSweepGracePeriod)
+
+	const racedID = "managedracedmint1"
+	seedLapsedCandidateWithFullData(t, store, authService, syncService, bridgeService, racedID, 90*24*time.Hour)
+
+	sweepService.store = &mintRacingSweepStore{inner: store, t: t}
+
+	result, err := sweepService.Run(ctx, 0, false)
+	if err != nil {
+		t.Fatalf("expected the raced candidate to be a benign skip, got error %v", err)
+	}
+	if result.Examined != 1 {
+		t.Fatalf("expected the raced candidate to be examined, got %d", result.Examined)
+	}
+	if result.Deleted != 0 || len(result.DeletedAccountIDs) != 0 {
+		t.Fatalf("expected nothing deleted when a mint raced the sweep, got %#v", result)
+	}
+
+	if _, err := store.FindAccountByID(ctx, racedID); err != nil {
+		t.Fatalf("expected the raced account row to survive, got %v", err)
+	}
+	if _, err := syncService.GetBlob(ctx, racedID); err != nil {
+		t.Fatalf("expected the raced account's blob to survive, got %v", err)
+	}
+	if _, err := syncService.GetRecoveryKeyPackage(ctx, racedID); err != nil {
+		t.Fatalf("expected the raced account's recovery key package to survive, got %v", err)
+	}
+	if count, err := store.CountDevicesForAccount(ctx, racedID); err != nil || count != 1 {
+		t.Fatalf("expected the raced account's device to survive, got count=%d err=%v", count, err)
 	}
 }

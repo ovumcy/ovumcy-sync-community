@@ -41,8 +41,20 @@ type LapsedAccountSweepResult struct {
 // is a stronger re-check than a plain "re-read right before acting" would
 // give: there is no window between the re-check and the delete for a mint to
 // land in, because they are the same SQL statement.
+// lapsedSweepStore is the persistence surface LapsedAccountSweepService
+// needs, satisfied by *db.Store. Consumer-side for the same reason as the
+// managed peer's guestGCStore seam: a test can wrap the real store to
+// stage the mint-races-sweep interleaving (clear the lapse marker after the
+// candidate listing, before the delete) that cannot be produced from
+// outside a single Run call, while the delete still exercises the real
+// in-transaction re-check that refuses the no-longer-lapsed account.
+type lapsedSweepStore interface {
+	ListLapsedManagedAccountIDs(ctx context.Context, cutoff time.Time, limit int) ([]string, error)
+	DeleteLapsedManagedAccount(ctx context.Context, accountID string, cutoff time.Time) error
+}
+
 type LapsedAccountSweepService struct {
-	store       *db.Store
+	store       lapsedSweepStore
 	now         func() time.Time
 	gracePeriod time.Duration
 }

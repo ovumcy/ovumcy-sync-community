@@ -78,6 +78,30 @@ func TestServerManagedAccountPremiumRejectsInvalidAccountIDShape(t *testing.T) {
 	}
 }
 
+// TestServerManagedAccountPremiumRejectsMalformedJSON pins the decodeJSON
+// early-return: a syntactically broken body is refused with the transport's
+// canonical invalid_json before the bridge service is ever consulted, so a
+// garbled lapse signal can never be misread as either direction of the flag.
+func TestServerManagedAccountPremiumRejectsMalformedJSON(t *testing.T) {
+	handler := newTestServer(t)
+
+	response := performRawRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/managed/accounts/managedacct1234/premium",
+		[]byte(`{"active":`),
+		"test-managed-bridge-token",
+		http.StatusBadRequest,
+	)
+
+	var payload map[string]string
+	decodeResponse(t, response.Body.Bytes(), &payload)
+	if payload["error"] != "invalid_json" {
+		t.Fatalf("unexpected malformed-json payload: %#v", payload)
+	}
+}
+
 // TestServerManagedAccountPremiumRecordsLapseRevokesSessionAndReplayIsIdempotent
 // exercises the full HTTP contract for active=false: the response status
 // string, the immediate session revocation, and idempotent replay.

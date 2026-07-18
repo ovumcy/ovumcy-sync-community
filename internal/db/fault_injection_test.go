@@ -1040,6 +1040,44 @@ func TestLapseMarkerMethodsReturnErrorWhenAccountsTableIsDropped(t *testing.T) {
 	}
 }
 
+// TestListLapsedManagedAccountIDsSurfacesScanErrorOnNullAccountID exercises
+// ListLapsedManagedAccountIDs' rows.Scan error branch with a real corrupted
+// row rather than a fake driver. accounts.id is `TEXT PRIMARY KEY` with no
+// NOT NULL, and SQLite's long-standing quirk permits NULL in a non-INTEGER
+// primary key, so a raw connection can insert a NULL-id managed row that
+// the candidate query returns and database/sql then refuses to scan into a
+// string destination. Same corrupted-row-shape technique as
+// TestScanAccountReturnsGenericErrorOnTypeMismatch: a fault an operator's
+// manual write into the sqlite file could genuinely produce.
+func TestListLapsedManagedAccountIDsSurfacesScanErrorOnNullAccountID(t *testing.T) {
+	store, dbPath := newFileBackedTestStore(t)
+	ctx := context.Background()
+
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw sqlite: %v", err)
+	}
+	defer func() {
+		_ = raw.Close()
+	}()
+	if _, err := raw.Exec(`PRAGMA busy_timeout = 5000;`); err != nil {
+		t.Fatalf("configure raw sqlite: %v", err)
+	}
+	if _, err := raw.Exec(
+		`INSERT INTO accounts (id, login, password_hash, mode, created_at, lapsed_at) VALUES (NULL, 'null-id@example.com', 'hash', 'managed', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
+	); err != nil {
+		t.Fatalf("insert NULL-id managed row: %v", err)
+	}
+
+	_, err = store.ListLapsedManagedAccountIDs(ctx, time.Now().UTC(), 0)
+	if err == nil {
+		t.Fatal("expected a scan error listing a NULL-id managed row")
+	}
+	if !strings.Contains(err.Error(), "scan lapsed managed account id") {
+		t.Fatalf("expected the wrapped scan error, got %v", err)
+	}
+}
+
 // TestDeleteLapsedManagedAccountFaultInjection covers
 // DeleteLapsedManagedAccount's transactional error branches: a dropped child
 // table aborts and rolls back before the accounts row is ever touched (the

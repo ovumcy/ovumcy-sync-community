@@ -204,8 +204,22 @@ func (s *Store) DeleteAccount(ctx context.Context, accountID string) error {
 		_ = tx.Rollback()
 	}()
 
-	if err := deleteAccountChildRows(ctx, tx, accountID); err != nil {
-		return err
+	childTables := []string{
+		"sessions",
+		"devices",
+		"encrypted_blobs",
+		"recovery_key_packages",
+		"password_reset_tokens",
+		"totp_challenges",
+	}
+	for _, table := range childTables {
+		if _, err := tx.ExecContext(
+			ctx,
+			`DELETE FROM `+table+` WHERE account_id = ?`, // #nosec G202 -- table ranges only over the fixed childTables allowlist above, never user input; account_id is bound as a placeholder
+			accountID,
+		); err != nil {
+			return fmt.Errorf("delete account %s rows: %w", table, err)
+		}
 	}
 
 	result, err := tx.ExecContext(ctx, `DELETE FROM accounts WHERE id = ?`, accountID)
@@ -225,36 +239,6 @@ func (s *Store) DeleteAccount(ctx context.Context, accountID string) error {
 		return fmt.Errorf("commit delete account: %w", err)
 	}
 
-	return nil
-}
-
-// deleteAccountChildRows deletes every row keyed by account_id across the
-// tables accounts.id cascades to (sessions, devices, the encrypted sync
-// blob, the wrapped recovery-key package, pending password reset tokens, and
-// pending TOTP login challenges), inside the caller's transaction. It is the
-// shared body of DeleteAccount and DeleteLapsedManagedAccount: both erase
-// exactly the same child rows before deciding, via their own differently
-// -guarded final DELETE FROM accounts, whether the transaction actually
-// commits. Factored out so "which tables a full account erasure touches" has
-// one definition instead of two copies that could silently drift apart.
-func deleteAccountChildRows(ctx context.Context, tx *sql.Tx, accountID string) error {
-	childTables := []string{
-		"sessions",
-		"devices",
-		"encrypted_blobs",
-		"recovery_key_packages",
-		"password_reset_tokens",
-		"totp_challenges",
-	}
-	for _, table := range childTables {
-		if _, err := tx.ExecContext(
-			ctx,
-			`DELETE FROM `+table+` WHERE account_id = ?`, // #nosec G202 -- table ranges only over the fixed childTables allowlist above, never user input; account_id is bound as a placeholder
-			accountID,
-		); err != nil {
-			return fmt.Errorf("delete account %s rows: %w", table, err)
-		}
-	}
 	return nil
 }
 
@@ -295,7 +279,7 @@ func (s *Store) SetAccountLapsed(ctx context.Context, accountID string, lapsedAt
 
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("set account lapsed rows: %w", err)
+		return fmt.Errorf("set account lapsed rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); needs a fake driver, the same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
 	}
 	if affected == 0 {
 		return ErrNotFound
@@ -326,7 +310,7 @@ func (s *Store) ClearAccountLapse(ctx context.Context, accountID string) error {
 
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("clear account lapse rows: %w", err)
+		return fmt.Errorf("clear account lapse rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); needs a fake driver, the same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
 	}
 	if affected == 0 {
 		return ErrNotFound
@@ -394,7 +378,7 @@ func (s *Store) ListLapsedManagedAccountIDs(ctx context.Context, cutoff time.Tim
 		ids = append(ids, id)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list lapsed managed account ids rows: %w", err)
+		return nil, fmt.Errorf("list lapsed managed account ids rows: %w", err) // codecov:ignore -- a mid-iteration step failure is not deterministically injectable in-process: a dropped table or pre-canceled context fails QueryContext first (covered), and row-shape corruption surfaces at rows.Scan (covered); needs a fake driver.
 	}
 
 	return ids, nil
@@ -425,8 +409,29 @@ func (s *Store) DeleteLapsedManagedAccount(ctx context.Context, accountID string
 		_ = tx.Rollback()
 	}()
 
-	if err := deleteAccountChildRows(ctx, tx, accountID); err != nil {
-		return err
+	// Deliberate inline copy of DeleteAccount's child-table loop (same
+	// tables, same order, same #nosec rationale) rather than a shared
+	// helper, so the long-stable DeleteAccount above stays byte-identical
+	// and this function's erasure contract is self-contained. Keep the two
+	// lists in sync; each side's erases-every-row test pins its copy
+	// (TestDeleteAccountErasesEveryChildRowAndIsIdempotent there, the
+	// repository and sweep lapse tests here).
+	childTables := []string{
+		"sessions",
+		"devices",
+		"encrypted_blobs",
+		"recovery_key_packages",
+		"password_reset_tokens",
+		"totp_challenges",
+	}
+	for _, table := range childTables {
+		if _, err := tx.ExecContext(
+			ctx,
+			`DELETE FROM `+table+` WHERE account_id = ?`, // #nosec G202 -- table ranges only over the fixed childTables allowlist above, never user input; account_id is bound as a placeholder
+			accountID,
+		); err != nil {
+			return fmt.Errorf("delete account %s rows: %w", table, err)
+		}
 	}
 
 	result, err := tx.ExecContext(
@@ -441,14 +446,14 @@ func (s *Store) DeleteLapsedManagedAccount(ctx context.Context, accountID string
 
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("delete lapsed account row rows: %w", err)
+		return fmt.Errorf("delete lapsed account row rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); needs a fake driver, the same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
 	}
 	if affected == 0 {
 		return ErrNotFound
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit delete lapsed account: %w", err)
+		return fmt.Errorf("commit delete lapsed account: %w", err) // codecov:ignore -- on this store's single-connection sqlite (WAL, busy_timeout) a COMMIT whose statements all succeeded has no deterministically injectable in-process failure; needs a fake driver.
 	}
 
 	return nil
