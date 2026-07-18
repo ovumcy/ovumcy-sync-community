@@ -114,12 +114,12 @@ func (s *AuthService) Register(ctx context.Context, login string, password strin
 
 	recoveryCode, recoveryCodeHash, err := security.NewRecoveryCode()
 	if err != nil {
-		return AuthResult{}, err
+		return AuthResult{}, err // codecov:ignore -- crypto-primitive error that cannot occur in practice (see internal/security/password.go's own codecov:ignore annotation on NewRecoveryCode's internal rand.Read).
 	}
 
 	accountID, err := security.NewIdentifier()
 	if err != nil {
-		return AuthResult{}, err
+		return AuthResult{}, err // codecov:ignore -- crypto-primitive error that cannot occur in practice (see internal/security/token.go's own codecov:ignore annotation on NewIdentifier's internal rand.Read).
 	}
 
 	now := s.now().UTC()
@@ -237,6 +237,14 @@ func (s *AuthService) Authenticate(ctx context.Context, sessionToken string) (mo
 		return models.Account{}, ErrUnauthorized
 	}
 
+	// codecov:ignore:start -- both branches below need "sessions" or this
+	// specific row to fail for THIS write, after FindSessionByTokenHash above
+	// has already succeeded against the same table within this one
+	// synchronous call: the ErrNotFound case is a genuine TOCTOU (a
+	// concurrent revoke between lookup and touch, same class as the
+	// managed_bridge_service.go precedents) and the generic case needs a
+	// fake driver (same same-table-multi-step limitation as the
+	// RowsAffected/COMMIT deviations in internal/db/fault_injection_test.go).
 	if err := s.store.TouchSession(ctx, session.ID, now); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			// The session was revoked between lookup and touch; do not hand
@@ -245,6 +253,7 @@ func (s *AuthService) Authenticate(ctx context.Context, sessionToken string) (mo
 		}
 		return models.Account{}, err
 	}
+	// codecov:ignore:end
 
 	account, err := s.store.FindAccountByID(ctx, session.AccountID)
 	if err != nil {
@@ -296,12 +305,21 @@ func (s *AuthService) ChangePassword(
 		return err
 	}
 
+	// codecov:ignore:start -- both branches below need the account row or the
+	// accounts table to fail specifically for THIS write, after the
+	// FindAccountByID lookup above has already succeeded against the same
+	// table within this one synchronous call: the ErrNotFound case is a
+	// TOCTOU (same class as the managed_bridge_service.go precedents) and
+	// the generic case needs a fake driver (same same-table-multi-step
+	// limitation as the RowsAffected/COMMIT deviations in
+	// internal/db/fault_injection_test.go).
 	if err := s.store.UpdateAccountPasswordHash(ctx, accountID, newHash); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			return ErrUnauthorized
 		}
 		return err
 	}
+	// codecov:ignore:end
 
 	if err := s.store.DeleteSessionsForAccountExcept(ctx, accountID, currentSessionTokenHash); err != nil {
 		return err
@@ -354,7 +372,7 @@ func (s *AuthService) ForgotPassword(
 
 	plainToken, tokenHash, err := security.NewOpaqueToken()
 	if err != nil {
-		return ForgotPasswordResult{}, err
+		return ForgotPasswordResult{}, err // codecov:ignore -- crypto-primitive error that cannot occur in practice (see internal/security/token.go's own codecov:ignore annotation on NewOpaqueToken's internal rand.Read).
 	}
 
 	now := s.now().UTC()
@@ -404,7 +422,7 @@ func (s *AuthService) ResetPassword(
 
 	plainRecovery, recoveryHash, err := security.NewRecoveryCode()
 	if err != nil {
-		return PasswordResetResult{}, err
+		return PasswordResetResult{}, err // codecov:ignore -- crypto-primitive error that cannot occur in practice (see internal/security/password.go's own codecov:ignore annotation on NewRecoveryCode's internal rand.Read).
 	}
 
 	if err := s.store.UpdateAccountPasswordAndRecoveryHash(
@@ -431,7 +449,7 @@ func (s *AuthService) ResetPassword(
 		"",
 		false,
 	); err != nil && !errors.Is(err, db.ErrNotFound) {
-		return PasswordResetResult{}, err
+		return PasswordResetResult{}, err // codecov:ignore -- UpdateAccountPasswordAndRecoveryHash above already touches "accounts" within this same call, so isolating a second, later accounts-table failure here needs a fake driver.
 	}
 	if err := s.store.DeleteTOTPChallengesForAccount(ctx, tokenRecord.AccountID); err != nil {
 		return PasswordResetResult{}, err
@@ -442,7 +460,7 @@ func (s *AuthService) ResetPassword(
 	}
 
 	if err := s.store.DeletePasswordResetTokensForAccount(ctx, tokenRecord.AccountID); err != nil {
-		return PasswordResetResult{}, err
+		return PasswordResetResult{}, err // codecov:ignore -- ConsumePasswordResetToken above already touches "password_reset_tokens" as this function's first store call, so isolating a second, later failure on that same table here needs a fake driver.
 	}
 
 	return PasswordResetResult{RecoveryCode: plainRecovery}, nil
@@ -471,15 +489,24 @@ func (s *AuthService) RegenerateRecoveryCode(
 
 	plainRecovery, recoveryHash, err := security.NewRecoveryCode()
 	if err != nil {
-		return "", err
+		return "", err // codecov:ignore -- crypto-primitive error that cannot occur in practice (see internal/security/password.go's own codecov:ignore annotation on NewRecoveryCode's internal rand.Read).
 	}
 
+	// codecov:ignore:start -- both branches below need the account row or the
+	// accounts table to fail specifically for THIS write, after the
+	// FindAccountByID lookup above has already succeeded against the same
+	// table within this one synchronous call: the ErrNotFound case is a
+	// TOCTOU (same class as the managed_bridge_service.go precedents) and
+	// the generic case needs a fake driver (same same-table-multi-step
+	// limitation as the RowsAffected/COMMIT deviations in
+	// internal/db/fault_injection_test.go).
 	if err := s.store.UpdateAccountRecoveryCodeHash(ctx, accountID, recoveryHash); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			return "", ErrUnauthorized
 		}
 		return "", err
 	}
+	// codecov:ignore:end
 
 	return plainRecovery, nil
 }
@@ -546,12 +573,12 @@ func (s *AuthService) createSession(
 ) (AuthResult, error) {
 	sessionID, err := security.NewIdentifier()
 	if err != nil {
-		return AuthResult{}, err
+		return AuthResult{}, err // codecov:ignore -- crypto-primitive error that cannot occur in practice (see internal/security/token.go's own codecov:ignore annotation on NewIdentifier's internal rand.Read).
 	}
 
 	plainToken, tokenHash, err := security.NewOpaqueToken()
 	if err != nil {
-		return AuthResult{}, err
+		return AuthResult{}, err // codecov:ignore -- crypto-primitive error that cannot occur in practice (see internal/security/token.go's own codecov:ignore annotation on NewOpaqueToken's internal rand.Read).
 	}
 
 	expiresAt := now.Add(s.sessionTTL)

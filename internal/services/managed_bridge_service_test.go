@@ -42,6 +42,37 @@ func TestManagedBridgeRejectsExistingSelfHostedAccount(t *testing.T) {
 	}
 }
 
+// TestManagedBridgeRejectsLoginConflictAcrossDifferentIDs exercises
+// CreateManagedSession's db.ErrConflict branch: UpsertManagedAccount's ON
+// CONFLICT clause only covers a collision on id, so a *different* row that
+// already holds the login this call would mint ("managed:"+accountID) must
+// surface as ErrInvalidManagedAccount rather than a raw store error. Normal
+// registration can never produce that colliding row (ValidateLogin blocks
+// the "managed:" prefix), so it is seeded directly through the repository,
+// mirroring TestManagedAccountUpsertConflictOnLoginAcrossDifferentIDs in
+// internal/db's own fault_injection_test.go at the service layer.
+func TestManagedBridgeRejectsLoginConflictAcrossDifferentIDs(t *testing.T) {
+	store := openTestStore(t)
+	authService := NewAuthService(store, 24*time.Hour)
+	bridgeService := NewManagedBridgeService(store, authService)
+	ctx := context.Background()
+
+	const accountID = "managedacct1234"
+	if _, err := store.CreateAccount(ctx, models.Account{
+		ID:           "otheraccountid1",
+		Login:        "managed:" + accountID,
+		PasswordHash: "managed_service_only",
+		Mode:         "managed",
+		CreatedAt:    time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed colliding-login account: %v", err)
+	}
+
+	if _, err := bridgeService.CreateManagedSession(ctx, accountID); !errors.Is(err, ErrInvalidManagedAccount) {
+		t.Fatalf("expected ErrInvalidManagedAccount for a login collision across different ids, got %v", err)
+	}
+}
+
 func TestManagedBridgePurgeRejectsInvalidAccountID(t *testing.T) {
 	store := openTestStore(t)
 	authService := NewAuthService(store, 24*time.Hour)

@@ -71,6 +71,19 @@ func TestHashPasswordCountsRunesNotBytes(t *testing.T) {
 	}
 }
 
+// TestHashPasswordRejectsPasswordOverBcryptByteLimit exercises HashPassword's
+// generic (non-ErrWeakPassword) error branch. HashPassword only enforces a
+// 12-rune *minimum*; it has no maximum, so a long-but-otherwise-valid
+// password can still exceed bcrypt's own hard 72-byte ceiling
+// (bcrypt.ErrPasswordTooLong). A 100-byte ASCII password clears the rune
+// minimum by a wide margin while tripping that ceiling.
+func TestHashPasswordRejectsPasswordOverBcryptByteLimit(t *testing.T) {
+	longPassword := strings.Repeat("a", 100)
+	if _, err := HashPassword(longPassword); !errors.Is(err, bcrypt.ErrPasswordTooLong) {
+		t.Fatalf("expected bcrypt.ErrPasswordTooLong for a 100-byte password, got %v", err)
+	}
+}
+
 func TestHashPasswordAndCompare(t *testing.T) {
 	hash, err := HashPassword("correct horse battery staple")
 	if err != nil {
@@ -118,6 +131,19 @@ func TestNewRecoveryCodeUsesConfiguredCost(t *testing.T) {
 	}
 	if cost != PasswordHashCost {
 		t.Fatalf("expected recovery code hash cost %d, got %d", PasswordHashCost, cost)
+	}
+}
+
+// TestCompareRecoveryCodeHashRejectsEmptyHash exercises the empty-stored-hash
+// guard directly at the unit level: an account created before recovery codes
+// existed has RecoveryCodeHash == "", and that must always fail comparison
+// rather than let bcrypt.CompareHashAndPassword parse an empty hash string.
+func TestCompareRecoveryCodeHashRejectsEmptyHash(t *testing.T) {
+	if err := CompareRecoveryCodeHash("", "any-code"); !errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
+		t.Fatalf("expected bcrypt.ErrMismatchedHashAndPassword for an empty stored hash, got %v", err)
+	}
+	if err := CompareRecoveryCodeHash("   ", "any-code"); !errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
+		t.Fatalf("expected whitespace-only stored hash to be treated as empty, got %v", err)
 	}
 }
 

@@ -1,6 +1,7 @@
 package security
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 )
@@ -56,6 +57,39 @@ func TestEncryptFieldRequiresKeyAndAAD(t *testing.T) {
 	}
 	if _, err := EncryptField("x", bytes32(1), nil); err == nil {
 		t.Fatal("expected empty aad to fail")
+	}
+}
+
+// TestDecryptFieldRequiresKeyAndAAD is DecryptField's counterpart to
+// TestEncryptFieldRequiresKeyAndAAD above: the two functions validate key and
+// aad independently, so each needs its own direct test.
+func TestDecryptFieldRequiresKeyAndAAD(t *testing.T) {
+	if _, err := DecryptField("x", nil, []byte("aad")); err == nil {
+		t.Fatal("expected empty key to fail")
+	}
+	if _, err := DecryptField("x", bytes32(1), nil); err == nil {
+		t.Fatal("expected empty aad to fail")
+	}
+}
+
+// TestDecryptFieldRejectsMalformedBase64 exercises the base64 decode error
+// branch: a persisted value that is not valid base64url is a real corruption
+// shape (a hand-edited row, or a field written by something other than
+// EncryptField), not a synthetic input.
+func TestDecryptFieldRejectsMalformedBase64(t *testing.T) {
+	if _, err := DecryptField("not base64!!", bytes32(1), []byte("aad")); err == nil {
+		t.Fatal("expected malformed base64 to fail")
+	}
+}
+
+// TestDecryptFieldRejectsTooShortPayload exercises the "ciphertext too
+// short" branch: a payload that decodes as valid base64 but has fewer bytes
+// than the AEAD nonce size cannot possibly contain a nonce plus any
+// ciphertext.
+func TestDecryptFieldRejectsTooShortPayload(t *testing.T) {
+	tooShort := base64.RawURLEncoding.EncodeToString([]byte{0x01, 0x02, 0x03})
+	if _, err := DecryptField(tooShort, bytes32(1), []byte("aad")); err == nil {
+		t.Fatal("expected an undersized payload to fail")
 	}
 }
 

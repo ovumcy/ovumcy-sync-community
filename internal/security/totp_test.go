@@ -59,6 +59,22 @@ func TestGenerateTOTPCodeIsRFC6238TestVector(t *testing.T) {
 	}
 }
 
+// TestGenerateTOTPCodeClampsNegativeStepToZero exercises the defensive
+// step<0 clamp. A negative step can only arise from a nowUnixSeconds before
+// the Unix epoch, which VerifyTOTPCode's real callers (always the current
+// wall clock, or a fixed test clock well after 1970) never pass — but
+// GenerateTOTPCode is exported and directly callable with any step, so the
+// clamp is unit-testable without going through VerifyTOTPCode at all.
+func TestGenerateTOTPCodeClampsNegativeStepToZero(t *testing.T) {
+	secret := []byte("12345678901234567890")
+
+	negative := GenerateTOTPCode(secret, -5)
+	zero := GenerateTOTPCode(secret, 0)
+	if negative != zero {
+		t.Fatalf("expected a negative step to clamp to 0: step -5 gave %q, step 0 gave %q", negative, zero)
+	}
+}
+
 func TestVerifyTOTPCodeAcceptsCurrentAndAdjacentSteps(t *testing.T) {
 	secret := []byte("12345678901234567890")
 	now := int64(1234567890)
