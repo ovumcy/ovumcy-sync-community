@@ -72,3 +72,24 @@ func TestRunMigrateFailsWhenDatabaseCannotBeOpened(t *testing.T) {
 		t.Fatalf("expected open database error, got %v", err)
 	}
 }
+
+// TestRunDispatchesPurgeLapsedAccountsCommand exercises the
+// "purge-lapsed-accounts" case in run's command switch end to end: config is
+// loaded once by run() (unlike healthcheck/serve/migrate, this command also
+// needs args[1:] threaded through as its own flag set), the schema is
+// migrated fresh, and the sweep reports zero examined against an empty
+// database.
+func TestRunDispatchesPurgeLapsedAccountsCommand(t *testing.T) {
+	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "community.sqlite"))
+
+	if err := run([]string{"purge-lapsed-accounts", "-dry-run"}); err != nil {
+		t.Fatalf("run purge-lapsed-accounts: %v", err)
+	}
+}
+
+func TestRunRejectsUnknownCommandMentionsPurgeLapsedAccounts(t *testing.T) {
+	err := run([]string{"unknown"})
+	if err == nil || !strings.Contains(err.Error(), "purge-lapsed-accounts") {
+		t.Fatalf("expected the unknown-command error to mention purge-lapsed-accounts, got %v", err)
+	}
+}

@@ -35,6 +35,16 @@ type Config struct {
 	// vault. Defaults to "ovumcy-sync-community" but operators with custom
 	// branding can override via TOTP_ISSUER.
 	TOTPIssuer string
+	// LapsedAccountGracePeriod is how long a managed account is kept after its
+	// entitlement-lapse marker (accounts.lapsed_at, set by the managed
+	// bridge's POST /managed/accounts/{account_id}/premium lapse signal) is
+	// recorded before the purge-lapsed-accounts CLI subcommand erases it. A
+	// session mint (resubscribe) clears the marker at any point before the
+	// grace period elapses, so this is purely a data-minimization window, not
+	// a product feature deadline. One default for managed-cloud and
+	// self-hosted deployments, operator-tunable via
+	// LAPSED_ACCOUNT_GRACE_PERIOD. Defaults to 60 days.
+	LapsedAccountGracePeriod time.Duration
 }
 
 func Load() (Config, error) {
@@ -73,21 +83,27 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	lapsedAccountGracePeriod, err := durationFromEnv("LAPSED_ACCOUNT_GRACE_PERIOD", 60*24*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
-		BindAddr:            stringFromEnv("BIND_ADDR", ":8080"),
-		DBPath:              stringFromEnv("DB_PATH", "./data/ovumcy-sync-community.sqlite"),
-		SessionTTL:          sessionTTL,
-		MaxDevices:          maxDevices,
-		MaxBlobBytes:        maxBlobBytes,
-		AuthRateLimitCount:  authRateLimitCount,
-		AuthRateLimitWindow: authRateLimitWindow,
-		ManagedBridgeToken:  os.Getenv("MANAGED_BRIDGE_TOKEN"),
-		MetricsEnabled:      metricsEnabled,
-		MetricsBearerToken:  os.Getenv("METRICS_BEARER_TOKEN"),
-		AllowedOrigins:      csvListFromEnv("ALLOWED_ORIGINS"),
-		TrustedProxyCIDRs:   csvListFromEnv("TRUSTED_PROXY_CIDRS"),
-		FieldEncryptionKey:  fieldKey,
-		TOTPIssuer:          stringFromEnv("TOTP_ISSUER", "ovumcy-sync-community"),
+		BindAddr:                 stringFromEnv("BIND_ADDR", ":8080"),
+		DBPath:                   stringFromEnv("DB_PATH", "./data/ovumcy-sync-community.sqlite"),
+		SessionTTL:               sessionTTL,
+		MaxDevices:               maxDevices,
+		MaxBlobBytes:             maxBlobBytes,
+		AuthRateLimitCount:       authRateLimitCount,
+		AuthRateLimitWindow:      authRateLimitWindow,
+		ManagedBridgeToken:       os.Getenv("MANAGED_BRIDGE_TOKEN"),
+		MetricsEnabled:           metricsEnabled,
+		MetricsBearerToken:       os.Getenv("METRICS_BEARER_TOKEN"),
+		AllowedOrigins:           csvListFromEnv("ALLOWED_ORIGINS"),
+		TrustedProxyCIDRs:        csvListFromEnv("TRUSTED_PROXY_CIDRS"),
+		FieldEncryptionKey:       fieldKey,
+		TOTPIssuer:               stringFromEnv("TOTP_ISSUER", "ovumcy-sync-community"),
+		LapsedAccountGracePeriod: lapsedAccountGracePeriod,
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -145,6 +161,9 @@ func (c Config) Validate() error {
 		if _, err := ParseTrustedProxyCIDR(value); err != nil {
 			return fmt.Errorf("TRUSTED_PROXY_CIDRS entry %q is invalid: %w", value, err)
 		}
+	}
+	if c.LapsedAccountGracePeriod <= 0 {
+		return fmt.Errorf("LAPSED_ACCOUNT_GRACE_PERIOD must be positive")
 	}
 
 	return nil

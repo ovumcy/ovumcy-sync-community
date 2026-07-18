@@ -110,11 +110,12 @@ go run ./cmd/ovumcy-sync-community serve
 | `AUTH_RATE_LIMIT_WINDOW` | `1m` | Auth rate-limit window |
 | `METRICS_ENABLED` | `false` | Enables `GET /metrics` |
 | `METRICS_BEARER_TOKEN` | _(unset)_ | Bearer token for `/metrics` (requires `METRICS_ENABLED=true`) |
-| `MANAGED_BRIDGE_TOKEN` | _(unset)_ | Enables the managed-bridge endpoint (leave unset for community use) |
+| `MANAGED_BRIDGE_TOKEN` | _(unset)_ | Enables the managed-bridge endpoints (leave unset for community use) |
 | `ALLOWED_ORIGINS` | _(empty)_ | Explicit CORS allowlist for browser clients |
 | `TRUSTED_PROXY_CIDRS` | _(unset)_ | Reverse-proxy CIDRs whose forwarded client IP is trusted for rate limiting |
 | `FIELD_ENCRYPTION_KEY` | _(unset)_ | Hex key (≥32 bytes / 64 hex chars) that enables the optional TOTP surface |
 | `TOTP_ISSUER` | `ovumcy-sync-community` | Issuer label embedded in `otpauth://` provisioning URIs |
+| `LAPSED_ACCOUNT_GRACE_PERIOD` | `1440h` (60d) | Retention window for a managed account after the bridge signals an entitlement lapse, before `purge-lapsed-accounts` erases it |
 
 TOTP endpoints stay inactive (`503 totp_not_configured`) until `FIELD_ENCRYPTION_KEY` is set; see [docs/self-hosting.md](docs/self-hosting.md#optional-two-factor-authentication) for the 2FA and account-recovery flows.
 
@@ -179,7 +180,9 @@ internal/api  →  internal/services  →  internal/db     (+ internal/security,
 
 ## Advanced: managed bridge
 
-When `MANAGED_BRIDGE_TOKEN` is set, one extra endpoint is enabled — `POST /managed/session` — intended only for a separate trusted managed-auth service to provision a managed-mode session for an opaque managed `account_id`. Most self-hosted operators do not need this; leave the token unset and ignore the endpoint.
+When `MANAGED_BRIDGE_TOKEN` is set, a handful of extra endpoints are enabled — `POST /managed/session` to provision a managed-mode session for an opaque managed `account_id`, `DELETE /managed/accounts/{account_id}` to erase one on account deletion, and `POST /managed/accounts/{account_id}/premium` to record or retract an entitlement-lapse signal — intended only for a separate trusted managed-auth service. Most self-hosted operators do not need any of this; leave the token unset and ignore the endpoints.
+
+A lapsed managed account's data is retained for `LAPSED_ACCOUNT_GRACE_PERIOD` (default 60 days) and erased by the `purge-lapsed-accounts` CLI subcommand, run on a daily cron. See [docs/self-hosting.md](docs/self-hosting.md#entitlement-lapse-cleanup) for the operator workflow.
 
 ## Development
 
@@ -191,7 +194,7 @@ go run honnef.co/go/tools/cmd/staticcheck@v0.6.1 ./...
 
 Project layout:
 
-- `cmd/ovumcy-sync-community` — entrypoint (`migrate`, `serve`, `healthcheck`)
+- `cmd/ovumcy-sync-community` — entrypoint (`migrate`, `serve`, `healthcheck`, `purge-lapsed-accounts`)
 - `internal/api` — HTTP transport, handlers, response mapping
 - `internal/services` — domain logic (`AuthService`, `SyncService`)
 - `internal/db` — persistence, repositories, forward-only migrations

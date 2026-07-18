@@ -110,6 +110,19 @@ func TestValidateRejectsInvalidFields(t *testing.T) {
 			},
 			want: "METRICS_BEARER_TOKEN",
 		},
+		{
+			name: "non-positive lapsed account grace period",
+			cfg: Config{
+				BindAddr:            ":8080",
+				DBPath:              "./data.sqlite",
+				SessionTTL:          time.Hour,
+				MaxDevices:          1,
+				MaxBlobBytes:        1,
+				AuthRateLimitCount:  1,
+				AuthRateLimitWindow: time.Minute,
+			},
+			want: "LAPSED_ACCOUNT_GRACE_PERIOD",
+		},
 	}
 
 	for _, test := range tests {
@@ -124,13 +137,14 @@ func TestValidateRejectsInvalidFields(t *testing.T) {
 
 func TestValidateAcceptsValidConfig(t *testing.T) {
 	cfg := Config{
-		BindAddr:            ":8080",
-		DBPath:              "./data.sqlite",
-		SessionTTL:          time.Hour,
-		MaxDevices:          5,
-		MaxBlobBytes:        16 << 20,
-		AuthRateLimitCount:  10,
-		AuthRateLimitWindow: time.Minute,
+		BindAddr:                 ":8080",
+		DBPath:                   "./data.sqlite",
+		SessionTTL:               time.Hour,
+		MaxDevices:               5,
+		MaxBlobBytes:             16 << 20,
+		AuthRateLimitCount:       10,
+		AuthRateLimitWindow:      time.Minute,
+		LapsedAccountGracePeriod: 60 * 24 * time.Hour,
 	}
 
 	if err := cfg.Validate(); err != nil {

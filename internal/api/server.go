@@ -113,6 +113,7 @@ func (s *Server) routes() {
 	s.handleRoute("DELETE /account", "account_delete", s.withAuth(s.handleDeleteAccount))
 	s.handleRoute("POST /managed/session", "managed_session", s.withManagedBridge(s.handleManagedSession))
 	s.handleRoute("DELETE /managed/accounts/{account_id}", "managed_account_purge", s.withManagedBridge(s.handleManagedAccountPurge))
+	s.handleRoute("POST /managed/accounts/{account_id}/premium", "managed_account_premium", s.withManagedBridge(s.handleManagedAccountPremium))
 	s.handleRoute("GET /sync/capabilities", "sync_capabilities", s.withAuth(s.handleCapabilities))
 	s.handleRoute("POST /sync/devices", "sync_devices", s.withAuth(s.handleAttachDevice))
 	s.handleRoute("GET /sync/devices", "sync_devices_list", s.withAuth(s.handleListDevices))
@@ -640,6 +641,42 @@ func (s *Server) handleManagedAccountPurge(writer http.ResponseWriter, request *
 	writeJSON(writer, http.StatusOK, map[string]string{"status": "account_purged"})
 }
 
+// handleManagedAccountPremium implements POST /managed/accounts/{account_id}
+// /premium: the entitlement-lapse signal half of the sync-side lapse-cleanup
+// design documented in docs/self-hosting.md ("Entitlement-Lapse Cleanup")
+// and SECURITY.md. It is gated by withManagedBridge — the same
+// MANAGED_BRIDGE_TOKEN bearer as
+// POST /managed/session and the account-purge endpoint — and relays the
+// path id and the request body's active flag to
+// ManagedBridgeService.SetAccountLapseSignal, which owns normalization, the
+// managed-mode guard, idempotency, and (for active=false) the immediate
+// session revocation. This is a lifecycle signal only: the request and
+// response never carry anything beyond the account id and the boolean flag,
+// so no health-adjacent content ever crosses the bridge.
+func (s *Server) handleManagedAccountPremium(writer http.ResponseWriter, request *http.Request) {
+	var payload managedAccountPremiumRequest
+	if !decodeJSON(writer, request, &payload, 4<<10) {
+		return
+	}
+
+	err := s.managedBridge.SetAccountLapseSignal(request.Context(), request.PathValue("account_id"), payload.Active)
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrInvalidManagedAccount):
+			writeError(writer, http.StatusBadRequest, "invalid_managed_account")
+		default:
+			writeError(writer, http.StatusInternalServerError, "internal_error")
+		}
+		return
+	}
+
+	if payload.Active {
+		writeJSON(writer, http.StatusOK, map[string]string{"status": "lapse_cleared"})
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]string{"status": "lapse_recorded"})
+}
+
 func (s *Server) handleCapabilities(writer http.ResponseWriter, _ *http.Request, account models.Account) {
 	writeJSON(writer, http.StatusOK, s.sync.CapabilitiesForAccount(account))
 }
@@ -1118,6 +1155,14 @@ type totpChallengeRequest struct {
 
 type managedSessionRequest struct {
 	AccountID string `json:"account_id"`
+}
+
+// managedAccountPremiumRequest is the POST /managed/accounts/{account_id}
+// /premium body. Active false records an entitlement lapse; true retracts a
+// previously recorded one. An omitted field decodes to false, the sketch's
+// primary case (see handleManagedAccountPremium).
+type managedAccountPremiumRequest struct {
+	Active bool `json:"active"`
 }
 
 type deviceRequest struct {
