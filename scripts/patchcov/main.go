@@ -43,7 +43,7 @@ func main() {
 		fatalf("read module path: %v", err)
 	}
 
-	profileData, err := os.ReadFile(coverageFile)
+	profileData, err := os.ReadFile(coverageFile) // #nosec G304 -- coverageFile is the operator-set COVERAGE_FILE (default coverage.out) produced by this same CI/local run, not untrusted input
 	if err != nil {
 		fatalf("read coverage file %s: %v", coverageFile, err)
 	}
@@ -167,7 +167,7 @@ func lineState(blocks []coverBlock, line int) int {
 // brittle fault-injection test. A missing/unreadable file marks nothing.
 func markedLines(file string) map[int]bool {
 	marked := map[int]bool{}
-	data, err := os.ReadFile(file)
+	data, err := os.ReadFile(file) // #nosec G304 -- file is a repo-relative source path drawn from this repo's own coverage profile and git diff (the tree under analysis), never untrusted input; a missing file marks nothing
 	if err != nil {
 		return marked
 	}
@@ -260,7 +260,7 @@ func isGatedFile(file string) bool {
 }
 
 func readModulePath(goMod string) (string, error) {
-	data, err := os.ReadFile(goMod)
+	data, err := os.ReadFile(goMod) // #nosec G304 -- goMod is the literal "go.mod" passed from main; the parameter exists only for the test, never an untrusted path
 	if err != nil {
 		return "", err
 	}
@@ -274,7 +274,7 @@ func readModulePath(goMod string) (string, error) {
 }
 
 func gitDiff(baseRef string) (string, error) {
-	out, err := exec.Command("git", "diff", "--unified=0", "--no-color", baseRef+"...HEAD", "--", "*.go").Output()
+	out, err := exec.Command("git", "diff", "--unified=0", "--no-color", baseRef+"...HEAD", "--", "*.go").Output() // #nosec G204 -- coverage-gate dev tool: fixed "git" binary run without a shell (no interpolation); baseRef is an operator-set BASE_REF revision embedded mid-argument, so it cannot become an option flag
 	if err != nil {
 		return "", err
 	}
