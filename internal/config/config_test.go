@@ -317,3 +317,31 @@ func TestLoadDefaultsTheLapsedAccountSweep(t *testing.T) {
 		t.Fatalf("expected the limit to default to 0 (store default), got %d", cfg.LapsedAccountSweepLimit)
 	}
 }
+
+// TestLoadRejectsUnparsableLapsedAccountSweepSettings covers the two parse
+// branches the sweep settings add. A typo in either must stop the server at
+// boot rather than silently fall back to a default: an operator who wrote
+// "24" instead of "24h" to disable the purge, or "0" where they meant off,
+// needs to be told — a server that quietly ran the default interval after a
+// rejected value would delete data the operator believed was retained.
+func TestLoadRejectsUnparsableLapsedAccountSweepSettings(t *testing.T) {
+	t.Run("interval", func(t *testing.T) {
+		t.Setenv("LAPSED_ACCOUNT_SWEEP_INTERVAL", "every-day")
+
+		if _, err := Load(); err == nil {
+			t.Fatal("expected an unparsable sweep interval to be rejected")
+		} else if !strings.Contains(err.Error(), "LAPSED_ACCOUNT_SWEEP_INTERVAL") {
+			t.Fatalf("expected the offending variable to be named, got %v", err)
+		}
+	})
+
+	t.Run("limit", func(t *testing.T) {
+		t.Setenv("LAPSED_ACCOUNT_SWEEP_LIMIT", "many")
+
+		if _, err := Load(); err == nil {
+			t.Fatal("expected an unparsable sweep limit to be rejected")
+		} else if !strings.Contains(err.Error(), "LAPSED_ACCOUNT_SWEEP_LIMIT") {
+			t.Fatalf("expected the offending variable to be named, got %v", err)
+		}
+	})
+}

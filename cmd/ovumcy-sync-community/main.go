@@ -138,6 +138,14 @@ func runServe(cfg config.Config) error {
 		IdleTimeout:       60 * time.Second,
 	}
 
+	// codecov:ignore:start -- process wiring reached only once ListenAndServe is
+	// about to run. runServe's tested error paths (run_test.go) all return
+	// before this point, and driving past it needs a real listener plus a
+	// process signal to unwind it, which is not a black-box test. The behaviour
+	// these lines wire up is covered directly instead:
+	// lapsed_account_sweep_loop_test.go exercises the loop against every run
+	// outcome, including the context-cancellation this shutdown path triggers.
+
 	// backgroundCtx bounds the in-process sweep to the server's own lifetime:
 	// the same signal that stops accepting requests stops the purge loop, so a
 	// terminating container never leaves a delete transaction half-running.
@@ -158,6 +166,7 @@ func runServe(cfg config.Config) error {
 		cfg.LapsedAccountSweepInterval,
 		cfg.LapsedAccountSweepLimit,
 	)
+	// codecov:ignore:end
 
 	log.Printf("ovumcy-sync-community listening on %s", cfg.BindAddr)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
