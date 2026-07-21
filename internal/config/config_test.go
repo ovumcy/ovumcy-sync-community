@@ -277,3 +277,43 @@ func TestParseTrustedProxyCIDRAcceptsBareIPv6Address(t *testing.T) {
 		t.Fatalf("expected ::1/128, got %q", prefix.String())
 	}
 }
+
+// TestLoadAcceptsADisabledLapsedAccountSweep pins the rollback lever. Every
+// other duration in this config is rejected when non-positive, so the obvious
+// "consistency" cleanup is to validate this one the same way — which would
+// silently remove the only way to turn the in-process purge off without
+// shipping a new image. The zero is the feature.
+func TestLoadAcceptsADisabledLapsedAccountSweep(t *testing.T) {
+	t.Setenv("LAPSED_ACCOUNT_SWEEP_INTERVAL", "0")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load rejected a disabled sweep interval: %v", err)
+	}
+	if cfg.LapsedAccountSweepInterval != 0 {
+		t.Fatalf("expected the interval to stay 0, got %v", cfg.LapsedAccountSweepInterval)
+	}
+
+	// The grace period keeps its opposite contract: it is a retention promise,
+	// not a switch, and zero would mean "erase immediately".
+	t.Setenv("LAPSED_ACCOUNT_GRACE_PERIOD", "0")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected a zero grace period to be rejected")
+	}
+}
+
+// TestLoadDefaultsTheLapsedAccountSweep pins the shipped defaults: the sweep is
+// on out of the box, because a retention window nobody enforces is the failure
+// this config exists to prevent.
+func TestLoadDefaultsTheLapsedAccountSweep(t *testing.T) {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.LapsedAccountSweepInterval != 24*time.Hour {
+		t.Fatalf("expected a 24h default sweep interval, got %v", cfg.LapsedAccountSweepInterval)
+	}
+	if cfg.LapsedAccountSweepLimit != 0 {
+		t.Fatalf("expected the limit to default to 0 (store default), got %d", cfg.LapsedAccountSweepLimit)
+	}
+}

@@ -138,12 +138,26 @@ func runServe(cfg config.Config) error {
 		IdleTimeout:       60 * time.Second,
 	}
 
+	// backgroundCtx bounds the in-process sweep to the server's own lifetime:
+	// the same signal that stops accepting requests stops the purge loop, so a
+	// terminating container never leaves a delete transaction half-running.
+	backgroundCtx, stopBackground := context.WithCancel(context.Background())
+	defer stopBackground()
+
 	go func() {
 		<-shutdownSignal()
+		stopBackground()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = server.Shutdown(ctx)
 	}()
+
+	go runLapsedAccountSweepLoop(
+		backgroundCtx,
+		services.NewLapsedAccountSweepService(store, cfg.LapsedAccountGracePeriod),
+		cfg.LapsedAccountSweepInterval,
+		cfg.LapsedAccountSweepLimit,
+	)
 
 	log.Printf("ovumcy-sync-community listening on %s", cfg.BindAddr)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -151,4 +165,78 @@ func runServe(cfg config.Config) error {
 	}
 
 	return nil
+}
+
+// lapsedAccountSweeper is the narrow surface runLapsedAccountSweepLoop needs,
+// satisfied by *services.LapsedAccountSweepService. Consumer-side so the loop
+// can be tested against every run outcome without a database.
+type lapsedAccountSweeper interface {
+	Run(ctx context.Context, limit int, dryRun bool) (services.LapsedAccountSweepResult, error)
+}
+
+// runLapsedAccountSweepLoop erases accounts whose entitlement-lapse grace
+// period has elapsed, on an interval, inside the server process.
+//
+// It exists because the retention promise had no enforcer. The managed side
+// signals a lapse, this server records it and starts the clock — and then
+// nothing happens unless an operator remembered to schedule the
+// purge-lapsed-accounts subcommand. A stated retention window that nobody
+// executes is worse than none: the data is kept indefinitely while the docs
+// say otherwise.
+//
+// The loop decides only WHEN to purge, never WHOM: eligibility stays entirely
+// inside services.LapsedAccountSweepService.Run and the in-transaction
+// re-check beneath it, which is the same path the subcommand drives. Both
+// triggers are therefore idempotent and safe to run together — an operator
+// with an existing cron loses nothing.
+//
+// The first run happens one interval after boot, not at startup. A crash-loop
+// must not turn into a purge-loop, and there is nothing so urgent about a
+// 60-day grace period that it cannot wait one more tick.
+//
+// A non-positive interval disables the loop entirely, leaving the subcommand
+// as the only trigger. That is the rollback lever: it takes effect on restart,
+// without shipping a new image.
+//
+// Unlike the managed peer's lapse-signal sweep, there is no alerting monitor
+// here and deliberately so. That sweep depends on reaching another server, so
+// silence is ambiguous and needs escalation; this one deletes local rows, so a
+// failure is a plain storage error that belongs in the log and nowhere else.
+func runLapsedAccountSweepLoop(
+	ctx context.Context,
+	sweeper lapsedAccountSweeper,
+	interval time.Duration,
+	limit int,
+) {
+	if sweeper == nil || interval <= 0 {
+		log.Print("lapsed-account sweep: in-process sweep disabled; schedule the purge-lapsed-accounts command instead")
+		return
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			result, err := sweeper.Run(ctx, limit, false)
+			// A run can both delete and fail partway, so report the counts
+			// before the error rather than instead of it. Account ids only —
+			// never any other field (see SECURITY.md).
+			if result.Deleted > 0 {
+				log.Printf(
+					"lapsed-account sweep examined %d accounts, deleted %d",
+					result.Examined, result.Deleted,
+				)
+				for _, accountID := range result.DeletedAccountIDs {
+					log.Printf("lapsed-account sweep deleted account_id=%s", accountID)
+				}
+			}
+			if err != nil {
+				log.Printf("lapsed-account sweep: %v", err)
+			}
+		}
+	}
 }

@@ -45,6 +45,23 @@ type Config struct {
 	// self-hosted deployments, operator-tunable via
 	// LAPSED_ACCOUNT_GRACE_PERIOD. Defaults to 60 days.
 	LapsedAccountGracePeriod time.Duration
+	// LapsedAccountSweepInterval, from LAPSED_ACCOUNT_SWEEP_INTERVAL (default
+	// 24h), paces the in-process purge of accounts whose grace period has
+	// elapsed. It exists because retention that depends on an operator
+	// remembering to schedule the purge-lapsed-accounts cron is retention that
+	// silently does not happen: the managed side signals a lapse, this server
+	// records it and starts the clock, and without a trigger the data is then
+	// kept forever. The sweep is idempotent, so a deployment that also runs
+	// the cron is unaffected.
+	//
+	// Set to 0 to disable the in-process sweep and leave the subcommand as the
+	// only trigger. That is also the rollback: it takes effect on restart, with
+	// no new image.
+	LapsedAccountSweepInterval time.Duration
+	// LapsedAccountSweepLimit, from LAPSED_ACCOUNT_SWEEP_LIMIT (default 0 =
+	// the store's own default page size), caps how many candidate accounts one
+	// in-process sweep run examines.
+	LapsedAccountSweepLimit int
 }
 
 func Load() (Config, error) {
@@ -88,22 +105,36 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	lapsedAccountSweepInterval, err := durationFromEnv("LAPSED_ACCOUNT_SWEEP_INTERVAL", 24*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+	// Deliberately not validated as positive, unlike the grace period: 0 is the
+	// documented way to turn the in-process sweep off and keep the cron as the
+	// only trigger.
+	lapsedAccountSweepLimit, err := intFromEnv("LAPSED_ACCOUNT_SWEEP_LIMIT", 0)
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
-		BindAddr:                 stringFromEnv("BIND_ADDR", ":8080"),
-		DBPath:                   stringFromEnv("DB_PATH", "./data/ovumcy-sync-community.sqlite"),
-		SessionTTL:               sessionTTL,
-		MaxDevices:               maxDevices,
-		MaxBlobBytes:             maxBlobBytes,
-		AuthRateLimitCount:       authRateLimitCount,
-		AuthRateLimitWindow:      authRateLimitWindow,
-		ManagedBridgeToken:       os.Getenv("MANAGED_BRIDGE_TOKEN"),
-		MetricsEnabled:           metricsEnabled,
-		MetricsBearerToken:       os.Getenv("METRICS_BEARER_TOKEN"),
-		AllowedOrigins:           csvListFromEnv("ALLOWED_ORIGINS"),
-		TrustedProxyCIDRs:        csvListFromEnv("TRUSTED_PROXY_CIDRS"),
-		FieldEncryptionKey:       fieldKey,
-		TOTPIssuer:               stringFromEnv("TOTP_ISSUER", "ovumcy-sync-community"),
-		LapsedAccountGracePeriod: lapsedAccountGracePeriod,
+		BindAddr:                   stringFromEnv("BIND_ADDR", ":8080"),
+		DBPath:                     stringFromEnv("DB_PATH", "./data/ovumcy-sync-community.sqlite"),
+		SessionTTL:                 sessionTTL,
+		MaxDevices:                 maxDevices,
+		MaxBlobBytes:               maxBlobBytes,
+		AuthRateLimitCount:         authRateLimitCount,
+		AuthRateLimitWindow:        authRateLimitWindow,
+		ManagedBridgeToken:         os.Getenv("MANAGED_BRIDGE_TOKEN"),
+		MetricsEnabled:             metricsEnabled,
+		MetricsBearerToken:         os.Getenv("METRICS_BEARER_TOKEN"),
+		AllowedOrigins:             csvListFromEnv("ALLOWED_ORIGINS"),
+		TrustedProxyCIDRs:          csvListFromEnv("TRUSTED_PROXY_CIDRS"),
+		FieldEncryptionKey:         fieldKey,
+		TOTPIssuer:                 stringFromEnv("TOTP_ISSUER", "ovumcy-sync-community"),
+		LapsedAccountGracePeriod:   lapsedAccountGracePeriod,
+		LapsedAccountSweepInterval: lapsedAccountSweepInterval,
+		LapsedAccountSweepLimit:    lapsedAccountSweepLimit,
 	}
 
 	if err := cfg.Validate(); err != nil {
