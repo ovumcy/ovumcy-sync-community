@@ -15,10 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The dormant `oss-fuzz/` scaffold (`project.yaml`, `Dockerfile`, `build.sh`, `ONBOARDING.md`). It never ran in this repo's own CI and required a separate, un-taken `google/oss-fuzz` onboarding step; the existing native `go test -fuzz` workflow (`fuzz.yml`) remains the fuzzing this project actually runs.
 
+### Fixed
+
+- **Device limit could be exceeded under concurrency.** Attaching a device counted the account's devices and then inserted in two separate steps, so simultaneous attaches all passed the same check and overran `MAX_DEVICES`. The ceiling is now a predicate inside the insert statement (matching the blob-generation CAS), so concurrent attaches collapse to the limit. Re-attaching an already-owned device still refreshes its row without consuming a slot.
+
 ### Security
 
 - The entitlement-lapse signal immediately revokes every still-valid session on a lapsed managed account (no entitlement, no sync), independent of the data-retention grace period.
 - The purge sweep re-checks the lapse marker and grace cutoff inside the same transaction as the deletion itself, so a session mint that races a scheduled sweep run always preserves the account intact.
+- The rate-limit client IP is now canonicalized (IPv4-unmapped and IPv6 zone-stripped), so an IPv6 caller behind a trusted proxy can no longer mint distinct rate-limit buckets for one address by varying the zone in a forwarded header. Added native fuzz coverage for the client-IP parsers.
 
 ## [0.3.0] - 2026-07-07
 

@@ -118,27 +118,26 @@ func (s *SyncService) AttachDevice(
 	}
 
 	now := s.now().UTC()
-	if _, err := s.store.FindDevice(ctx, accountID, deviceID); err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			count, countErr := s.store.CountDevicesForAccount(ctx, accountID)
-			if countErr != nil {
-				return models.Device{}, countErr // codecov:ignore -- CountDevicesForAccount and the FindDevice call just above both query the "devices" table, so isolating a failure here while FindDevice's own not-found lookup already succeeded needs the table to vanish mid-call; needs a fake driver.
-			}
-			if count >= s.maxDevices {
-				return models.Device{}, ErrTooManyDevices
-			}
-		} else {
-			return models.Device{}, err
-		}
-	}
-
-	return s.store.UpsertDevice(ctx, models.Device{
+	// Atomic ceiling in the repository: the WHERE sub-select rejects an
+	// attach that would exceed maxDevices in the same statement that
+	// inserts, so we don't count-then-write here. Concurrent attaches that
+	// all read the same count would otherwise each add a row and push the
+	// account past its limit.
+	device, err := s.store.UpsertDevice(ctx, models.Device{
 		DeviceID:    deviceID,
 		AccountID:   accountID,
 		DeviceLabel: deviceLabel,
 		CreatedAt:   now,
 		LastSeenAt:  now,
-	})
+	}, s.maxDevices)
+	if err != nil {
+		if errors.Is(err, db.ErrDeviceLimitReached) {
+			return models.Device{}, ErrTooManyDevices
+		}
+		return models.Device{}, err
+	}
+
+	return device, nil
 }
 
 // ListDevices returns every device attached to the account, account-scoped.

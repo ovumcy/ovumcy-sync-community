@@ -43,7 +43,7 @@ func TestMigrationsBootstrapAndRepositories(t *testing.T) {
 		DeviceLabel: "Pixel 7",
 		CreatedAt:   now,
 		LastSeenAt:  now,
-	}); err != nil {
+	}, 5); err != nil {
 		t.Fatalf("upsert device: %v", err)
 	}
 
@@ -111,7 +111,7 @@ func TestRepositoriesDoNotShareDeviceOwnershipAcrossAccounts(t *testing.T) {
 			DeviceLabel: accountID,
 			CreatedAt:   now,
 			LastSeenAt:  now,
-		}); err != nil {
+		}, 5); err != nil {
 			t.Fatalf("upsert device for %s: %v", accountID, err)
 		}
 	}
