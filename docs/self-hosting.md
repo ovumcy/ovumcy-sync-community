@@ -53,7 +53,8 @@ This service itself does not terminate TLS. Production deployments should not ex
 - `TRUSTED_PROXY_CIDRS=` set this to your reverse-proxy IP or CIDR when you want forwarded client IPs to participate in auth rate limiting
 - `FIELD_ENCRYPTION_KEY=` optional hex-encoded master key (>=32 bytes / 64 hex chars) that enables the TOTP second-factor surface; leave unset to disable 2FA entirely (see *Optional Two-Factor Authentication* below)
 - `TOTP_ISSUER=ovumcy-sync-community` optional label embedded in `otpauth://` provisioning URIs so authenticator apps know which instance the secret belongs to
-- `LAPSED_ACCOUNT_GRACE_PERIOD=1440h` (60 days) how long a managed account's data is kept after the managed bridge signals an entitlement lapse, before `purge-lapsed-accounts` erases it; irrelevant unless you run the managed bridge (see *Entitlement-Lapse Cleanup* below)
+- `LAPSED_ACCOUNT_GRACE_PERIOD=1440h` (60 days) how long a managed account's data is kept after the managed bridge signals an entitlement lapse, before it is erased; irrelevant unless you run the managed bridge (see *Entitlement-Lapse Cleanup* below)
+- `LAPSED_ACCOUNT_SWEEP_INTERVAL=24h` how often `serve` purges accounts past that window on its own; `0` disables the in-process sweep and leaves `purge-lapsed-accounts` as the only trigger. `LAPSED_ACCOUNT_SWEEP_LIMIT` caps candidates per run (unset = store default)
 
 Adjust limits only when you understand the tradeoff between usability and abuse resistance.
 
@@ -194,7 +195,11 @@ When a managed account's subscription lapses, the separate managed-auth service 
 2. Immediately revoking every still-valid session the account holds — no entitlement, no sync, from that moment on.
 3. Leaving the account's encrypted data (`encrypted_blobs`, the wrapped recovery-key package, devices) exactly where it is.
 
-The retained data is erased only after `LAPSED_ACCOUNT_GRACE_PERIOD` (default 60 days) has elapsed, via a separate operator-run subcommand:
+The retained data is erased only after `LAPSED_ACCOUNT_GRACE_PERIOD` (default 60 days) has elapsed.
+
+`serve` does this itself, every `LAPSED_ACCOUNT_SWEEP_INTERVAL` (default `24h`), starting one interval after boot. Nothing to schedule: the retention window the paragraph above promises is enforced by the running server, not by an operator remembering to wire a timer. `LAPSED_ACCOUNT_SWEEP_LIMIT` caps how many candidates one run examines (unset uses the store's default page size), and `LAPSED_ACCOUNT_SWEEP_INTERVAL=0` turns the in-process sweep off entirely — which is also the rollback lever, effective on restart with no new image.
+
+The same work is available on demand as a subcommand, for a one-off run, a dry-run audit, or as the sole trigger on a deployment that keeps the interval at `0`:
 
 ```bash
 ovumcy-sync-community purge-lapsed-accounts            # deletes eligible accounts
@@ -202,7 +207,7 @@ ovumcy-sync-community purge-lapsed-accounts -dry-run    # report only, deletes n
 ovumcy-sync-community purge-lapsed-accounts -limit 200  # cap how many candidates one run examines
 ```
 
-This is a cron/scheduler vehicle, not a background ticker inside `serve` — wire it up with cron, a systemd timer, or a Kubernetes CronJob, running once daily is sufficient. Each run prints a stable, greppable summary to stdout and never logs anything beyond account ids:
+Both triggers drive the identical eligibility path and are idempotent, so an existing cron or systemd timer alongside the in-process sweep is harmless — neither can delete anything the other would have spared. Each subcommand run prints a stable, greppable summary to stdout and never logs anything beyond account ids:
 
 ```
 lapsed_account_sweep_dry_run=false

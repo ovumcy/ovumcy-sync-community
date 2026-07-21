@@ -115,7 +115,9 @@ go run ./cmd/ovumcy-sync-community serve
 | `TRUSTED_PROXY_CIDRS` | _(unset)_ | Reverse-proxy CIDRs whose forwarded client IP is trusted for rate limiting |
 | `FIELD_ENCRYPTION_KEY` | _(unset)_ | Hex key (≥32 bytes / 64 hex chars) that enables the optional TOTP surface |
 | `TOTP_ISSUER` | `ovumcy-sync-community` | Issuer label embedded in `otpauth://` provisioning URIs |
-| `LAPSED_ACCOUNT_GRACE_PERIOD` | `1440h` (60d) | Retention window for a managed account after the bridge signals an entitlement lapse, before `purge-lapsed-accounts` erases it |
+| `LAPSED_ACCOUNT_GRACE_PERIOD` | `1440h` (60d) | Retention window for a managed account after the bridge signals an entitlement lapse, before it is erased |
+| `LAPSED_ACCOUNT_SWEEP_INTERVAL` | `24h` | How often the server itself purges accounts past that window. `0` disables the in-process sweep and leaves `purge-lapsed-accounts` as the only trigger |
+| `LAPSED_ACCOUNT_SWEEP_LIMIT` | _(unset)_ | Candidate accounts examined per in-process run; unset uses the store's own default page size |
 
 TOTP endpoints stay inactive (`503 totp_not_configured`) until `FIELD_ENCRYPTION_KEY` is set; see [docs/self-hosting.md](docs/self-hosting.md#optional-two-factor-authentication) for the 2FA and account-recovery flows.
 
@@ -182,7 +184,7 @@ internal/api  →  internal/services  →  internal/db     (+ internal/security,
 
 When `MANAGED_BRIDGE_TOKEN` is set, a handful of extra endpoints are enabled — `POST /managed/session` to provision a managed-mode session for an opaque managed `account_id`, `DELETE /managed/accounts/{account_id}` to erase one on account deletion, and `POST /managed/accounts/{account_id}/premium` to record or retract an entitlement-lapse signal — intended only for a separate trusted managed-auth service. Most self-hosted operators do not need any of this; leave the token unset and ignore the endpoints.
 
-A lapsed managed account's data is retained for `LAPSED_ACCOUNT_GRACE_PERIOD` (default 60 days) and erased by the `purge-lapsed-accounts` CLI subcommand, run on a daily cron. See [docs/self-hosting.md](docs/self-hosting.md#entitlement-lapse-cleanup) for the operator workflow.
+A lapsed managed account's data is retained for `LAPSED_ACCOUNT_GRACE_PERIOD` (default 60 days) and then erased by the server itself, every `LAPSED_ACCOUNT_SWEEP_INTERVAL` (default 24h) — so the retention window holds without an operator scheduling anything. The `purge-lapsed-accounts` CLI subcommand does the same work on demand and remains available; both triggers are idempotent and safe to run together, and setting the interval to `0` leaves the subcommand as the only one. See [docs/self-hosting.md](docs/self-hosting.md#entitlement-lapse-cleanup) for the operator workflow.
 
 ## Development
 

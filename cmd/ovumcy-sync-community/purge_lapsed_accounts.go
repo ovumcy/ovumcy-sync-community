@@ -21,11 +21,14 @@ import (
 // db.Store.DeleteLapsedManagedAccount for the delete-time re-check that
 // makes this safe against a resubscribe (a session mint) racing the sweep.
 //
-// This is a daily-cron vehicle, not an always-on ticker in the server
-// process — mirroring the ovumcy-managed peer's gc-guest-accounts pattern
-// (see that repo's cmd/ovumcy-managed/gc_guest_accounts.go): an operator
-// wires it up with cron/systemd-timer/Kubernetes CronJob outside this
-// binary.
+// It is the on-demand half of the purge. `serve` runs the same sweep on
+// LAPSED_ACCOUNT_SWEEP_INTERVAL (see runLapsedAccountSweepLoop), because
+// retention that waits on an operator remembering to schedule a cron is
+// retention that silently does not happen. This subcommand remains for a
+// one-off run, a -dry-run audit, and as the sole trigger on a deployment
+// that sets the interval to 0. Both drive the identical eligibility path and
+// are idempotent, so running a cron alongside the in-process sweep is
+// harmless.
 //
 // args is the subcommand's own argv (excluding the "purge-lapsed-accounts"
 // word itself):
