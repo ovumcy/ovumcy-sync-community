@@ -62,6 +62,18 @@ type Config struct {
 	// the store's own default page size), caps how many candidate accounts one
 	// in-process sweep run examines.
 	LapsedAccountSweepLimit int
+	// ExpiredRowsSweepInterval, from EXPIRED_ROWS_SWEEP_INTERVAL (default
+	// 24h), paces the in-process deletion of rows whose expiry has passed —
+	// sessions, password-reset tokens, and TOTP challenges. Every read path
+	// already enforces expiry at use time, so this is data minimization for
+	// the only tables that otherwise grow without bound, not a security
+	// boundary. Deliberately not validated as positive: a non-positive value
+	// disables the sweep, and that is the rollback lever — effective on
+	// restart, with no new image.
+	ExpiredRowsSweepInterval time.Duration
+	// ExpiredRowsSweepLimit, from EXPIRED_ROWS_SWEEP_LIMIT (default 0 = the
+	// store's own default page size), caps rows deleted per table per run.
+	ExpiredRowsSweepLimit int
 	// HTTPReadTimeout / HTTPWriteTimeout bound a single HTTP request's full
 	// read and write windows (HTTP_READ_TIMEOUT, default 10s;
 	// HTTP_WRITE_TIMEOUT, default 15s). Together with MAX_BLOB_BYTES they cap
@@ -126,6 +138,18 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	expiredRowsSweepInterval, err := durationFromEnv("EXPIRED_ROWS_SWEEP_INTERVAL", 24*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+
+	// Same contract as the lapsed-account sweep limit above: 0 — explicit or
+	// unset — means the store's own default page size.
+	expiredRowsSweepLimit, err := nonNegativeIntFromEnv("EXPIRED_ROWS_SWEEP_LIMIT", 0)
+	if err != nil {
+		return Config{}, err
+	}
+
 	httpReadTimeout, err := positiveDurationFromEnv("HTTP_READ_TIMEOUT", 10*time.Second)
 	if err != nil {
 		return Config{}, err
@@ -154,6 +178,8 @@ func Load() (Config, error) {
 		LapsedAccountGracePeriod:   lapsedAccountGracePeriod,
 		LapsedAccountSweepInterval: lapsedAccountSweepInterval,
 		LapsedAccountSweepLimit:    lapsedAccountSweepLimit,
+		ExpiredRowsSweepInterval:   expiredRowsSweepInterval,
+		ExpiredRowsSweepLimit:      expiredRowsSweepLimit,
 		HTTPReadTimeout:            httpReadTimeout,
 		HTTPWriteTimeout:           httpWriteTimeout,
 	}

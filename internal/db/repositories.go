@@ -1262,6 +1262,87 @@ func scanRecoveryKeyPackage(
 	return recoveryKeyPackage, nil
 }
 
+// DefaultExpiredRowsSweepLimit bounds one expired-rows delete statement when
+// the caller does not pass an explicit positive limit, mirroring
+// DefaultLapsedAccountSweepLimit: no trigger may attempt an unbounded delete
+// in one call.
+const DefaultExpiredRowsSweepLimit = 500
+
+// DeleteExpiredSessions deletes up to limit sessions whose expires_at is at
+// or before cutoff and reports how many rows were removed. Expiry is already
+// enforced at use time (Authenticate rejects an expired session by the same
+// clock) and is monotonic, so deleting an expired row can never race a valid
+// use — this is data minimization of rows nothing can read again. A
+// non-positive limit falls back to DefaultExpiredRowsSweepLimit; the
+// subselect keeps the delete bounded without SQLite's optional DELETE...LIMIT
+// build flag.
+func (s *Store) DeleteExpiredSessions(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
+	if limit <= 0 {
+		limit = DefaultExpiredRowsSweepLimit
+	}
+	result, err := s.db.ExecContext(
+		ctx,
+		`DELETE FROM sessions WHERE rowid IN (SELECT rowid FROM sessions WHERE expires_at <= ? LIMIT ?)`,
+		cutoff.UTC().Format(time.RFC3339Nano),
+		limit,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("delete expired sessions: %w", err)
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("delete expired sessions rows affected: %w", err) // codecov:ignore -- modernc's driver always reports RowsAffected for a DELETE; failing this seam needs a fake driver, the same deviation documented for ListLapsedManagedAccountIDs' rows.Err() branch.
+	}
+	return deleted, nil
+}
+
+// DeleteExpiredPasswordResetTokens is DeleteExpiredSessions for
+// password_reset_tokens: expired tokens stopped matching
+// ConsumePasswordResetToken's CAS the moment they expired (consumed rows
+// follow once their expiry passes), so the delete is equally race-free.
+func (s *Store) DeleteExpiredPasswordResetTokens(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
+	if limit <= 0 {
+		limit = DefaultExpiredRowsSweepLimit
+	}
+	result, err := s.db.ExecContext(
+		ctx,
+		`DELETE FROM password_reset_tokens WHERE rowid IN (SELECT rowid FROM password_reset_tokens WHERE expires_at <= ? LIMIT ?)`,
+		cutoff.UTC().Format(time.RFC3339Nano),
+		limit,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("delete expired password reset tokens: %w", err)
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("delete expired password reset tokens rows affected: %w", err) // codecov:ignore -- same fake-driver-only seam as DeleteExpiredSessions.
+	}
+	return deleted, nil
+}
+
+// DeleteExpiredTOTPChallenges is DeleteExpiredSessions for totp_challenges:
+// challenge verification checks expires_at before any claim, so an expired
+// challenge is dead the moment its deadline passes.
+func (s *Store) DeleteExpiredTOTPChallenges(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
+	if limit <= 0 {
+		limit = DefaultExpiredRowsSweepLimit
+	}
+	result, err := s.db.ExecContext(
+		ctx,
+		`DELETE FROM totp_challenges WHERE rowid IN (SELECT rowid FROM totp_challenges WHERE expires_at <= ? LIMIT ?)`,
+		cutoff.UTC().Format(time.RFC3339Nano),
+		limit,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("delete expired totp challenges: %w", err)
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("delete expired totp challenges rows affected: %w", err) // codecov:ignore -- same fake-driver-only seam as DeleteExpiredSessions.
+	}
+	return deleted, nil
+}
+
 // parseStoredTime parses a timestamp this package previously persisted.
 // Every write path formats time.RFC3339Nano; SQLite's own CURRENT_TIMESTAMP
 // format is accepted as a defensive fallback for rows written by a different

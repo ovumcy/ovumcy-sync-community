@@ -368,6 +368,53 @@ func TestLoadRejectsUnparsableLapsedAccountSweepSettings(t *testing.T) {
 	})
 }
 
+func TestLoadExpiredRowsSweepConfig(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load returned error: %v", err)
+		}
+		if cfg.ExpiredRowsSweepInterval != 24*time.Hour {
+			t.Fatalf("expected default sweep interval 24h, got %v", cfg.ExpiredRowsSweepInterval)
+		}
+		if cfg.ExpiredRowsSweepLimit != 0 {
+			t.Fatalf("expected default sweep limit 0 (store default), got %d", cfg.ExpiredRowsSweepLimit)
+		}
+	})
+
+	t.Run("zero interval is the documented off switch", func(t *testing.T) {
+		t.Setenv("EXPIRED_ROWS_SWEEP_INTERVAL", "0s")
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("expected a zero interval to load (sweep disabled), got %v", err)
+		}
+		if cfg.ExpiredRowsSweepInterval != 0 {
+			t.Fatalf("expected interval 0, got %v", cfg.ExpiredRowsSweepInterval)
+		}
+	})
+
+	t.Run("rejects an unparsable interval", func(t *testing.T) {
+		t.Setenv("EXPIRED_ROWS_SWEEP_INTERVAL", "sometimes")
+
+		if _, err := Load(); err == nil {
+			t.Fatal("expected an unparsable sweep interval to be rejected")
+		} else if !strings.Contains(err.Error(), "EXPIRED_ROWS_SWEEP_INTERVAL") {
+			t.Fatalf("expected the offending variable to be named, got %v", err)
+		}
+	})
+
+	t.Run("rejects a negative limit", func(t *testing.T) {
+		t.Setenv("EXPIRED_ROWS_SWEEP_LIMIT", "-1")
+
+		if _, err := Load(); err == nil {
+			t.Fatal("expected a negative sweep limit to be rejected")
+		} else if !strings.Contains(err.Error(), "EXPIRED_ROWS_SWEEP_LIMIT") {
+			t.Fatalf("expected the offending variable to be named, got %v", err)
+		}
+	})
+}
+
 func TestLoadHTTPTimeouts(t *testing.T) {
 	t.Run("defaults", func(t *testing.T) {
 		cfg, err := Load()
