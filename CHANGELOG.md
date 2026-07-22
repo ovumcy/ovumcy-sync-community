@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Entitlement-lapse cleanup for managed accounts.** New bridge endpoint `POST /managed/accounts/{account_id}/premium` lets the managed-auth service signal an entitlement lapse (`active: false`) or retract one (`active: true`); a new `purge-lapsed-accounts` CLI subcommand (`-dry-run`, `-limit`) erases a managed account's data once its lapse has exceeded the configurable `LAPSED_ACCOUNT_GRACE_PERIOD` (default 60 days). Self-hosted/community accounts are entirely unaffected — the lapse marker can only ever be set on a `mode=managed` account. See [docs/self-hosting.md](docs/self-hosting.md#entitlement-lapse-cleanup).
+- **In-process lapsed-account sweep.** `serve` itself now erases lapsed managed accounts past the grace period, every `LAPSED_ACCOUNT_SWEEP_INTERVAL` (default `24h`, first run one interval after boot; `0` disables the in-process sweep and leaves `purge-lapsed-accounts` as the only trigger — the rollback lever), with `LAPSED_ACCOUNT_SWEEP_LIMIT` capping candidates per run (unset = the store's default page size). Both triggers are idempotent and safe to run together, so the documented retention window holds without an operator scheduling anything.
 
 ### Removed
 

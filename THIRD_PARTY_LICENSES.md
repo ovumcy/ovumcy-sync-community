@@ -43,8 +43,8 @@ third-party surface here is exactly this repo's Go dependency graph.
 Regenerate this file whenever `go.mod`/`go.sum` changes in a way that adds, removes, or
 upgrades a dependency across a license boundary.
 
-As of this writing, `go list -deps -test ./...` resolves to **19 third-party modules**
-(the table below), out of **64 modules** in the full `go list -m all` graph for this repo.
+As of this writing, `go list -deps -test ./...` resolves to **18 third-party modules**
+(the table below), out of **62 modules** in the full `go list -m all` graph for this repo.
 
 ## Direct dependencies (`go.mod` `require`, non-indirect)
 
@@ -65,18 +65,17 @@ As of this writing, `go list -deps -test ./...` resolves to **19 third-party mod
 | github.com/mattn/go-isatty | v0.0.20 | MIT |
 | github.com/munnerz/goautoneg | v0.0.0-20191010083416-a7dc8b61c822 | BSD-3-Clause |
 | github.com/ncruces/go-strftime | v1.0.0 | MIT |
-| github.com/prometheus/client_golang | v1.23.2 | Apache-2.0 |
+| github.com/prometheus/client_golang | v1.24.0 | Apache-2.0 |
 | github.com/prometheus/client_model | v0.6.2 | Apache-2.0 |
-| github.com/prometheus/common | v0.66.1 | Apache-2.0 |
+| github.com/prometheus/common | v0.70.0 | Apache-2.0 |
 | github.com/remyoudompheng/bigfft | v0.0.0-20230129092748-24d4a6f8daec | BSD-3-Clause |
-| go.yaml.in/yaml/v2 | v2.4.2 | Apache-2.0 (a handful of files ported from libyaml are MIT; see `LICENSE.libyaml` in the module) |
-| golang.org/x/crypto | v0.53.0 | BSD-3-Clause |
-| golang.org/x/sys | v0.46.0 | BSD-3-Clause |
-| google.golang.org/protobuf | v1.36.8 | BSD-3-Clause |
-| modernc.org/libc | v1.73.4 | BSD-3-Clause |
+| golang.org/x/crypto | v0.54.0 | BSD-3-Clause |
+| golang.org/x/sys | v0.47.0 | BSD-3-Clause |
+| google.golang.org/protobuf | v1.36.11 | BSD-3-Clause |
+| modernc.org/libc | v1.74.1 | BSD-3-Clause |
 | modernc.org/mathutil | v1.7.1 | BSD-3-Clause |
 | modernc.org/memory | v1.11.0 | BSD-3-Clause |
-| modernc.org/sqlite | v1.53.0 | BSD-3-Clause |
+| modernc.org/sqlite | v1.54.0 | BSD-3-Clause |
 | pgregory.net/rapid | v1.3.0 | MPL-2.0 |
 
 Every entry was verified by reading the module's own `LICENSE`/`LICENSE.txt` (or equivalent)
