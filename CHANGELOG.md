@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The entitlement-lapse signal immediately revokes every still-valid session on a lapsed managed account (no entitlement, no sync), independent of the data-retention grace period.
 - The purge sweep re-checks the lapse marker and grace cutoff inside the same transaction as the deletion itself, so a session mint that races a scheduled sweep run always preserves the account intact.
 - The rate-limit client IP is now canonicalized (IPv4-unmapped and IPv6 zone-stripped), so an IPv6 caller behind a trusted proxy can no longer mint distinct rate-limit buckets for one address by varying the zone in a forwarded header. Added native fuzz coverage for the client-IP parsers.
+- **Per-account rate limit on sync reads.** `GET /sync/blob` and `GET /sync/recovery-key` now pass the same per-account limiter as their PUT counterparts: a valid session could previously drive unmetered reads of up to `MAX_BLOB_BYTES` ciphertext (plus the base64 encoding cost) past the per-IP auth gate. The budget is unchanged — `AUTH_RATE_LIMIT_COUNT` per `AUTH_RATE_LIMIT_WINDOW` per account, per endpoint.
 
 ### Internal
 
