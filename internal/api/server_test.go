@@ -319,6 +319,24 @@ func TestServerAuthRateLimitResistsForwardedSpoofingBehindTrustedProxy(t *testin
 	})
 }
 
+func TestForwardedClientIPSkipsTrustedProxyHops(t *testing.T) {
+	server := &Server{trustedProxyCIDRs: parseTrustedProxyCIDRs([]string{"10.0.0.0/24"})}
+
+	// The real client 203.0.113.10 sits left of a trusted proxy hop (10.0.0.2)
+	// and right of a spoofed prefix: walking right skips the trusted hop and
+	// returns the rightmost non-trusted address, never the client-controlled left.
+	addr, ok := forwardedClientIP("1.1.1.1, 203.0.113.10, 10.0.0.2", server.isTrustedProxy)
+	if !ok || addr.String() != "203.0.113.10" {
+		t.Fatalf("expected rightmost non-trusted 203.0.113.10, got %v ok=%v", addr, ok)
+	}
+
+	// When every forwarded entry is a trusted proxy, no client is resolvable
+	// from the header and the caller falls back to the direct peer.
+	if _, ok := forwardedClientIP("10.0.0.2, 10.0.0.3", server.isTrustedProxy); ok {
+		t.Fatal("expected no address when every forwarded entry is a trusted proxy")
+	}
+}
+
 func TestServerIgnoresForwardedClientFromUntrustedRemoteAddr(t *testing.T) {
 	handler := newTestServerWithOptions(t, serverTestOptions{
 		authRateLimitCount: 1,
