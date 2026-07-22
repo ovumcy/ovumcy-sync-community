@@ -166,6 +166,12 @@ func runServe(cfg config.Config) error {
 		cfg.LapsedAccountSweepInterval,
 		cfg.LapsedAccountSweepLimit,
 	)
+	go runExpiredRowsSweepLoop(
+		backgroundCtx,
+		services.NewExpiredRowsSweepService(store),
+		cfg.ExpiredRowsSweepInterval,
+		cfg.ExpiredRowsSweepLimit,
+	)
 	// codecov:ignore:end
 
 	log.Printf("ovumcy-sync-community listening on %s", cfg.BindAddr)
@@ -245,6 +251,64 @@ func runLapsedAccountSweepLoop(
 			}
 			if err != nil {
 				log.Printf("lapsed-account sweep: %v", err)
+			}
+		}
+	}
+}
+
+// expiredRowsSweeper is the narrow surface runExpiredRowsSweepLoop needs,
+// satisfied by *services.ExpiredRowsSweepService. Consumer-side so the loop
+// can be tested against every run outcome without a database.
+type expiredRowsSweeper interface {
+	Run(ctx context.Context, limit int) (services.ExpiredRowsSweepResult, error)
+}
+
+// runExpiredRowsSweepLoop deletes expired sessions, password-reset tokens,
+// and TOTP challenges on an interval, inside the server process.
+//
+// Every read path already enforces expiry at use time, so these rows are
+// unreadable the moment they expire — but nothing deleted them, and they
+// were the only tables left growing without bound (sessions physically go
+// away only on posture changes and logout). The loop decides only WHEN to
+// sweep; WHAT qualifies is the expiry predicate inside the delete statements
+// themselves, and since expiry is monotonic there is no race with valid use
+// by construction.
+//
+// The first run happens one interval after boot, not at startup — same
+// crash-loop reasoning as the lapsed-account sweep. A non-positive interval
+// disables the loop entirely; that is the rollback lever, effective on
+// restart with no new image.
+func runExpiredRowsSweepLoop(
+	ctx context.Context,
+	sweeper expiredRowsSweeper,
+	interval time.Duration,
+	limit int,
+) {
+	if sweeper == nil || interval <= 0 {
+		log.Print("expired-rows sweep: in-process sweep disabled")
+		return
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			result, err := sweeper.Run(ctx, limit)
+			// A run can both delete and fail partway, so report the counts
+			// before the error rather than instead of it. Counts only —
+			// never row contents (see SECURITY.md).
+			if result.Total() > 0 {
+				log.Printf(
+					"expired-rows sweep deleted %d sessions, %d password reset tokens, %d totp challenges",
+					result.Sessions, result.PasswordResetTokens, result.TOTPChallenges,
+				)
+			}
+			if err != nil {
+				log.Printf("expired-rows sweep: %v", err)
 			}
 		}
 	}
