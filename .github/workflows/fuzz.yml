@@ -28,12 +28,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - FuzzNormalizeLogin
-          - FuzzValidateLogin
-          - FuzzNormalizeRecoveryCode
-          - FuzzDecodeTOTPSecretBase32
-          - FuzzFieldCryptoRoundTrip
+        # (target, package) pairs: the client-IP targets live in
+        # internal/api, everything else in internal/security.
+        include:
+          - target: FuzzNormalizeLogin
+            package: ./internal/security/
+          - target: FuzzValidateLogin
+            package: ./internal/security/
+          - target: FuzzNormalizeRecoveryCode
+            package: ./internal/security/
+          - target: FuzzDecodeTOTPSecretBase32
+            package: ./internal/security/
+          - target: FuzzFieldCryptoRoundTrip
+            package: ./internal/security/
+          - target: FuzzParseClientIP
+            package: ./internal/api/
+          - target: FuzzForwardedClientIP
+            package: ./internal/api/
 
     steps:
       - name: Checkout
@@ -46,15 +57,16 @@ jobs:
           cache: true
 
       - name: Fuzz ${{ matrix.target }}
-        # -run '^$' skips unit tests; -fuzz runs only the matrix target for 3m.
-        run: go test ./internal/security/ -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime=3m
+        # -run '^$' skips unit tests; -fuzz runs only the matrix target for 3m
+        # in its own package.
+        run: go test ${{ matrix.package }} -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime=3m
 
       - name: Upload crashers
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: fuzz-crashers-${{ matrix.target }}
-          path: internal/security/testdata/fuzz/
+          path: ${{ matrix.package }}testdata/fuzz/
           if-no-files-found: ignore
           retention-days: 7
 
@@ -71,12 +83,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - FuzzNormalizeLogin
-          - FuzzValidateLogin
-          - FuzzNormalizeRecoveryCode
-          - FuzzDecodeTOTPSecretBase32
-          - FuzzFieldCryptoRoundTrip
+        # (target, package) pairs: the client-IP targets live in
+        # internal/api, everything else in internal/security.
+        include:
+          - target: FuzzNormalizeLogin
+            package: ./internal/security/
+          - target: FuzzValidateLogin
+            package: ./internal/security/
+          - target: FuzzNormalizeRecoveryCode
+            package: ./internal/security/
+          - target: FuzzDecodeTOTPSecretBase32
+            package: ./internal/security/
+          - target: FuzzFieldCryptoRoundTrip
+            package: ./internal/security/
+          - target: FuzzParseClientIP
+            package: ./internal/api/
+          - target: FuzzForwardedClientIP
+            package: ./internal/api/
 
     steps:
       - name: Checkout
@@ -114,14 +137,17 @@ jobs:
 
       - name: Fuzz ${{ matrix.target }} (continuous)
         # -run '^$' skips unit tests; -fuzz runs only the matrix target for
-        # 10m against the restored corpus above.
-        run: go test ./internal/security/ -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime=10m
+        # 10m against the restored corpus above. -timeout leaves headroom over
+        # -fuzztime: with both at their 10m defaults the test binary's own
+        # deadline can fire first and fail a clean run (context deadline
+        # exceeded with zero crashers — seen on the 2026-07-22 daily run).
+        run: go test ${{ matrix.package }} -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime=10m -timeout 15m
 
       - name: Upload crashers
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: fuzz-continuous-crashers-${{ matrix.target }}
-          path: internal/security/testdata/fuzz/
+          path: ${{ matrix.package }}testdata/fuzz/
           if-no-files-found: ignore
           retention-days: 7
