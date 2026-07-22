@@ -5,3 +5,5 @@ compile_native_go_fuzzer github.com/ovumcy/ovumcy-sync-community/internal/securi
 compile_native_go_fuzzer github.com/ovumcy/ovumcy-sync-community/internal/security FuzzValidateLogin FuzzValidateLogin
 compile_native_go_fuzzer github.com/ovumcy/ovumcy-sync-community/internal/security FuzzDecodeTOTPSecretBase32 FuzzDecodeTOTPSecretBase32
 compile_native_go_fuzzer github.com/ovumcy/ovumcy-sync-community/internal/security FuzzFieldCryptoRoundTrip FuzzFieldCryptoRoundTrip
+compile_native_go_fuzzer github.com/ovumcy/ovumcy-sync-community/internal/api FuzzParseClientIP FuzzParseClientIP
+compile_native_go_fuzzer github.com/ovumcy/ovumcy-sync-community/internal/api FuzzForwardedClientIP FuzzForwardedClientIP
