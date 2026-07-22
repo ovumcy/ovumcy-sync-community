@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -109,6 +110,28 @@ func TestExpiredRowsSweepLoopDisabledByNonPositiveInterval(t *testing.T) {
 	}
 	if sweeper.callCount() != 0 {
 		t.Fatalf("expected zero runs from a disabled loop, got %d", sweeper.callCount())
+	}
+}
+
+// TestExpiredRowsSweepLoopContinuesAfterAnError pins the failure posture: a
+// run that errors is logged and the loop keeps ticking — the next scheduled
+// run is the retry, exactly like the lapsed-account loop.
+func TestExpiredRowsSweepLoopContinuesAfterAnError(t *testing.T) {
+	sweeper := newRecordingExpiredRowsSweeper(
+		services.ExpiredRowsSweepResult{},
+		errors.New("store down"),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go runExpiredRowsSweepLoop(ctx, sweeper, time.Millisecond, 0)
+
+	sweeper.waitForRun(t)
+	sweeper.waitForRun(t) // a second tick proves the loop survived the error
+	cancel()
+
+	if sweeper.callCount() < 2 {
+		t.Fatalf("expected the loop to keep running past an error, got %d runs", sweeper.callCount())
 	}
 }
 
