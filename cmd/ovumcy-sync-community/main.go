@@ -133,8 +133,8 @@ func runServe(cfg config.Config) error {
 			},
 		),
 		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       cfg.HTTPReadTimeout,
-		WriteTimeout:      cfg.HTTPWriteTimeout,
+		ReadTimeout:       cfg.HTTPReadTimeout,  // codecov:ignore -- process wiring reached only once ListenAndServe is about to run, same as the annotated block below; the value itself is covered by TestLoadHTTPTimeouts.
+		WriteTimeout:      cfg.HTTPWriteTimeout, // codecov:ignore -- same seam as ReadTimeout above.
 		IdleTimeout:       60 * time.Second,
 	}
 

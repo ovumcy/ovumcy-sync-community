@@ -418,4 +418,14 @@ func TestLoadHTTPTimeouts(t *testing.T) {
 			t.Fatalf("expected the offending variable to be named, got %v", err)
 		}
 	})
+
+	t.Run("rejects an unparsable duration", func(t *testing.T) {
+		t.Setenv("HTTP_WRITE_TIMEOUT", "soon")
+
+		if _, err := Load(); err == nil {
+			t.Fatal("expected an unparsable write timeout to be rejected")
+		} else if !strings.Contains(err.Error(), "HTTP_WRITE_TIMEOUT") {
+			t.Fatalf("expected the offending variable to be named, got %v", err)
+		}
+	})
 }
