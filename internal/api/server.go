@@ -871,6 +871,13 @@ func (s *Server) handleGetBlob(
 	request *http.Request,
 	account models.Account,
 ) {
+	// Same per-account limiter as the PUT side: without it a valid session
+	// can drive unmetered reads of up to MAX_BLOB_BYTES ciphertext (plus the
+	// base64 encoding cost) past the per-IP auth gate.
+	if !s.allowAuthRequestForAccount(writer, request, account.ID) {
+		return
+	}
+
 	blob, err := s.sync.GetBlob(request.Context(), account.ID)
 	if err != nil {
 		switch {
@@ -890,6 +897,11 @@ func (s *Server) handleGetRecoveryKey(
 	request *http.Request,
 	account models.Account,
 ) {
+	// Same per-account limiter as the PUT side — see handleGetBlob.
+	if !s.allowAuthRequestForAccount(writer, request, account.ID) {
+		return
+	}
+
 	recoveryKeyPackage, err := s.sync.GetRecoveryKeyPackage(request.Context(), account.ID)
 	if err != nil {
 		switch {

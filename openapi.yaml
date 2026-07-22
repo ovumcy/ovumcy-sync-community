@@ -1116,6 +1116,8 @@ paths:
               examples:
                 notFound:
                   value: { error: recovery_package_not_found }
+        "429":
+          $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/InternalError"
     put:
@@ -1187,6 +1189,8 @@ paths:
               examples:
                 notFound:
                   value: { error: blob_not_found }
+        "429":
+          $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/InternalError"
     put:
