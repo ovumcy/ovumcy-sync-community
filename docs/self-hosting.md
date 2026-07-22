@@ -55,6 +55,7 @@ This service itself does not terminate TLS. Production deployments should not ex
 - `TOTP_ISSUER=ovumcy-sync-community` optional label embedded in `otpauth://` provisioning URIs so authenticator apps know which instance the secret belongs to
 - `LAPSED_ACCOUNT_GRACE_PERIOD=1440h` (60 days) how long a managed account's data is kept after the managed bridge signals an entitlement lapse, before it is erased; irrelevant unless you run the managed bridge (see *Entitlement-Lapse Cleanup* below)
 - `LAPSED_ACCOUNT_SWEEP_INTERVAL=24h` how often `serve` purges accounts past that window on its own; `0` disables the in-process sweep and leaves `purge-lapsed-accounts` as the only trigger. `LAPSED_ACCOUNT_SWEEP_LIMIT` caps candidates per run (`0` or unset = store default)
+- `EXPIRED_ROWS_SWEEP_INTERVAL=24h` how often `serve` deletes expired sessions, password-reset tokens, and TOTP challenges. Expiry is already enforced at use time on every read path, so this is data minimization, not a security switch; `0` disables the sweep. `EXPIRED_ROWS_SWEEP_LIMIT` caps rows per table per run (`0` or unset = store default)
 - `HTTP_READ_TIMEOUT=10s` / `HTTP_WRITE_TIMEOUT=15s` per-request read/write windows. A full `MAX_BLOB_BYTES` transfer must fit inside them — at the defaults a 16 MiB blob needs roughly 1.7 MB/s of client bandwidth — so widen both on deployments syncing large blobs over slow links; zero is rejected (a zero `net/http` timeout means no timeout at all)
 
 Adjust limits only when you understand the tradeoff between usability and abuse resistance.
