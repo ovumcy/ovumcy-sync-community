@@ -1045,7 +1045,7 @@ func (s *Server) clientIPForRateLimit(request *http.Request) string {
 		return remoteAddr.String()
 	}
 
-	if forwarded, ok := forwardedClientIP(request.Header.Get("X-Forwarded-For")); ok {
+	if forwarded, ok := forwardedClientIP(request.Header.Get("X-Forwarded-For"), s.isTrustedProxy); ok {
 		return forwarded.String()
 	}
 
@@ -1079,11 +1079,27 @@ func parseTrustedProxyCIDRs(values []string) []netip.Prefix {
 	return result
 }
 
-func forwardedClientIP(value string) (netip.Addr, bool) {
-	for _, part := range strings.Split(value, ",") {
-		if addr, ok := parseClientIP(part); ok {
-			return addr, true
+// forwardedClientIP resolves the real client from an X-Forwarded-For header
+// under the trusted-proxy model: it returns the rightmost entry that is not
+// itself a trusted proxy. A conforming reverse proxy appends the peer it
+// received the request from to the RIGHT of any client-supplied value, so the
+// rightmost non-trusted address is the real client and anything an untrusted
+// client prepends is ignored. Selecting the leftmost entry instead would let a
+// client mint an unbounded number of rate-limit buckets by spoofing it
+// (CWE-348). Empty or unparseable segments are skipped; callers must already
+// have confirmed the immediate peer (RemoteAddr) is a trusted proxy before
+// honoring the header.
+func forwardedClientIP(value string, isTrusted func(netip.Addr) bool) (netip.Addr, bool) {
+	parts := strings.Split(value, ",")
+	for i := len(parts) - 1; i >= 0; i-- {
+		addr, ok := parseClientIP(parts[i])
+		if !ok {
+			continue
 		}
+		if isTrusted(addr) {
+			continue
+		}
+		return addr, true
 	}
 	return netip.Addr{}, false
 }

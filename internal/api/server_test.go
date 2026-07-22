@@ -286,6 +286,39 @@ func TestServerAuthRateLimitUsesForwardedClientFromTrustedProxy(t *testing.T) {
 	})
 }
 
+func TestServerAuthRateLimitResistsForwardedSpoofingBehindTrustedProxy(t *testing.T) {
+	handler := newTestServerWithOptions(t, serverTestOptions{
+		authRateLimitCount: 1,
+		trustedProxyCIDRs:  []string{"10.0.0.0/24"},
+	})
+
+	// A conforming reverse proxy appends the real client (203.0.113.10) to the
+	// RIGHT of any client-supplied X-Forwarded-For. An attacker who rotates the
+	// spoofed leftmost value must not mint a fresh per-IP bucket each request:
+	// both requests resolve to the same rightmost-untrusted address, so the
+	// second is rate-limited. Distinct logins keep the per-login-identifier
+	// limiter from being the gate that fires first — this asserts the IP path.
+	performJSONRequestWithOptions(t, requestOptions{
+		handler:        handler,
+		method:         http.MethodPost,
+		path:           "/auth/login",
+		body:           map[string]string{"login": "owner-a@example.com", "password": "wrong password"},
+		expectedStatus: http.StatusUnauthorized,
+		remoteAddr:     "10.0.0.2:1234",
+		headers:        map[string]string{"X-Forwarded-For": "1.1.1.1, 203.0.113.10"},
+	})
+
+	performJSONRequestWithOptions(t, requestOptions{
+		handler:        handler,
+		method:         http.MethodPost,
+		path:           "/auth/login",
+		body:           map[string]string{"login": "owner-b@example.com", "password": "wrong password"},
+		expectedStatus: http.StatusTooManyRequests,
+		remoteAddr:     "10.0.0.2:5678",
+		headers:        map[string]string{"X-Forwarded-For": "2.2.2.2, 203.0.113.10"},
+	})
+}
+
 func TestServerIgnoresForwardedClientFromUntrustedRemoteAddr(t *testing.T) {
 	handler := newTestServerWithOptions(t, serverTestOptions{
 		authRateLimitCount: 1,
