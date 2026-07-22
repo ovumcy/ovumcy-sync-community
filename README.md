@@ -117,7 +117,9 @@ go run ./cmd/ovumcy-sync-community serve
 | `TOTP_ISSUER` | `ovumcy-sync-community` | Issuer label embedded in `otpauth://` provisioning URIs |
 | `LAPSED_ACCOUNT_GRACE_PERIOD` | `1440h` (60d) | Retention window for a managed account after the bridge signals an entitlement lapse, before it is erased |
 | `LAPSED_ACCOUNT_SWEEP_INTERVAL` | `24h` | How often the server itself purges accounts past that window. `0` disables the in-process sweep and leaves `purge-lapsed-accounts` as the only trigger |
-| `LAPSED_ACCOUNT_SWEEP_LIMIT` | _(unset)_ | Candidate accounts examined per in-process run; unset uses the store's own default page size |
+| `LAPSED_ACCOUNT_SWEEP_LIMIT` | `0` | Candidate accounts examined per in-process run; `0` or unset uses the store's own default page size |
+| `HTTP_READ_TIMEOUT` | `10s` | Per-request read window; a full `MAX_BLOB_BYTES` upload must fit inside it — widen for large blobs over slow links |
+| `HTTP_WRITE_TIMEOUT` | `15s` | Per-request write window; bounds a full blob download the same way |
 
 TOTP endpoints stay inactive (`503 totp_not_configured`) until `FIELD_ENCRYPTION_KEY` is set; see [docs/self-hosting.md](docs/self-hosting.md#optional-two-factor-authentication) for the 2FA and account-recovery flows.
 

@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Entitlement-lapse cleanup for managed accounts.** New bridge endpoint `POST /managed/accounts/{account_id}/premium` lets the managed-auth service signal an entitlement lapse (`active: false`) or retract one (`active: true`); a new `purge-lapsed-accounts` CLI subcommand (`-dry-run`, `-limit`) erases a managed account's data once its lapse has exceeded the configurable `LAPSED_ACCOUNT_GRACE_PERIOD` (default 60 days). Self-hosted/community accounts are entirely unaffected — the lapse marker can only ever be set on a `mode=managed` account. See [docs/self-hosting.md](docs/self-hosting.md#entitlement-lapse-cleanup).
 - **In-process lapsed-account sweep.** `serve` itself now erases lapsed managed accounts past the grace period, every `LAPSED_ACCOUNT_SWEEP_INTERVAL` (default `24h`, first run one interval after boot; `0` disables the in-process sweep and leaves `purge-lapsed-accounts` as the only trigger — the rollback lever), with `LAPSED_ACCOUNT_SWEEP_LIMIT` capping candidates per run (unset = the store's default page size). Both triggers are idempotent and safe to run together, so the documented retention window holds without an operator scheduling anything.
+- **Operator-tunable HTTP timeouts.** `HTTP_READ_TIMEOUT` (default `10s`) and `HTTP_WRITE_TIMEOUT` (default `15s`) expose the previously hardcoded per-request windows. Together with `MAX_BLOB_BYTES` they bound how slow a client may be while still moving a full-size blob — at the defaults a 16 MiB transfer needs roughly 1.7 MB/s — so deployments syncing large blobs over slow links can widen the windows without a fork. Zero and negative values are rejected: a zero `net/http` timeout means no timeout at all.
 
 ### Removed
 
@@ -19,12 +20,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Device limit could be exceeded under concurrency.** Attaching a device counted the account's devices and then inserted in two separate steps, so simultaneous attaches all passed the same check and overran `MAX_DEVICES`. The ceiling is now a predicate inside the insert statement (matching the blob-generation CAS), so concurrent attaches collapse to the limit. Re-attaching an already-owned device still refreshes its row without consuming a slot.
+- **Explicit `LAPSED_ACCOUNT_SWEEP_LIMIT=0` no longer fails startup.** The documented "0 = the store's own default page size" held only for the unset case; an explicitly set `0` was rejected as non-positive. Only negative values are rejected now.
+- **The `Authorization` scheme is case-insensitive.** `bearer <token>` and `BEARER <token>` now authenticate exactly like `Bearer <token>` (RFC 7235 §2.1); previously they were rejected with `401`.
 
 ### Security
 
 - The entitlement-lapse signal immediately revokes every still-valid session on a lapsed managed account (no entitlement, no sync), independent of the data-retention grace period.
 - The purge sweep re-checks the lapse marker and grace cutoff inside the same transaction as the deletion itself, so a session mint that races a scheduled sweep run always preserves the account intact.
 - The rate-limit client IP is now canonicalized (IPv4-unmapped and IPv6 zone-stripped), so an IPv6 caller behind a trusted proxy can no longer mint distinct rate-limit buckets for one address by varying the zone in a forwarded header. Added native fuzz coverage for the client-IP parsers.
+
+### Internal
+
+- A corrupt stored timestamp now surfaces as a scan error naming its table and column instead of a recovered panic naming only the method and path; unique-constraint detection matches the driver's typed error code first, with the previous message-substring check kept as a fallback.
 
 ## [0.3.0] - 2026-07-07
 
