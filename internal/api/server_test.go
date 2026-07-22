@@ -175,7 +175,7 @@ func TestServerRegisterLoginAndSyncFlow(t *testing.T) {
 		t.Fatalf("unexpected blob payload: %#v", blobPayload)
 	}
 
-	performJSONRequest(
+	getBlobResponse := performJSONRequest(
 		t,
 		handler,
 		http.MethodGet,
@@ -184,6 +184,15 @@ func TestServerRegisterLoginAndSyncFlow(t *testing.T) {
 		registerPayload.SessionToken,
 		http.StatusOK,
 	)
+
+	// Close the zero-knowledge round-trip at the transport edge: the blob comes
+	// back byte-for-byte as it was uploaded (the service layer proves the same
+	// in TestSyncServiceAttachDeviceAndBlobRoundTrip).
+	var getBlobPayload map[string]any
+	decodeResponse(t, getBlobResponse.Body.Bytes(), &getBlobPayload)
+	if getBlobPayload["ciphertext_base64"] != ciphertext {
+		t.Fatalf("expected the stored blob returned byte-for-byte, got %#v", getBlobPayload)
+	}
 }
 
 func TestServerUnauthorizedSyncAccess(t *testing.T) {
@@ -212,6 +221,9 @@ func TestServerUnauthorizedSyncAccess(t *testing.T) {
 	}
 	if response.Header().Get("X-Content-Type-Options") != "nosniff" {
 		t.Fatalf("expected nosniff header, got %q", response.Header().Get("X-Content-Type-Options"))
+	}
+	if got := response.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("expected Cache-Control no-store, got %q", got)
 	}
 }
 
@@ -865,6 +877,36 @@ func TestServerRegisterRejectsInvalidRegistrationInput(t *testing.T) {
 				t.Fatalf("unexpected register validation payload: %#v", payload)
 			}
 		})
+	}
+}
+
+func TestServerLoginRefusesManagedPrefixIdentity(t *testing.T) {
+	handler := newTestServer(t)
+
+	// A direct client must never authenticate as a reserved managed-bridge
+	// identity, and the refusal must be indistinguishable from any other bad
+	// login so it leaks nothing about which managed accounts exist. Registration
+	// already refuses the prefix (TestServerRegisterRejectsInvalidRegistrationInput);
+	// this locks the same boundary at the login edge.
+	for _, login := range []string{"managed:managedacct1234", "managed:neverprovisioned9"} {
+		response := performJSONRequest(
+			t,
+			handler,
+			http.MethodPost,
+			"/auth/login",
+			map[string]string{
+				"login":    login,
+				"password": "correct horse battery staple",
+			},
+			"",
+			http.StatusUnauthorized,
+		)
+
+		var payload map[string]string
+		decodeResponse(t, response.Body.Bytes(), &payload)
+		if payload["error"] != "invalid_credentials" {
+			t.Fatalf("expected generic invalid_credentials for %q, got %#v", login, payload)
+		}
 	}
 }
 

@@ -128,6 +128,7 @@ on the account's next successful login.
 | Login is lowercased and trimmed; inputs shorter than 3 chars are invalid; the reserved `managed:` prefix is rejected in any case | `TestNormalizeLoginAndValidateLogin` in [internal/security/security_test.go](internal/security/security_test.go) |
 | Normalization is lowercase, trimmed, and idempotent over arbitrary inputs | `FuzzNormalizeLogin` in [internal/security/security_fuzz_test.go](internal/security/security_fuzz_test.go) |
 | Any accepted login is ≥3 chars after normalization and never sits in the reserved `managed:` namespace | `FuzzValidateLogin` in [internal/security/security_fuzz_test.go](internal/security/security_fuzz_test.go) |
+| A direct client cannot log in as a `managed:` identity — the login edge returns the generic invalid-credentials response, leaking nothing about which managed accounts exist | `TestServerLoginRefusesManagedPrefixIdentity` in [internal/api/server_test.go](internal/api/server_test.go) |
 
 ### Password Change
 
@@ -268,7 +269,7 @@ on the account's next successful login.
 | Claim | Enforced by |
 | --- | --- |
 | `/metrics` is absent when disabled and requires the bearer token when configured | `TestServerMetricsEndpointReturnsNotFoundWhenDisabled`, `TestServerMetricsEndpointRequiresBearerTokenWhenConfigured`, `TestServerMetricsEndpointReturnsPrometheusPayload` in [internal/api/server_test.go](internal/api/server_test.go) |
-| Baseline hardening headers (`Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options`) are asserted on unauthenticated responses | `TestServerUnauthorizedSyncAccess` in [internal/api/server_test.go](internal/api/server_test.go) |
+| Baseline hardening headers (`Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options`, `Cache-Control: no-store`) are asserted on unauthenticated responses | `TestServerUnauthorizedSyncAccess` in [internal/api/server_test.go](internal/api/server_test.go) |
 | CORS allows a configured origin on preflight and rejects unknown origins | `TestServerAllowsConfiguredOriginPreflight`, `TestServerRejectsUnknownOriginPreflight` in [internal/api/server_test.go](internal/api/server_test.go) |
 | A handler panic is recovered into a clean `500 internal_error` instead of a dropped connection or a leaked stack trace | `TestServeWithPanicRecoveryReturns500`, `TestServeWithPanicRecoveryPassesThroughNormalResponse` in [internal/api/recovery_test.go](internal/api/recovery_test.go) |
 | The auth-endpoint JSON body ceiling sits at the documented 4 KiB — an oversized body is rejected as `invalid_json`, while a body under the cap reaches the credential check | `TestAuthEndpointJSONBodyCeilingIsEnforced` in [internal/api/planned_regressions_test.go](internal/api/planned_regressions_test.go) |
