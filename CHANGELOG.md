@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Internal
 
 - A corrupt stored timestamp now surfaces as a scan error naming its table and column instead of a recovered panic naming only the method and path; unique-constraint detection matches the driver's typed error code first, with the previous message-substring check kept as a fallback.
+- Seven formerly planned security regressions are now dedicated tests: hash-only persistence of session tokens and recovery codes (proven against the database file through an independent raw connection), the literal TOTP AAD pin, TOTP-challenge TTL expiry, the login session/challenge mutual exclusion in both directions, the 4 KiB auth body ceiling from both sides, and the bridge-only `premium_active` write path. SECURITY.md's "Planned Regressions" list is now empty.
 
 ## [0.3.0] - 2026-07-07
 

@@ -158,6 +158,7 @@ on the account's next successful login.
 | Recovery-code regeneration requires auth plus the current password | `TestRegenerateRecoveryCodeEndpointRequiresAuth`, `TestRegenerateRecoveryCodeEndpointRejectsWrongPassword` in [internal/api/auth_recovery_test.go](internal/api/auth_recovery_test.go); `TestRegenerateRecoveryCodeRejectsWrongPassword` in [internal/services/auth_service_recovery_test.go](internal/services/auth_service_recovery_test.go) |
 | Recovery-code regeneration rotates the code; the old code stops working | `TestRegenerateRecoveryCodeRotatesCode` in [internal/services/auth_service_recovery_test.go](internal/services/auth_service_recovery_test.go); `TestRegenerateRecoveryCodeEndpointSucceeds` in [internal/api/auth_recovery_test.go](internal/api/auth_recovery_test.go) |
 | Recovery-code normalization is idempotent over arbitrary inputs | `FuzzNormalizeRecoveryCode` in [internal/security/security_fuzz_test.go](internal/security/security_fuzz_test.go) |
+| Recovery codes are persisted only as verifying bcrypt hashes — never the plaintext (proven against the database file through an independent raw connection) | `TestSessionTokensAndRecoveryCodesPersistOnlyAsHashes` in [internal/api/planned_regressions_test.go](internal/api/planned_regressions_test.go) |
 
 ### Timing Parity (CWE-208)
 
@@ -178,6 +179,7 @@ on the account's next successful login.
 | Empty and expired sessions are rejected | `TestAuthServiceRejectsEmptyAndExpiredSession` in [internal/services/auth_service_test.go](internal/services/auth_service_test.go) |
 | Self-hosted registration creates `mode=self_hosted`, `premium_active=false` accounts | `TestAuthServiceRegisterAndLogin` in [internal/services/auth_service_test.go](internal/services/auth_service_test.go) |
 | Login on a TOTP-enabled account fails closed when the field key is absent — no password-only session | `TestAuthServiceLoginFailsClosedWhenTOTPEnabledButNoIssuer` in [internal/services/auth_service_test.go](internal/services/auth_service_test.go); `TestTOTPNotConfiguredWhenServerHasNoFieldKey` in [internal/api/auth_totp_test.go](internal/api/auth_totp_test.go) |
+| Raw session tokens never reach the `sessions` table — no column carries the issued token, and `token_hash` is exactly `security.HashToken` of it (proven against the database file through an independent raw connection) | `TestSessionTokensAndRecoveryCodesPersistOnlyAsHashes` in [internal/api/planned_regressions_test.go](internal/api/planned_regressions_test.go) |
 
 ### Two-Factor Authentication (TOTP)
 
@@ -195,6 +197,9 @@ on the account's next successful login.
 | Secrets are 160-bit; base32 round-trips; code generation matches RFC 6238 vectors; only current and adjacent steps verify; empty codes are rejected; the provisioning URI carries secret and issuer | `TestNewTOTPSecretIs160Bits`, `TestEncodeDecodeBase32Roundtrip`, `TestGenerateTOTPCodeIsRFC6238TestVector`, `TestVerifyTOTPCodeAcceptsCurrentAndAdjacentSteps`, `TestVerifyTOTPCodeRejectsFarFutureAndPastSteps`, `TestVerifyTOTPCodeRejectsEmpty`, `TestBuildTOTPProvisioningURIIncludesSecretAndIssuer` in [internal/security/totp_test.go](internal/security/totp_test.go) |
 | Generate/verify, skew window, and base32 round-trip hold over generated inputs | `TestTOTPGenerateVerifyProperty`, `TestTOTPSkewWindowProperty`, `TestTOTPBase32RoundTripProperty` in [internal/security/security_property_test.go](internal/security/security_property_test.go) |
 | Secret decoding never panics; accepted secrets survive canonical re-encoding | `FuzzDecodeTOTPSecretBase32` in [internal/security/security_fuzz_test.go](internal/security/security_fuzz_test.go) |
+| The exact production TOTP AAD string (`ovumcy.sync-community.field.totp_secret:<account_id>`) is pinned literally — a drive-by constant edit fails the tripwire instead of silently invalidating every stored secret | `TestAADForTOTPSecretPinsTheExactProductionString` in [internal/services/totp_planned_regressions_test.go](internal/services/totp_planned_regressions_test.go) |
+| A challenge one second past `TOTPChallengeTTL` is rejected even with a code valid for the later instant — expiry alone is terminal | `TestVerifyChallengeRejectsAnExpiredChallenge` in [internal/services/totp_planned_regressions_test.go](internal/services/totp_planned_regressions_test.go) |
+| `POST /auth/login` never returns a session token and a TOTP challenge in one response, pinned in both directions (plain account: session and no challenge; TOTP account: challenge and empty session field) | `TestLoginNeverReturnsSessionTokenAlongsideTOTPChallenge` in [internal/api/planned_regressions_test.go](internal/api/planned_regressions_test.go) |
 
 ### Rate Limiting
 
@@ -255,6 +260,7 @@ on the account's next successful login.
 | Self-hosted capabilities always report `mode=self_hosted`, `premium_active=false` | `TestSyncServiceCapabilitiesStaySelfHosted` in [internal/services/sync_service_test.go](internal/services/sync_service_test.go) |
 | Managed accounts with an inactive subscription report `sync_enabled=false`, `premium_active=false` | `TestSyncServiceManagedInactiveAccountDisablesSync` in [internal/services/sync_service_test.go](internal/services/sync_service_test.go) |
 | Managed accounts with `premium_active=true` report `sync_enabled=true` | `TestSyncServiceCapabilitiesForManagedAccount` in [internal/services/sync_service_test.go](internal/services/sync_service_test.go); `TestServerIssuesManagedBridgeSession` in [internal/api/server_test.go](internal/api/server_test.go) |
+| `premium_active` cannot be set through any public endpoint — the bridge premium route refuses a session bearer, and the flag stays `0` on disk after the ordinary public flows (bridge-only write path) | `TestPremiumActiveIsUntouchableThroughPublicEndpoints` in [internal/api/planned_regressions_test.go](internal/api/planned_regressions_test.go) |
 
 ### Metrics and Transport
 
@@ -264,27 +270,23 @@ on the account's next successful login.
 | Baseline hardening headers (`Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options`) are asserted on unauthenticated responses | `TestServerUnauthorizedSyncAccess` in [internal/api/server_test.go](internal/api/server_test.go) |
 | CORS allows a configured origin on preflight and rejects unknown origins | `TestServerAllowsConfiguredOriginPreflight`, `TestServerRejectsUnknownOriginPreflight` in [internal/api/server_test.go](internal/api/server_test.go) |
 | A handler panic is recovered into a clean `500 internal_error` instead of a dropped connection or a leaked stack trace | `TestServeWithPanicRecoveryReturns500`, `TestServeWithPanicRecoveryPassesThroughNormalResponse` in [internal/api/recovery_test.go](internal/api/recovery_test.go) |
+| The auth-endpoint JSON body ceiling sits at the documented 4 KiB — an oversized body is rejected as `invalid_json`, while a body under the cap reaches the credential check | `TestAuthEndpointJSONBodyCeilingIsEnforced` in [internal/api/planned_regressions_test.go](internal/api/planned_regressions_test.go) |
 
 ### Policy-Level Claims (Human-Reviewed, Exempt from the Matrix)
 
 - Secrets, tokens, recovery codes, login identifiers, and blob contents are
   never written to logs. Enforced by code review, not by a single unit test.
-- The HKDF labels and the TOTP AAD prefix are pinned by the implementation;
-  changing them invalidates stored secrets and is treated as a breaking change.
+- The HKDF labels are pinned by the implementation; changing them invalidates
+  stored secrets and is treated as a breaking change. (The TOTP AAD string
+  itself is now matrix-enforced — see the TOTP section.)
 - The `FIELD_ENCRYPTION_KEY` rotation contract (see Accepted Residual Risks)
   is an operator-facing policy, not a runtime behavior.
 
 ### Planned Regressions (Known Coverage Gaps)
 
-Test-enforceable claims that currently rely on implementation review; each is
-a planned dedicated regression:
-
-- The exact production TOTP AAD string binds ciphertexts to the account row.
-- Raw session tokens never reach the `sessions` table (hash-only persistence).
-- Recovery codes are persisted only as bcrypt hashes.
-- `POST /auth/login` never returns a session token and a TOTP challenge in the
-  same response (both directions).
-- The auth-endpoint JSON body-size ceiling is enforced at the documented limit.
-- TOTP challenges expire after their TTL (clock-advancing unit test).
-- `premium_active` cannot be set on a self-hosted account through any public
-  endpoint (bridge-only write path).
+None currently — every previously listed gap has a dedicated regression in
+the matrix above (sessions/recovery hash-only persistence, the literal TOTP
+AAD pin, challenge TTL expiry, the login session/challenge mutual exclusion,
+the auth body ceiling, and the bridge-only `premium_active` write path). New
+test-enforceable claims that temporarily rely on implementation review get
+listed here again.
