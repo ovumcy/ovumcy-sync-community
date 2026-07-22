@@ -191,7 +191,7 @@ func TestDeleteAccountErasesEveryChildRowAndIsIdempotent(t *testing.T) {
 			DeviceLabel: "Test Device",
 			CreatedAt:   now,
 			LastSeenAt:  now,
-		}); err != nil {
+		}, 5); err != nil {
 			t.Fatalf("create device for %s: %v", accountID, err)
 		}
 

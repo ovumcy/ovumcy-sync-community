@@ -704,9 +704,9 @@ func (s *Server) handleAttachDevice(
 	request *http.Request,
 	account models.Account,
 ) {
-	// Per-account ceiling: even though MaxDevices caps the row count,
-	// unbounded attach attempts thrash the CountDevicesForAccount SELECT
-	// and UpsertDevice path under contention.
+	// Per-account ceiling: even though MaxDevices caps the row count inside
+	// the UpsertDevice statement, unbounded attach attempts thrash that
+	// insert and its count sub-select under contention.
 	if !s.allowAuthRequestForAccount(writer, request, account.ID) {
 		return
 	}
@@ -1089,7 +1089,12 @@ func parseClientIP(value string) (netip.Addr, bool) {
 		return netip.Addr{}, false
 	}
 
-	return addr.Unmap(), true
+	// Canonicalize the rate-limit key: Unmap folds ::ffff:1.2.3.4 onto
+	// 1.2.3.4, and WithZone("") strips any IPv6 zone. A remote client's IP
+	// never legitimately carries a zone, and leaving it would let an IPv6
+	// caller behind a trusted proxy mint distinct buckets for one address by
+	// varying %zone in a forwarded header.
+	return addr.Unmap().WithZone(""), true
 }
 
 func writeError(writer http.ResponseWriter, status int, key string) {

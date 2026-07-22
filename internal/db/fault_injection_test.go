@@ -905,7 +905,7 @@ func TestDeviceAndSessionQueriesReturnErrorWhenTablesAreDropped(t *testing.T) {
 		DeviceLabel: "Pixel 7",
 		CreatedAt:   now,
 		LastSeenAt:  now,
-	}); err == nil {
+	}, 5); err == nil {
 		t.Fatal("expected error upserting device after devices table is dropped")
 	}
 	if _, err := store.FindDevice(ctx, target.ID, "device-1"); err == nil {

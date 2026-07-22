@@ -3,6 +3,8 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
+	gosync "sync"
 	"testing"
 	"time"
 )
@@ -104,6 +106,96 @@ func TestRemoveDeviceRejectsEmptyID(t *testing.T) {
 
 	if err := sync.RemoveDevice(context.Background(), accountID, "   "); !errors.Is(err, ErrInvalidDevice) {
 		t.Fatalf("expected ErrInvalidDevice, got %v", err)
+	}
+}
+
+// Concurrent attaches must not each pass the same ceiling check and land a row.
+// The limit is enforced by a predicate inside the insert statement; counting in
+// service code first would reopen the TOCTOU window this closes.
+func TestConcurrentAttachDeviceNeverExceedsMaxDevices(t *testing.T) {
+	const maxDevices = 3
+	auth, sync := newDeviceTestServices(t, maxDevices)
+	accountID := registerDeviceTestAccount(t, auth, "owner@example.com")
+
+	const fanout = 8
+	results := make([]error, fanout)
+	start := make(chan struct{})
+	var wg gosync.WaitGroup
+	for i := range fanout {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			_, err := sync.AttachDevice(
+				context.Background(),
+				accountID,
+				fmt.Sprintf("device-racer-%02d", i),
+				fmt.Sprintf("Racer %d", i),
+			)
+			results[i] = err
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	attached := 0
+	for _, err := range results {
+		switch {
+		case err == nil:
+			attached++
+		case errors.Is(err, ErrTooManyDevices):
+		default:
+			t.Errorf("unexpected error from concurrent AttachDevice: %v", err)
+		}
+	}
+	if attached != maxDevices {
+		t.Fatalf("expected exactly %d successful attaches across %d concurrent attempts, got %d", maxDevices, fanout, attached)
+	}
+
+	devices, err := sync.ListDevices(context.Background(), accountID)
+	if err != nil {
+		t.Fatalf("list devices after race: %v", err)
+	}
+	if len(devices) != maxDevices {
+		t.Fatalf("expected %d stored devices after race, got %d", maxDevices, len(devices))
+	}
+}
+
+// Re-attaching a device the account already owns refreshes its row instead of
+// consuming a slot, so it stays allowed once the account sits at the ceiling.
+func TestAttachDeviceAtCeilingStillRefreshesAnOwnedDevice(t *testing.T) {
+	auth, sync := newDeviceTestServices(t, 2)
+	accountID := registerDeviceTestAccount(t, auth, "owner@example.com")
+
+	for _, id := range []string{"device-first111", "device-second22"} {
+		if _, err := sync.AttachDevice(context.Background(), accountID, id, "Original"); err != nil {
+			t.Fatalf("attach %s: %v", id, err)
+		}
+	}
+	// A third distinct device is refused: the account is full.
+	if _, err := sync.AttachDevice(context.Background(), accountID, "device-third333", "Third"); !errors.Is(err, ErrTooManyDevices) {
+		t.Fatalf("expected ErrTooManyDevices at the ceiling, got %v", err)
+	}
+	// Re-attaching an owned device is not a new slot, so it must succeed.
+	if _, err := sync.AttachDevice(context.Background(), accountID, "device-first111", "Renamed"); err != nil {
+		t.Fatalf("re-attach of an owned device at the ceiling: %v", err)
+	}
+
+	devices, err := sync.ListDevices(context.Background(), accountID)
+	if err != nil {
+		t.Fatalf("list devices: %v", err)
+	}
+	if len(devices) != 2 {
+		t.Fatalf("re-attach must not add a row, expected 2 devices, got %d", len(devices))
+	}
+	relabeled := false
+	for _, d := range devices {
+		if d.DeviceID == "device-first111" && d.DeviceLabel == "Renamed" {
+			relabeled = true
+		}
+	}
+	if !relabeled {
+		t.Fatalf("re-attach must update the label, got %#v", devices)
 	}
 }
 

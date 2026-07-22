@@ -21,6 +21,13 @@ var ErrConflict = errors.New("conflict")
 // (TOCTOU).
 var ErrStaleGeneration = errors.New("stale_generation")
 
+// ErrDeviceLimitReached is returned by UpsertDevice when the account is already
+// at its device ceiling and the incoming device is not one it already owns. The
+// ceiling is enforced inside the SQL statement; service code must surface this
+// as the public too-many-devices error and never pre-check via
+// CountDevicesForAccount (TOCTOU).
+var ErrDeviceLimitReached = errors.New("device_limit_reached")
+
 func (s *Store) CreateAccount(ctx context.Context, account models.Account) (models.Account, error) {
 	_, err := s.db.ExecContext(
 		ctx,
@@ -875,12 +882,32 @@ func (s *Store) FindDevice(ctx context.Context, accountID string, deviceID strin
 	return scanDevice(row)
 }
 
-func (s *Store) UpsertDevice(ctx context.Context, device models.Device) (models.Device, error) {
-	_, err := s.db.ExecContext(
+// UpsertDevice attaches a device, enforcing maxDevices inside the statement.
+// The per-account ceiling is evaluated by the WHERE sub-select in the same
+// statement that inserts, so concurrent attaches that all passed the same
+// baseline cannot each add a row. Callers must not count devices and compare
+// in service code — the TOCTOU window between read and write is exactly the
+// race this predicate closes (the same reasoning as UpsertEncryptedBlob).
+//
+// Re-attaching a device the account already owns is always allowed: it renames
+// and refreshes an existing row rather than consuming a new slot, so it stays
+// permitted at the ceiling.
+//
+// Returns ErrDeviceLimitReached when the row is absent and the account is
+// already at maxDevices (RowsAffected == 0); the caller should map this to its
+// public too-many-devices error.
+func (s *Store) UpsertDevice(
+	ctx context.Context,
+	device models.Device,
+	maxDevices int,
+) (models.Device, error) {
+	result, err := s.db.ExecContext(
 		ctx,
 		`
 INSERT INTO devices (device_id, account_id, device_label, created_at, last_seen_at)
-VALUES (?, ?, ?, ?, ?)
+SELECT ?, ?, ?, ?, ?
+WHERE EXISTS (SELECT 1 FROM devices WHERE account_id = ? AND device_id = ?)
+   OR (SELECT COUNT(1) FROM devices WHERE account_id = ?) < ?
 ON CONFLICT(account_id, device_id) DO UPDATE SET
   device_label = excluded.device_label,
   last_seen_at = excluded.last_seen_at
@@ -890,9 +917,21 @@ ON CONFLICT(account_id, device_id) DO UPDATE SET
 		device.DeviceLabel,
 		device.CreatedAt.UTC().Format(time.RFC3339Nano),
 		device.LastSeenAt.UTC().Format(time.RFC3339Nano),
+		device.AccountID,
+		device.DeviceID,
+		device.AccountID,
+		maxDevices,
 	)
 	if err != nil {
 		return models.Device{}, fmt.Errorf("upsert device: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return models.Device{}, fmt.Errorf("upsert device rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
+	}
+	if affected == 0 {
+		return models.Device{}, ErrDeviceLimitReached
 	}
 
 	return device, nil
