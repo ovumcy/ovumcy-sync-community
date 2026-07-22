@@ -54,7 +54,7 @@ func TestExpiredRowsSweepRunAggregatesCounts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if result.Sessions != 3 || result.PasswordResetTokens != 2 || result.TOTPChallenges != 1 {
+	if result.Sessions != 3 || result.ResetTokens != 2 || result.TOTPChallenges != 1 {
 		t.Fatalf("unexpected counts: %+v", result)
 	}
 	if result.Total() != 6 {
@@ -99,7 +99,7 @@ func TestExpiredRowsSweepRunContinuesPastAFailingTable(t *testing.T) {
 	if len(store.limits) != 3 {
 		t.Fatalf("expected the remaining tables to still run, got %d calls", len(store.limits))
 	}
-	if result.Sessions != 0 || result.PasswordResetTokens != 2 || result.TOTPChallenges != 1 {
+	if result.Sessions != 0 || result.ResetTokens != 2 || result.TOTPChallenges != 1 {
 		t.Fatalf("unexpected counts alongside the failure: %+v", result)
 	}
 }

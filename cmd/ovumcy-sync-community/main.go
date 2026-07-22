@@ -304,7 +304,7 @@ func runExpiredRowsSweepLoop(
 			if result.Total() > 0 {
 				log.Printf(
 					"expired-rows sweep deleted %d sessions, %d password reset tokens, %d totp challenges",
-					result.Sessions, result.PasswordResetTokens, result.TOTPChallenges,
+					result.Sessions, result.ResetTokens, result.TOTPChallenges,
 				)
 			}
 			if err != nil {
