@@ -211,6 +211,7 @@ on the account's next successful login.
 | The sweep never evicts an in-window entry, so a throttled key cannot be flushed to reset its counter | `TestRateLimiterSweepPreservesInWindowEntries` in [internal/security/security_test.go](internal/security/security_test.go) |
 | Auth endpoints are rate-limited per client; excess requests receive `rate_limited` | `TestServerRateLimitsAuthEndpoints` in [internal/api/server_test.go](internal/api/server_test.go) |
 | `X-Forwarded-For` is honored only from a trusted-proxy CIDR | `TestServerAuthRateLimitUsesForwardedClientFromTrustedProxy` in [internal/api/server_test.go](internal/api/server_test.go) |
+| The forwarded client IP is the rightmost address not in `TRUSTED_PROXY_CIDRS`, so a client cannot spoof its rate-limit bucket by prepending `X-Forwarded-For` entries | `TestServerAuthRateLimitResistsForwardedSpoofingBehindTrustedProxy` in [internal/api/server_test.go](internal/api/server_test.go) |
 | `X-Forwarded-For` from an untrusted peer is ignored; the raw peer address is the key | `TestServerIgnoresForwardedClientFromUntrustedRemoteAddr` in [internal/api/server_test.go](internal/api/server_test.go) |
 | The resolved client IP is canonical — IPv4-unmapped and zone-stripped — so one address cannot occupy several rate-limit buckets | `FuzzParseClientIP`, `FuzzForwardedClientIP` in [internal/api/client_ip_fuzz_test.go](internal/api/client_ip_fuzz_test.go) |
 

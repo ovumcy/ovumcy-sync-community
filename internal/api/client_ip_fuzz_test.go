@@ -70,7 +70,12 @@ func FuzzForwardedClientIP(f *testing.F) {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, header string) {
-		addr, ok := forwardedClientIP(header)
+		// No trusted proxies are configured here, so the selector returns the
+		// rightmost parseable token; this target guards the parse/canonicalize
+		// contract (never panic, canonical, one of the header's own tokens). The
+		// rightmost-untrusted selection policy is asserted deterministically at
+		// the server level, where the trusted-proxy set exists.
+		addr, ok := forwardedClientIP(header, func(netip.Addr) bool { return false })
 		if !ok {
 			if addr.IsValid() {
 				t.Fatalf("forwardedClientIP(%q) returned ok=false but a valid addr %v", header, addr)
@@ -91,20 +96,6 @@ func FuzzForwardedClientIP(f *testing.F) {
 		}
 		if !matched {
 			t.Fatalf("forwardedClientIP(%q) returned %v, which no element parses to", header, addr)
-		}
-		// It must specifically be the FIRST parseable token (leftmost), the
-		// documented selection rule.
-		var firstParseable netip.Addr
-		found := false
-		for _, part := range strings.Split(header, ",") {
-			if candidate, candidateOK := parseClientIP(part); candidateOK {
-				firstParseable = candidate
-				found = true
-				break
-			}
-		}
-		if !found || firstParseable != addr {
-			t.Fatalf("forwardedClientIP(%q) did not select the leftmost parseable token: got %v, leftmost %v", header, addr, firstParseable)
 		}
 	})
 }
