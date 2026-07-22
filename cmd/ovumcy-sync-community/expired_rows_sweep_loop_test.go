@@ -67,9 +67,9 @@ func (s *recordingExpiredRowsSweeper) waitForRun(t *testing.T) {
 // the sweep happen on its own, with the operator's limit passed through.
 func TestExpiredRowsSweepLoopRunsTheSweep(t *testing.T) {
 	sweeper := newRecordingExpiredRowsSweeper(services.ExpiredRowsSweepResult{
-		Sessions:            2,
-		PasswordResetTokens: 1,
-		TOTPChallenges:      1,
+		Sessions:       2,
+		ResetTokens:    1,
+		TOTPChallenges: 1,
 	}, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
