@@ -133,8 +133,8 @@ func runServe(cfg config.Config) error {
 			},
 		),
 		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      15 * time.Second,
+		ReadTimeout:       cfg.HTTPReadTimeout,
+		WriteTimeout:      cfg.HTTPWriteTimeout,
 		IdleTimeout:       60 * time.Second,
 	}
 
