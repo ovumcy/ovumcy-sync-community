@@ -96,7 +96,7 @@ func TestDeleteExpiredSessionsHonorsLimit(t *testing.T) {
 	account := expiredRowsFixtureAccount(t, store, "owner")
 
 	cutoff := time.Now().UTC()
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		createSessionExpiringAt(t, store, account.ID, fmt.Sprintf("expired-%d", i), cutoff.Add(-time.Hour))
 	}
 
