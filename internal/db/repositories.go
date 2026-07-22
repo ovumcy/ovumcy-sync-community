@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ovumcy/ovumcy-sync-community/internal/models"
+	"modernc.org/sqlite"
 )
 
 var ErrNotFound = errors.New("not_found")
@@ -349,7 +350,10 @@ func (s *Store) GetAccountLapsedAt(ctx context.Context, accountID string) (*time
 		return nil, nil
 	}
 
-	parsed := mustParseTime(lapsedAt.String)
+	parsed, err := parseStoredTime(lapsedAt.String)
+	if err != nil {
+		return nil, fmt.Errorf("account lapsed_at: %w", err)
+	}
 	return &parsed, nil
 }
 
@@ -661,8 +665,13 @@ func (s *Store) FindTOTPChallengeByHash(
 		}
 		return models.TOTPChallenge{}, fmt.Errorf("scan totp challenge: %w", err)
 	}
-	challenge.CreatedAt = mustParseTime(createdAt)
-	challenge.ExpiresAt = mustParseTime(expiresAt)
+	var err error
+	if challenge.CreatedAt, err = parseStoredTime(createdAt); err != nil {
+		return models.TOTPChallenge{}, fmt.Errorf("totp challenge created_at: %w", err)
+	}
+	if challenge.ExpiresAt, err = parseStoredTime(expiresAt); err != nil {
+		return models.TOTPChallenge{}, fmt.Errorf("totp challenge expires_at: %w", err)
+	}
 	return challenge, nil
 }
 
@@ -789,8 +798,13 @@ func (s *Store) ConsumePasswordResetToken(
 		}
 		return models.PasswordResetToken{}, fmt.Errorf("scan password reset token: %w", err)
 	}
-	resetToken.CreatedAt = mustParseTime(createdAt)
-	resetToken.ExpiresAt = mustParseTime(expiresAt)
+	var err error
+	if resetToken.CreatedAt, err = parseStoredTime(createdAt); err != nil {
+		return models.PasswordResetToken{}, fmt.Errorf("password reset token created_at: %w", err)
+	}
+	if resetToken.ExpiresAt, err = parseStoredTime(expiresAt); err != nil {
+		return models.PasswordResetToken{}, fmt.Errorf("password reset token expires_at: %w", err)
+	}
 	return resetToken, nil
 }
 
@@ -1133,7 +1147,10 @@ func scanAccount(row interface{ Scan(dest ...any) error }) (models.Account, erro
 	}
 	account.PremiumActive = premiumActive != 0
 	account.TOTPEnabled = totpEnabled != 0
-	account.CreatedAt = mustParseTime(createdAt)
+	var err error
+	if account.CreatedAt, err = parseStoredTime(createdAt); err != nil {
+		return models.Account{}, fmt.Errorf("account created_at: %w", err)
+	}
 	return account, nil
 }
 
@@ -1155,9 +1172,16 @@ func scanSession(row interface{ Scan(dest ...any) error }) (models.Session, erro
 		}
 		return models.Session{}, fmt.Errorf("scan session: %w", err)
 	}
-	session.CreatedAt = mustParseTime(createdAt)
-	session.LastSeenAt = mustParseTime(lastSeenAt)
-	session.ExpiresAt = mustParseTime(expiresAt)
+	var err error
+	if session.CreatedAt, err = parseStoredTime(createdAt); err != nil {
+		return models.Session{}, fmt.Errorf("session created_at: %w", err)
+	}
+	if session.LastSeenAt, err = parseStoredTime(lastSeenAt); err != nil {
+		return models.Session{}, fmt.Errorf("session last_seen_at: %w", err)
+	}
+	if session.ExpiresAt, err = parseStoredTime(expiresAt); err != nil {
+		return models.Session{}, fmt.Errorf("session expires_at: %w", err)
+	}
 	return session, nil
 }
 
@@ -1177,8 +1201,13 @@ func scanDevice(row interface{ Scan(dest ...any) error }) (models.Device, error)
 		}
 		return models.Device{}, fmt.Errorf("scan device: %w", err)
 	}
-	device.CreatedAt = mustParseTime(createdAt)
-	device.LastSeenAt = mustParseTime(lastSeenAt)
+	var err error
+	if device.CreatedAt, err = parseStoredTime(createdAt); err != nil {
+		return models.Device{}, fmt.Errorf("device created_at: %w", err)
+	}
+	if device.LastSeenAt, err = parseStoredTime(lastSeenAt); err != nil {
+		return models.Device{}, fmt.Errorf("device last_seen_at: %w", err)
+	}
 	return device, nil
 }
 
@@ -1199,7 +1228,10 @@ func scanBlob(row interface{ Scan(dest ...any) error }) (models.EncryptedBlob, e
 		}
 		return models.EncryptedBlob{}, fmt.Errorf("scan blob: %w", err)
 	}
-	blob.UpdatedAt = mustParseTime(updatedAt)
+	var err error
+	if blob.UpdatedAt, err = parseStoredTime(updatedAt); err != nil {
+		return models.EncryptedBlob{}, fmt.Errorf("blob updated_at: %w", err)
+	}
 	return blob, nil
 }
 
@@ -1223,25 +1255,45 @@ func scanRecoveryKeyPackage(
 		}
 		return models.RecoveryKeyPackage{}, fmt.Errorf("scan recovery key package: %w", err)
 	}
-	recoveryKeyPackage.UpdatedAt = mustParseTime(updatedAt)
+	var err error
+	if recoveryKeyPackage.UpdatedAt, err = parseStoredTime(updatedAt); err != nil {
+		return models.RecoveryKeyPackage{}, fmt.Errorf("recovery key package updated_at: %w", err)
+	}
 	return recoveryKeyPackage, nil
 }
 
-func mustParseTime(value string) time.Time {
+// parseStoredTime parses a timestamp this package previously persisted.
+// Every write path formats time.RFC3339Nano; SQLite's own CURRENT_TIMESTAMP
+// format is accepted as a defensive fallback for rows written by a different
+// default. A value matching neither is corruption (for example a raw write
+// into the database file) and surfaces as an error the calling scan wraps
+// with its column context — a clean 500 with a diagnosable log line instead
+// of a recovered panic that only names the method and path.
+func parseStoredTime(value string) (time.Time, error) {
 	parsed, err := time.Parse(time.RFC3339Nano, value)
 	if err == nil {
-		return parsed
+		return parsed, nil
 	}
 
 	parsed, err = time.Parse("2006-01-02 15:04:05", value)
 	if err == nil {
-		return parsed.UTC()
+		return parsed.UTC(), nil
 	}
 
-	panic(fmt.Sprintf("parse stored timestamp %q: %v", value, err))
+	return time.Time{}, fmt.Errorf("parse stored timestamp %q: %w", value, err)
 }
 
+// sqliteConstraintUnique is SQLITE_CONSTRAINT_UNIQUE (19 | (8 << 8)) — the
+// extended result code SQLite reports for a UNIQUE-index violation.
+const sqliteConstraintUnique = 2067
+
 func isUniqueConstraint(err error) bool {
+	var driverErr *sqlite.Error
+	if errors.As(err, &driverErr) {
+		return driverErr.Code() == sqliteConstraintUnique
+	}
+	// Fall back on SQLite's own stable error message for errors that arrive
+	// re-wrapped without the driver type.
 	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
 }
 
