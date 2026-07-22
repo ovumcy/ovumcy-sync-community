@@ -32,12 +32,13 @@ logic surface as CI failures rather than intermittent production incidents.
 
 ### Fuzz targets
 
-Five native Go fuzz targets guard the inputs that sit on the trust boundary:
+Seven native Go fuzz targets guard the inputs that sit on the trust boundary:
 
 - `FuzzNormalizeLogin`, `FuzzValidateLogin` — login canonicalization/validation (including the reserved `managed:` prefix guard)
 - `FuzzNormalizeRecoveryCode` — recovery-code parsing
 - `FuzzDecodeTOTPSecretBase32` — TOTP secret decoding
 - `FuzzFieldCryptoRoundTrip` — field-encryption encrypt→decrypt round-trip
+- `FuzzParseClientIP`, `FuzzForwardedClientIP` — rate-limit client-IP attribution (these two live in `internal/api`; the rest in `internal/security`)
 
 CI runs the seed corpus on every push. The `Fuzz` workflow additionally runs
 active fuzzing on GitHub Actions: a short (3m/target) weekly pass over every
