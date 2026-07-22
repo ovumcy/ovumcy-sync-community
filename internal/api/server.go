@@ -935,10 +935,13 @@ func (s *Server) withManagedBridge(next http.HandlerFunc) http.HandlerFunc {
 
 func bearerTokenFromRequest(request *http.Request) string {
 	authorization := request.Header.Get("Authorization")
-	if !strings.HasPrefix(authorization, "Bearer ") {
+	// RFC 7235 §2.1: the auth-scheme is case-insensitive, so "bearer" and
+	// "BEARER" must authenticate exactly like "Bearer".
+	const scheme = "Bearer "
+	if len(authorization) < len(scheme) || !strings.EqualFold(authorization[:len(scheme)], scheme) {
 		return ""
 	}
-	return strings.TrimSpace(strings.TrimPrefix(authorization, "Bearer "))
+	return strings.TrimSpace(authorization[len(scheme):])
 }
 
 func decodeJSON(writer http.ResponseWriter, request *http.Request, target any, maxBytes int64) bool {
