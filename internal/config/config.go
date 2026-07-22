@@ -62,6 +62,15 @@ type Config struct {
 	// the store's own default page size), caps how many candidate accounts one
 	// in-process sweep run examines.
 	LapsedAccountSweepLimit int
+	// HTTPReadTimeout / HTTPWriteTimeout bound a single HTTP request's full
+	// read and write windows (HTTP_READ_TIMEOUT, default 10s;
+	// HTTP_WRITE_TIMEOUT, default 15s). Together with MAX_BLOB_BYTES they cap
+	// how slow a client may be while still moving a full-size blob — raise
+	// them when serving large blobs over slow links (see
+	// docs/self-hosting.md). Header-level slow-loris stays bounded separately
+	// by the server's fixed ReadHeaderTimeout.
+	HTTPReadTimeout  time.Duration
+	HTTPWriteTimeout time.Duration
 }
 
 func Load() (Config, error) {
@@ -109,10 +118,20 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	// Deliberately not validated as positive, unlike the grace period: 0 is the
-	// documented way to turn the in-process sweep off and keep the cron as the
-	// only trigger.
-	lapsedAccountSweepLimit, err := intFromEnv("LAPSED_ACCOUNT_SWEEP_LIMIT", 0)
+	// 0 — explicit or unset — means "use the store's own default page size";
+	// only negative values and parse failures are rejected. The on/off lever
+	// for the sweep is the interval above, never the limit.
+	lapsedAccountSweepLimit, err := nonNegativeIntFromEnv("LAPSED_ACCOUNT_SWEEP_LIMIT", 0)
+	if err != nil {
+		return Config{}, err
+	}
+
+	httpReadTimeout, err := positiveDurationFromEnv("HTTP_READ_TIMEOUT", 10*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+
+	httpWriteTimeout, err := positiveDurationFromEnv("HTTP_WRITE_TIMEOUT", 15*time.Second)
 	if err != nil {
 		return Config{}, err
 	}
@@ -135,6 +154,8 @@ func Load() (Config, error) {
 		LapsedAccountGracePeriod:   lapsedAccountGracePeriod,
 		LapsedAccountSweepInterval: lapsedAccountSweepInterval,
 		LapsedAccountSweepLimit:    lapsedAccountSweepLimit,
+		HTTPReadTimeout:            httpReadTimeout,
+		HTTPWriteTimeout:           httpWriteTimeout,
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -244,6 +265,39 @@ func intFromEnv(name string, fallback int) (int, error) {
 	parsed, err := strconv.Atoi(value)
 	if err != nil {
 		return 0, fmt.Errorf("parse %s: %w", name, err)
+	}
+	if parsed <= 0 {
+		return 0, fmt.Errorf("%s must be positive", name)
+	}
+	return parsed, nil
+}
+
+// nonNegativeIntFromEnv is intFromEnv for knobs where an explicit 0 is
+// meaningful (for example "use the store's own default") rather than a
+// mistake: only negative values and parse failures are rejected.
+func nonNegativeIntFromEnv(name string, fallback int) (int, error) {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback, nil
+	}
+
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("parse %s: %w", name, err)
+	}
+	if parsed < 0 {
+		return 0, fmt.Errorf("%s must not be negative", name)
+	}
+	return parsed, nil
+}
+
+// positiveDurationFromEnv is durationFromEnv for knobs where zero or a
+// negative value would silently disable a protection (net/http treats a
+// zero timeout as "no timeout at all"): both are rejected.
+func positiveDurationFromEnv(name string, fallback time.Duration) (time.Duration, error) {
+	parsed, err := durationFromEnv(name, fallback)
+	if err != nil {
+		return 0, err
 	}
 	if parsed <= 0 {
 		return 0, fmt.Errorf("%s must be positive", name)

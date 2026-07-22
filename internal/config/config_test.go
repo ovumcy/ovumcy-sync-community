@@ -344,4 +344,78 @@ func TestLoadRejectsUnparsableLapsedAccountSweepSettings(t *testing.T) {
 			t.Fatalf("expected the offending variable to be named, got %v", err)
 		}
 	})
+
+	t.Run("limit accepts an explicit zero as the store default", func(t *testing.T) {
+		t.Setenv("LAPSED_ACCOUNT_SWEEP_LIMIT", "0")
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("expected an explicit 0 sweep limit to load, got %v", err)
+		}
+		if cfg.LapsedAccountSweepLimit != 0 {
+			t.Fatalf("expected sweep limit 0, got %d", cfg.LapsedAccountSweepLimit)
+		}
+	})
+
+	t.Run("limit rejects negatives", func(t *testing.T) {
+		t.Setenv("LAPSED_ACCOUNT_SWEEP_LIMIT", "-3")
+
+		if _, err := Load(); err == nil {
+			t.Fatal("expected a negative sweep limit to be rejected")
+		} else if !strings.Contains(err.Error(), "LAPSED_ACCOUNT_SWEEP_LIMIT") {
+			t.Fatalf("expected the offending variable to be named, got %v", err)
+		}
+	})
+}
+
+func TestLoadHTTPTimeouts(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load returned error: %v", err)
+		}
+		if cfg.HTTPReadTimeout != 10*time.Second {
+			t.Fatalf("expected default HTTP read timeout 10s, got %v", cfg.HTTPReadTimeout)
+		}
+		if cfg.HTTPWriteTimeout != 15*time.Second {
+			t.Fatalf("expected default HTTP write timeout 15s, got %v", cfg.HTTPWriteTimeout)
+		}
+	})
+
+	t.Run("override", func(t *testing.T) {
+		t.Setenv("HTTP_READ_TIMEOUT", "2m")
+		t.Setenv("HTTP_WRITE_TIMEOUT", "3m")
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load returned error: %v", err)
+		}
+		if cfg.HTTPReadTimeout != 2*time.Minute || cfg.HTTPWriteTimeout != 3*time.Minute {
+			t.Fatalf(
+				"expected the overridden timeouts, got %v / %v",
+				cfg.HTTPReadTimeout,
+				cfg.HTTPWriteTimeout,
+			)
+		}
+	})
+
+	t.Run("rejects zero", func(t *testing.T) {
+		t.Setenv("HTTP_READ_TIMEOUT", "0s")
+
+		if _, err := Load(); err == nil {
+			t.Fatal("expected a zero read timeout to be rejected")
+		} else if !strings.Contains(err.Error(), "HTTP_READ_TIMEOUT") {
+			t.Fatalf("expected the offending variable to be named, got %v", err)
+		}
+	})
+
+	t.Run("rejects negative", func(t *testing.T) {
+		t.Setenv("HTTP_WRITE_TIMEOUT", "-5s")
+
+		if _, err := Load(); err == nil {
+			t.Fatal("expected a negative write timeout to be rejected")
+		} else if !strings.Contains(err.Error(), "HTTP_WRITE_TIMEOUT") {
+			t.Fatalf("expected the offending variable to be named, got %v", err)
+		}
+	})
 }
