@@ -700,8 +700,8 @@ func TestManagedAccountUpsertReturnsErrorWhenAccountsTableIsDropped(t *testing.T
 	}
 }
 
-// TestMustParseTimeAcceptsSQLiteDefaultTimestampFormat exercises
-// mustParseTime's fallback format branch. Every repository write path in
+// TestParseStoredTimeAcceptsSQLiteDefaultTimestampFormat exercises
+// parseStoredTime's fallback format branch. Every repository write path in
 // this package formats timestamps via time.RFC3339Nano before persisting,
 // so the "2006-01-02 15:04:05" branch (SQLite's own CURRENT_TIMESTAMP
 // format) is never produced by a write path today; it exists as a
@@ -709,8 +709,11 @@ func TestManagedAccountUpsertReturnsErrorWhenAccountsTableIsDropped(t *testing.T
 // test asserts that fallback contract directly at the unit level, since
 // there is no reachable write path to fault it through the repository
 // methods themselves.
-func TestMustParseTimeAcceptsSQLiteDefaultTimestampFormat(t *testing.T) {
-	parsed := mustParseTime("2024-03-15 10:30:00")
+func TestParseStoredTimeAcceptsSQLiteDefaultTimestampFormat(t *testing.T) {
+	parsed, err := parseStoredTime("2024-03-15 10:30:00")
+	if err != nil {
+		t.Fatalf("expected the sqlite default timestamp format to parse, got %v", err)
+	}
 	if parsed.IsZero() {
 		t.Fatal("expected a non-zero parsed time for the sqlite default timestamp format")
 	}
@@ -719,31 +722,25 @@ func TestMustParseTimeAcceptsSQLiteDefaultTimestampFormat(t *testing.T) {
 	}
 }
 
-// TestMustParseTimePanicsOnUnparseableTimestamp exercises mustParseTime's
-// panic branch directly. Every write path in this package formats
+// TestParseStoredTimeRejectsUnparseableTimestamp exercises parseStoredTime's
+// error branch directly. Every write path in this package formats
 // timestamps via time.RFC3339Nano, with the SQLite default format as the
 // only documented fallback (see the test above); a value matching neither
 // is corruption a raw write into the database file could genuinely produce,
-// and mustParseTime's contract is to fail loudly rather than silently
-// propagate a zero time. Called directly (mustParseTime is unexported, same
-// as the happy-path test above), not through a repository method: no
-// production write path can ever persist a value shaped like this, so
-// reaching the panic through a real column read would need a raw-connection
-// corruption test that adds nothing beyond what this direct call already
-// proves about the panic itself.
-func TestMustParseTimePanicsOnUnparseableTimestamp(t *testing.T) {
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected mustParseTime to panic on an unparseable timestamp")
-		}
-		message, ok := r.(string)
-		if !ok || !strings.Contains(message, "parse stored timestamp") {
-			t.Fatalf("expected a 'parse stored timestamp' panic message, got %v", r)
-		}
-	}()
-
-	mustParseTime("not-a-timestamp-at-all")
+// and parseStoredTime's contract is to fail loudly — as an error the
+// calling scan wraps with its column context — rather than silently
+// propagate a zero time or panic. Called directly (parseStoredTime is
+// unexported, same as the happy-path test above), not through a repository
+// method: no production write path can ever persist a value shaped like
+// this, so reaching the branch through a real column read would need a
+// raw-connection corruption test that adds nothing beyond what this direct
+// call already proves about the contract itself.
+func TestParseStoredTimeRejectsUnparseableTimestamp(t *testing.T) {
+	if _, err := parseStoredTime("not-a-timestamp-at-all"); err == nil {
+		t.Fatal("expected parseStoredTime to reject an unparseable timestamp")
+	} else if !strings.Contains(err.Error(), "parse stored timestamp") {
+		t.Fatalf("expected a 'parse stored timestamp' error, got %v", err)
+	}
 }
 
 // TestUpsertEncryptedBlobRejectsStaleGeneration exercises
