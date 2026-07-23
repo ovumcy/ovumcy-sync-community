@@ -215,6 +215,8 @@ on the account's next successful login.
 | The forwarded client IP is the rightmost address not in `TRUSTED_PROXY_CIDRS`, so a client cannot spoof its rate-limit bucket by prepending `X-Forwarded-For` entries | `TestServerAuthRateLimitResistsForwardedSpoofingBehindTrustedProxy` in [internal/api/server_test.go](internal/api/server_test.go) |
 | `X-Forwarded-For` from an untrusted peer is ignored; the raw peer address is the key | `TestServerIgnoresForwardedClientFromUntrustedRemoteAddr` in [internal/api/server_test.go](internal/api/server_test.go) |
 | The resolved client IP is canonical — IPv4-unmapped and zone-stripped — so one address cannot occupy several rate-limit buckets | `FuzzParseClientIP`, `FuzzForwardedClientIP` in [internal/api/client_ip_fuzz_test.go](internal/api/client_ip_fuzz_test.go) |
+| Login attempts share one quota per normalized login identifier across all source IPs, so a distributed brute force cannot multiply per-account attempts by rotating addresses | `TestServerLoginRateLimitsPerIdentifierAcrossClientIPs` in [internal/api/server_test.go](internal/api/server_test.go) |
+| A blank login skips the identifier bucket without consuming a slot and still returns the generic invalid-credentials error, so the limiter cannot turn an empty submission into a distinguishable response | `TestServerLoginWithBlankLoginReturnsGenericInvalidCredentials` in [internal/api/server_test.go](internal/api/server_test.go) |
 
 ### Zero-Knowledge Blob Handling
 
