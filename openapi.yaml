@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: ovumcy-sync-community
-  version: "0.3.0-dev"
+  version: "0.3.0"
   description: |
     Self-hosted, zero-knowledge encrypted-sync backend for the Ovumcy app.
 
