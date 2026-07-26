@@ -40,7 +40,14 @@ For the repository's default Docker Compose layout, the SQLite file lives under 
 Pick one WAL-safe method:
 
 - **Service stopped.** Stop the container first (a clean shutdown checkpoints
-  the WAL), then copy `./data/ovumcy-sync-community.sqlite`.
+  the WAL), then copy `./data/ovumcy-sync-community.sqlite`. The shutdown logs
+  `close database: wal checkpoint blocked by a concurrent reader/writer ...`
+  if some other connection to the database file — a second `sqlite3` shell, a
+  monitoring or replication tool, another process pointed at the same file —
+  held the checkpoint back. Check the shutdown logs for that line before
+  trusting the copy: if it's there, the file is not self-contained — close
+  the other connection and stop the service again, or fall back to one of the
+  service-running methods below.
 - **Service running.** Take a consistent snapshot without a bare copy — either
   copy `.sqlite`, `.sqlite-wal`, and `.sqlite-shm` together, or produce a
   single self-contained file with SQLite's online backup:
@@ -85,7 +92,12 @@ Do at least one restore drill before you rely on this server operationally:
 
    It must print `ok`. `migrate` does not scan table data — it can succeed on a
    file whose data pages are corrupt — so a green `migrate` is not proof the
-   restore is intact;
+   restore is intact. It is also not proof the backup itself was WAL-complete:
+   a bare copy taken while data was still sitting in an uncheckpointed `-wal`
+   is a structurally valid, merely stale file, and `integrity_check` reports
+   `ok` on it the same as it would on a complete one — this step catches
+   page-level corruption, not a missed checkpoint (see the shutdown-log note
+   above);
 3. run `migrate`;
 4. start `serve`;
 5. verify `readyz`;

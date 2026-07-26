@@ -228,6 +228,72 @@ func TestPingReturnsErrorOnClosedStore(t *testing.T) {
 	}
 }
 
+// TestCloseSurfacesBusyWalCheckpoint exercises Store.Close's checkpoint
+// result-reading branch. PRAGMA wal_checkpoint(TRUNCATE) reports failure by
+// returning busy=1 in its result row, not through the driver's usual error
+// return, so a Close that ran it with Exec (discarding the row) could never
+// tell a blocked checkpoint from a clean one — the shutdown path would have
+// no way to know the database file it leaves behind still depends on an
+// uncheckpointed -wal, silently violating the backup runbook's "a clean
+// shutdown checkpoints the WAL" assumption (docs/backup-restore.md).
+// Reproduced with a real second connection holding an open read transaction
+// during Close — the same second-connection technique as dropTable, adapted
+// to hold a lock instead of mutating schema — never a fake driver.
+func TestCloseSurfacesBusyWalCheckpoint(t *testing.T) {
+	store, dbPath := newFileBackedTestStore(t)
+	seedFaultInjectionAccount(t, store, "account-wal-checkpoint")
+
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open second connection: %v", err)
+	}
+	defer func() { _ = raw.Close() }()
+	if _, err := raw.Exec(`PRAGMA busy_timeout = 5000;`); err != nil {
+		t.Fatalf("configure second connection: %v", err)
+	}
+
+	tx, err := raw.Begin()
+	if err != nil {
+		t.Fatalf("begin read transaction on second connection: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// SQLite defers acquiring the read lock until the transaction actually
+	// touches the database, so run a real read before Close runs — an idle
+	// BEGIN alone would not hold the checkpoint back.
+	var count int
+	if err := tx.QueryRow(`SELECT count(*) FROM accounts;`).Scan(&count); err != nil {
+		t.Fatalf("read inside second-connection transaction: %v", err)
+	}
+
+	if err := store.Close(); err == nil {
+		t.Fatal("expected Close to report the checkpoint blocked by the open second-connection read transaction")
+	} else if !strings.Contains(err.Error(), "busy=1") {
+		t.Fatalf("expected a busy=1 wal-checkpoint error, got %v", err)
+	}
+}
+
+// TestCloseReturnsNilWhenWalCheckpointIsNotBusy is the companion regression
+// guard for TestCloseSurfacesBusyWalCheckpoint: an ordinary file-backed store
+// with no concurrent connection must still report a clean Close (busy=0), so
+// reading the checkpoint result cannot make a normal shutdown fail
+// spuriously.
+func TestCloseReturnsNilWhenWalCheckpointIsNotBusy(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "close-clean-checkpoint.db")
+	store, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := store.ApplyMigrations(context.Background()); err != nil {
+		t.Fatalf("apply migrations: %v", err)
+	}
+	seedFaultInjectionAccount(t, store, "account-clean-checkpoint")
+
+	if err := store.Close(); err != nil {
+		t.Fatalf("expected a clean close with no concurrent connection, got %v", err)
+	}
+}
+
 // TestApplyMigrationsAndSchemaReadyReturnErrorsOnClosedStore covers the
 // generic query/exec error branches inside applyMigrations and schemaReady
 // (the "ensure schema_migrations", migrationApplied's count query, and

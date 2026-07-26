@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -44,10 +45,24 @@ PRAGMA busy_timeout = 5000;
 }
 
 func (s *Store) Close() error {
+	// PRAGMA wal_checkpoint(TRUNCATE) returns one row (busy, log,
+	// checkpointed) rather than signalling failure the way a normal
+	// statement does: busy != 0 means another connection's open read or
+	// write transaction blocked the truncate, so the -wal sidecar still
+	// holds data the main file does not. That must be read with QueryRow,
+	// not Exec, or a blocked checkpoint is silently indistinguishable from
+	// a clean one — and the backup runbook's "a clean shutdown checkpoints
+	// the WAL" assumption (docs/backup-restore.md) would go unverified.
+	var checkpointErr error
 	if s.db != nil {
-		_, _ = s.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE);`)
+		var busy, walPages, checkpointedPages int
+		if err := s.db.QueryRow(`PRAGMA wal_checkpoint(TRUNCATE);`).Scan(&busy, &walPages, &checkpointedPages); err != nil {
+			checkpointErr = fmt.Errorf("wal checkpoint: %w", err)
+		} else if busy != 0 {
+			checkpointErr = fmt.Errorf("wal checkpoint blocked by a concurrent reader/writer (busy=%d log=%d checkpointed=%d): the closed database file may not be self-contained", busy, walPages, checkpointedPages)
+		}
 	}
-	return s.db.Close()
+	return errors.Join(checkpointErr, s.db.Close())
 }
 
 func (s *Store) Ping(ctx context.Context) error {
