@@ -240,6 +240,61 @@ func TestSyncServicePutBlobRejectsMalformedChecksumFormat(t *testing.T) {
 	}
 }
 
+// The three structural conditions PutBlob checks before it looks at the
+// checksum. Each stands alone: a caller that omits any one of them has sent
+// something that cannot be stored as a blob at all.
+func TestSyncServicePutBlobRejectsMalformedInput(t *testing.T) {
+	store := openTestStore(t)
+	auth := NewAuthService(store, 24*time.Hour)
+	syncService := NewSyncService(store, SyncOptions{MaxDevices: 2, MaxBlobBytes: 16 << 20})
+
+	result, err := auth.Register(
+		context.Background(),
+		"owner@example.com",
+		"correct horse battery staple",
+	)
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	ciphertext := []byte("ciphertext")
+	sum := sha256.Sum256(ciphertext)
+	checksum := hex.EncodeToString(sum[:])
+
+	for name, input := range map[string]PutBlobInput{
+		"zero schema version": {
+			SchemaVersion:  0,
+			Generation:     1,
+			ChecksumSHA256: checksum,
+			Ciphertext:     ciphertext,
+		},
+		"zero generation": {
+			SchemaVersion:  1,
+			Generation:     0,
+			ChecksumSHA256: checksum,
+			Ciphertext:     ciphertext,
+		},
+		"negative generation": {
+			SchemaVersion:  1,
+			Generation:     -1,
+			ChecksumSHA256: checksum,
+			Ciphertext:     ciphertext,
+		},
+		"empty ciphertext": {
+			SchemaVersion:  1,
+			Generation:     1,
+			ChecksumSHA256: checksum,
+			Ciphertext:     nil,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := syncService.PutBlob(context.Background(), result.AccountID, input); !errors.Is(err, ErrInvalidBlob) {
+				t.Fatalf("expected ErrInvalidBlob, got %v", err)
+			}
+		})
+	}
+}
+
 // TestSyncServiceRemoveDeviceSurfacesStoreError exercises RemoveDevice's
 // generic (non-ErrNotFound) store-error branch: DeleteDevice is the only
 // store call this method makes, so dropping the devices table faults it
