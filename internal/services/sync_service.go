@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"math"
 	"regexp"
 	"strings"
 	"time"
@@ -26,15 +25,29 @@ var ErrRecoveryPackageNotFound = errors.New("recovery_package_not_found")
 var checksumPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var lowercaseHexPattern = regexp.MustCompile(`^[a-f0-9]+$`)
 
-// maxBlobGeneration rejects a blob generation within 2^32 of the int64 ceiling.
-// The client derives generation from a millisecond timestamp (ovumcy-app's
-// nextRemoteGeneration), which is astronomically far below this bound, so
-// legitimate writes are never affected. Without the cap, a single crafted write
-// at math.MaxInt64 would strand the blob at a value that no future strictly-
-// greater write could reach — the UpsertEncryptedBlob CAS only accepts a higher
-// generation — permanently locking the owner out of their own blob. The 2^32
-// reserve keeps ample headroom for future increments below the bound.
-const maxBlobGeneration = math.MaxInt64 - (1 << 32)
+// blobGenerationSkew is how far ahead of this server's clock an accepted blob
+// generation may sit. The client derives generation from a millisecond
+// timestamp (ovumcy-app's nextRemoteGeneration, which is
+// max(now_ms, last+1)), so a legitimate value never runs ahead of server time
+// by more than the clock difference between the two machines plus a stray
+// millisecond per same-millisecond write. A day is far more than that and
+// still far less than any value that could cause trouble.
+const blobGenerationSkew = 24 * time.Hour
+
+// maxAcceptableBlobGeneration bounds a write to a plausible timestamp, and it
+// moves with the clock on purpose.
+//
+// A CONSTANT ceiling cannot work here, however high it is placed:
+// UpsertEncryptedBlob's CAS accepts only a strictly greater generation, so
+// whatever the highest accepted value is, one write at that value leaves the
+// blob unreplaceable forever — every later write is either rejected by the
+// ceiling or refused as stale. That is the owner's entire backup bricked by a
+// single request from any device on the account, recoverable only by deleting
+// the account. A moving bound has no terminal value: whatever was accepted a
+// moment ago is beatable once the clock advances past it.
+func maxAcceptableBlobGeneration(now time.Time) int64 {
+	return now.UTC().Add(blobGenerationSkew).UnixMilli()
+}
 
 type SyncService struct {
 	store        *db.Store
@@ -170,7 +183,10 @@ func (s *SyncService) PutBlob(
 	accountID string,
 	input PutBlobInput,
 ) (models.EncryptedBlob, error) {
-	if input.SchemaVersion <= 0 || input.Generation <= 0 || input.Generation > maxBlobGeneration || len(input.Ciphertext) == 0 {
+	if input.SchemaVersion <= 0 || input.Generation <= 0 || len(input.Ciphertext) == 0 {
+		return models.EncryptedBlob{}, ErrInvalidBlob
+	}
+	if input.Generation > maxAcceptableBlobGeneration(s.now()) {
 		return models.EncryptedBlob{}, ErrInvalidBlob
 	}
 	if !checksumPattern.MatchString(strings.ToLower(strings.TrimSpace(input.ChecksumSHA256))) {
