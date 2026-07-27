@@ -1,5 +1,8 @@
 FROM golang:1.26-bookworm@sha256:18aedc16aa19b3fd7ded7245fc14b109e054d65d22ed53c355c899582bbb2113 AS build
 
+ARG TARGETOS
+ARG TARGETARCH
+
 WORKDIR /src
 
 COPY go.mod go.sum ./
@@ -7,7 +10,7 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/ovumcy-sync-community ./cmd/ovumcy-sync-community
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/ovumcy-sync-community ./cmd/ovumcy-sync-community
 
 # Prepare a /data dir to copy into the distroless image (no shell there to mkdir at runtime).
 RUN mkdir -p /out/data
