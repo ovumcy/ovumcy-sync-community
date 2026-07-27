@@ -72,8 +72,21 @@ jobs:
             platform="$1"
             want="$2"
             tag="bin-$(echo "$platform" | tr / -)"
-            docker pull --platform "$platform" "$image"
-            cid=$(docker create --platform "$platform" "$image")
+            # Pull the per-platform manifest by ITS OWN digest. Pulling the
+            # multi-platform digest once per platform fails on the second one
+            # with "cannot overwrite digest": the local store binds that digest
+            # to whichever platform arrived first, and a second --platform pull
+            # of the same reference has nowhere to go.
+            digest=$(docker buildx imagetools inspect "$image" \
+              --format "{{range .Manifest.Manifests}}{{if eq .Platform.architecture \"${platform#linux/}\"}}{{if eq .Platform.os \"linux\"}}{{println .Digest}}{{end}}{{end}}{{end}}" \
+              | head -n 1)
+            if [ -z "$digest" ]; then
+              echo "::error::no $platform manifest in $image"
+              exit 1
+            fi
+            ref="ghcr.io/${{ github.repository }}@$digest"
+            docker pull --platform "$platform" "$ref"
+            cid=$(docker create --platform "$platform" "$ref")
             docker cp "$cid:/app/ovumcy-sync-community" "./$tag"
             docker rm "$cid" >/dev/null
             got=$(file "./$tag")
