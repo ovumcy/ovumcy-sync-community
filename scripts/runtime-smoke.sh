@@ -45,14 +45,52 @@ docker run -d --rm --name "${CONTAINER_NAME}" \
   -v "${VOLUME_NAME}:/data" \
   "${IMAGE}" serve >/dev/null
 
+# Readiness, not liveness, is the signal to wait on: /healthz answers from a
+# constant, so it comes up with the HTTP loop and proves nothing about the
+# server being able to serve. /readyz reaches the store and re-runs the
+# applied-migration name-set comparison, and is what the container HEALTHCHECK
+# probes -- so a container that answers it is genuinely serviceable, and every
+# request below runs against a server that has proven it can reach its data.
+#
+# Both failure modes are retried (a server can be mid-boot either way), but
+# they are reported apart: a booted-but-unready server is a different fault
+# from one that never accepted a connection, and the operator chasing a red
+# smoke needs to know which. curl writes 000 to %{http_code} when it cannot
+# connect at all, so the two are distinguishable without parsing its stderr.
+ready_status=''
 for _ in $(seq 1 30); do
-  if curl -fsS "${BASE_URL}/healthz" >/dev/null; then
+  ready_status="$(curl -s -o /dev/null -w '%{http_code}' "${BASE_URL}/readyz" || true)"
+  if [[ "${ready_status}" == "200" ]]; then
     break
   fi
   sleep 1
 done
 
-curl -fsS "${BASE_URL}/healthz" >/dev/null
+if [[ "${ready_status}" != "200" ]]; then
+  case "${ready_status}" in
+    503)
+      echo "server is up but never became ready: GET /readyz kept returning 503 (not_ready) -- the store or the applied-migration set is the fault, not the HTTP loop" >&2
+      ;;
+    000 | '')
+      echo "server never accepted a connection on ${BASE_URL}: GET /readyz could not connect" >&2
+      ;;
+    *)
+      echo "expected GET /readyz to return 200, got ${ready_status}" >&2
+      ;;
+  esac
+  docker logs "${CONTAINER_NAME}" >&2 || true
+  exit 1
+fi
+
+# /healthz is the other half of the contract and is asserted separately: it is
+# the pure liveness answer a proxy or uptime check targets, and it must keep
+# answering 200 while readiness carries the store-backed signal. Asserting both
+# keeps the two deliberately different signals distinguishable here.
+health_status="$(curl -s -o /dev/null -w '%{http_code}' "${BASE_URL}/healthz" || true)"
+if [[ "${health_status}" != "200" ]]; then
+  echo "expected GET /healthz to return 200, got ${health_status}" >&2
+  exit 1
+fi
 
 metrics_status="$(curl -s -o /dev/null -w '%{http_code}' "${BASE_URL}/metrics")"
 if [[ "${metrics_status}" != "401" ]]; then
