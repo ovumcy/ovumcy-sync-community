@@ -453,17 +453,16 @@ CREATE TABLE schema_migrations (
 	}
 }
 
-// TestMigrationAppliedReturnsErrorWhenSchemaMigrationsShapeIsCorrupted
-// exercises migrationApplied's own query/scan error branch in isolation
+// TestAppliedMigrationsReturnsErrorWhenSchemaMigrationsShapeIsCorrupted
+// exercises the applied-set read's own query error branch in isolation
 // (distinct from the malformed-state test above, which instead reaches
 // applyMigrations' apply-error branch): schema_migrations exists as a
 // table, so the "ensure schema_migrations" CREATE TABLE IF NOT EXISTS is a
 // no-op, but its version column has been renamed out from under it via a
-// second connection. migrationApplied's `WHERE version = ?` query then
-// fails with a real "no such column" driver error on the very first
-// migration it checks, which applyMigrations must surface unwrapped rather
-// than mask.
-func TestMigrationAppliedReturnsErrorWhenSchemaMigrationsShapeIsCorrupted(t *testing.T) {
+// second connection. The `SELECT version FROM schema_migrations` read then
+// fails with a real "no such column" driver error before any migration is
+// considered, which applyMigrations must surface unwrapped rather than mask.
+func TestAppliedMigrationsReturnsErrorWhenSchemaMigrationsShapeIsCorrupted(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "corrupted-schema-migrations.db")
 
 	store, err := Open(dbPath)
@@ -507,7 +506,7 @@ func TestMigrationAppliedReturnsErrorWhenSchemaMigrationsShapeIsCorrupted(t *tes
 	if err == nil {
 		t.Fatal("expected ApplyMigrations to fail when schema_migrations is missing its version column")
 	}
-	if !strings.Contains(err.Error(), "check migration") {
-		t.Fatalf("expected migrationApplied's 'check migration' wrapped error, got %v", err)
+	if !strings.Contains(err.Error(), "list applied migrations") {
+		t.Fatalf("expected the applied-set read's 'list applied migrations' wrapped error, got %v", err)
 	}
 }

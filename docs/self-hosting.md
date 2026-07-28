@@ -138,6 +138,32 @@ The operator cannot read from this server alone:
 - recovery phrases;
 - client master keys.
 
+## Upgrading And Rolling Back
+
+Upgrading is the ordinary path: pull the new image, run `migrate`, start `serve`. A database behind the binary is just a pending-migration state, and `migrate` resolves it.
+
+**Rolling the binary back is not symmetric.** Migrations only move forward — there is no down-migration in this service — so once a newer build has migrated the database, an older build cannot interpret the schema on disk.
+
+A binary started against a database carrying migrations it does not embed refuses to run. `serve` aborts before it opens a listener, and `migrate` refuses too, both naming the migration in question:
+
+```
+database schema is ahead of this binary: schema_migrations records migration(s)
+0009_example.sql that this build does not embed; deploy the build that applied
+them, or restore the database backup taken before that upgrade
+```
+
+This is deliberate. The check previously compared how many migrations had been applied against how many the binary embedded, so a rolled-back binary passed it and served traffic against a schema it did not understand — reading and writing rows whose shape had changed under it. Refusing to start is the safe outcome; a downgraded binary quietly serving is not.
+
+So a rollback is a *pair*: the older image **and** the database backup taken before the upgrade.
+
+1. Stop the service.
+2. Restore the pre-upgrade database backup (see [backup-restore.md](backup-restore.md)).
+3. Start the older image against that restored database.
+
+Any data written after the upgrade is not in that backup. If losing it is unacceptable, the way forward is to fix the problem on the newer build rather than to roll back — restoring the older schema necessarily discards writes that only the newer schema can hold.
+
+Practical consequence: **take the backup before you run `migrate`, not after.** It is the only thing that makes a rollback possible.
+
 ## Backup Guidance
 
 Back up the SQLite file and its volume as sensitive metadata-bearing infrastructure.
