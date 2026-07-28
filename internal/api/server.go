@@ -225,13 +225,29 @@ func panicValueSummary(rec any) string {
 	return fmt.Sprintf("panic_type=%T panic_len=%d", rec, len(fmt.Sprintf("%v", rec)))
 }
 
-// sanitizeLogValue strips CR and LF from a request-derived value (method,
-// path) before it reaches a log call, so a caller cannot inject line breaks to
-// forge or split log entries (CWE-117 log injection).
+// sanitizeLogValue strips every control character from a request-derived value
+// (method, path) before it reaches a log call: the C0 range below 0x20, which
+// includes CR and LF, plus 0x7F (DEL).
+//
+// Line breaks are the classic case — they let a caller forge or split entries
+// in the log file (CWE-117 log injection). The rest of the range does the same
+// damage one consumer later: an operator reads these logs in a terminal, and
+// 0x1B opens an ANSI escape sequence, so a path carrying \x1b[2K or \x1b[31m
+// erases or recolours the text around it on screen. That is the same forgery,
+// executed by the terminal instead of by a log parser, and dropping only CR
+// and LF left it open.
+//
+// The whole range goes rather than an enumeration of the harmful members of
+// it, because none of it is legitimate here: an HTTP method is a token, and a
+// path arrives percent-encoded, so neither can hold a control character —
+// not even a tab — without the caller having put it there deliberately.
 func sanitizeLogValue(value string) string {
-	value = strings.ReplaceAll(value, "\n", "")
-	value = strings.ReplaceAll(value, "\r", "")
-	return value
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7F {
+			return -1
+		}
+		return r
+	}, value)
 }
 
 func (s *Server) handleHealth(writer http.ResponseWriter, _ *http.Request) {

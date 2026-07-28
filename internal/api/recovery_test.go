@@ -136,15 +136,72 @@ func TestPanicValueSummaryDescribesShapeOnly(t *testing.T) {
 	}
 }
 
-func TestSanitizeLogValueStripsLineBreaks(t *testing.T) {
-	got := sanitizeLogValue("GET /x\r\nInjected: forged-log-line")
-	for _, r := range got {
-		if r == '\n' || r == '\r' {
-			t.Fatalf("sanitized value still contains a line break: %q", got)
-		}
-	}
-	if got != "GET /xInjected: forged-log-line" {
-		t.Fatalf("unexpected sanitized value: %q", got)
+// TestSanitizeLogValueStripsControlCharacters covers both halves of what a
+// control character in a method or path can do: a line break forges or splits
+// an entry in the log file, and an ESC byte rewrites the line in the terminal
+// the operator reads that file with. Neither is legitimate input here, so the
+// whole C0 range and DEL are asserted gone.
+//
+// Before this the sanitizer removed CR and LF only, and every case below
+// except "line breaks" came back through it unchanged.
+func TestSanitizeLogValueStripsControlCharacters(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{
+			name:  "line breaks",
+			value: "GET /x\r\nInjected: forged-log-line",
+			want:  "GET /xInjected: forged-log-line",
+		},
+		{
+			// Stripped of the ESC bytes, the terminal prints what is left as
+			// ordinary text instead of acting on it.
+			name:  "ansi escape",
+			value: "/sync/blob\x1b[31mnot-a-real-error\x1b[0m",
+			want:  "/sync/blob[31mnot-a-real-error[0m",
+		},
+		{
+			// A line-clearing sequence hides whatever the entry said before it.
+			name:  "ansi erase",
+			value: "/sync/blob\x1b[2K\x1b[1G200 OK",
+			want:  "/sync/blob[2K[1G200 OK",
+		},
+		{
+			name:  "nul",
+			value: "/sync/blob\x00truncated",
+			want:  "/sync/blobtruncated",
+		},
+		{
+			name:  "del",
+			value: "/sync/blob\x7fgone",
+			want:  "/sync/blobgone",
+		},
+		{
+			// A method is a token and a path is percent-encoded: neither has a
+			// legitimate tab, and a tab still shifts the columns of the entry.
+			name:  "tab",
+			value: "GET\t/sync/blob",
+			want:  "GET/sync/blob",
+		},
+		{
+			name:  "no control characters",
+			value: "POST /sync/blob",
+			want:  "POST /sync/blob",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			got := sanitizeLogValue(testCase.value)
+			if got != testCase.want {
+				t.Fatalf("sanitizeLogValue(%q) = %q, want %q", testCase.value, got, testCase.want)
+			}
+			for _, r := range got {
+				if r < 0x20 || r == 0x7F {
+					t.Fatalf("sanitized value still holds control character %#U: %q", r, got)
+				}
+			}
+		})
 	}
 }
 
