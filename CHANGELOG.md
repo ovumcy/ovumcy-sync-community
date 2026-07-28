@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The container healthcheck now reports database health.** `HEALTHCHECK` probed `GET /healthz`, which answers from a constant and consults nothing, so a container whose database had become unreadable — deleted, corrupt, permission-locked — reported `healthy` to the runtime and to any orchestrator for as long as the HTTP loop kept accepting connections. It probes `GET /readyz` instead, which touches the store. `GET /healthz` is unchanged and stays the pure liveness answer for a proxy or uptime check.
+
+### Changed
+
+- **`GET /readyz` is schema-aware.** Readiness now applies the same applied-migration name-set comparison that gates startup, so a still-running `serve` whose volume a newer image has migrated turns not-ready instead of continuing to look serviceable — the running-process half of the refusal that already stopped a downgraded binary from booting (see [docs/self-hosting.md](docs/self-hosting.md#upgrading-and-rolling-back)). Operator-visible consequence: a container can now go `unhealthy` for a reason other than the process being gone, and an orchestrator configured to act on health will act on it. The probe stays two small statements — a `sqlite_master` lookup and the `schema_migrations` name set — so polling it on the healthcheck interval costs nothing measurable.
+
 ## [0.3.0] - 2026-07-24
 
 A major auth, security-hardening, and supply-chain release since `v0.2.0`: optional TOTP 2FA, account recovery and password management, authenticated account deletion, managed entitlement-lapse cleanup, in-process retention sweeps, signed release artifacts, and a substantially hardened CI and quality bar.

@@ -76,3 +76,29 @@ func (s *Store) ApplyMigrations(ctx context.Context) error {
 func (s *Store) SchemaReady(ctx context.Context) (bool, error) {
 	return schemaReady(ctx, s.db)
 }
+
+// CheckReady reports whether the store can serve traffic right now: the
+// database still answers, and the schema it holds is exactly the one this
+// build embeds. It backs the /readyz probe, so it stays at the two small
+// statements schemaReady already runs — a sqlite_master lookup and the
+// schema_migrations name set, a handful of short TEXT rows — cheap enough to
+// poll on the container healthcheck's interval.
+//
+// It is schema-aware on purpose. A liveness answer proves only that the HTTP
+// loop is running, and the boot-time schema gate proves nothing after boot: a
+// newer image running `migrate` against the same volume moves the schema out
+// from under this still-running process, which would then keep serving
+// traffic on a schema no code in this build understands. The same name-set
+// comparison that refuses such a database at startup refuses it here, so the
+// process reports unready instead of healthy.
+func (s *Store) CheckReady(ctx context.Context) error {
+	ready, err := schemaReady(ctx, s.db)
+	if err != nil {
+		return err
+	}
+	if !ready {
+		return errors.New("database schema is not initialized for this build; run `ovumcy-sync-community migrate`")
+	}
+
+	return nil
+}

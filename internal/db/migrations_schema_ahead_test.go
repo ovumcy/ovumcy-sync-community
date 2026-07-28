@@ -125,6 +125,64 @@ func TestSchemaReadyFailsOnANullRecordedMigrationVersion(t *testing.T) {
 	}
 }
 
+// CheckReady is the same set comparison behind a live probe rather than a
+// boot gate. The container healthcheck polls it through /readyz, so what the
+// tests below pin is that the two states a running process can fall into —
+// the store having stopped answering, and a newer build having migrated the
+// schema out from under it — both come back as a refusal instead of a
+// healthy answer.
+
+func TestCheckReadyPassesOnAMigratedDatabase(t *testing.T) {
+	store, _ := newFileBackedTestStore(t)
+
+	if err := store.CheckReady(context.Background()); err != nil {
+		t.Fatalf("expected a fully migrated database to be ready, got %v", err)
+	}
+}
+
+func TestCheckReadyRefusesADatabaseAheadOfThisBuild(t *testing.T) {
+	store, dbPath := newFileBackedTestStore(t)
+
+	recordAppliedMigration(t, dbPath, futureMigrationVersion)
+
+	err := store.CheckReady(context.Background())
+	if err == nil {
+		t.Fatal("expected CheckReady to refuse a database ahead of this build")
+	}
+	if !strings.Contains(err.Error(), "ahead of this binary") {
+		t.Fatalf("expected a schema-ahead refusal, got %v", err)
+	}
+	if !strings.Contains(err.Error(), futureMigrationVersion) {
+		t.Fatalf("expected the refusal to name %s, got %v", futureMigrationVersion, err)
+	}
+}
+
+func TestCheckReadyRefusesAnUninitializedSchema(t *testing.T) {
+	store, dbPath := newFileBackedTestStore(t)
+
+	forgetAppliedMigration(t, dbPath, "0008_lapsed_at.sql")
+
+	err := store.CheckReady(context.Background())
+	if err == nil {
+		t.Fatal("expected CheckReady to refuse a database missing an embedded migration")
+	}
+	if !strings.Contains(err.Error(), "not initialized") {
+		t.Fatalf("expected an uninitialized-schema refusal, got %v", err)
+	}
+}
+
+func TestCheckReadyFailsOnAClosedStore(t *testing.T) {
+	store, _ := newFileBackedTestStore(t)
+
+	if err := store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	if err := store.CheckReady(context.Background()); err == nil {
+		t.Fatal("expected CheckReady to fail once the database no longer answers")
+	}
+}
+
 // recordAppliedMigration writes a schema_migrations row through a second
 // connection to the same database file — the same technique as dropTable —
 // standing in for a newer build having applied a migration this one does not

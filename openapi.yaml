@@ -45,7 +45,11 @@ paths:
       tags: [health]
       operationId: getHealthz
       summary: Liveness probe
-      description: Always returns 200 while the process is up. No auth, no dependency checks.
+      description: >-
+        Always returns 200 while the process is up. No auth, no dependency
+        checks. Intended for a proxy or uptime check that only needs to know
+        the HTTP loop is alive; it cannot detect an unusable database, so the
+        container healthcheck probes /readyz instead.
       security: []
       responses:
         "200":
@@ -60,7 +64,12 @@ paths:
       tags: [health]
       operationId: getReadyz
       summary: Readiness probe
-      description: Runs the configured readiness check (e.g. a DB ping) if one is wired in; otherwise behaves like /healthz.
+      description: >-
+        Checks the database: it must answer, and the schema it holds must be
+        the one this build embeds. A database migrated past this build by a
+        newer image is not ready, so an old binary left running against an
+        upgraded volume stops reporting itself as serviceable. This is what
+        the container HEALTHCHECK probes.
       security: []
       responses:
         "200":

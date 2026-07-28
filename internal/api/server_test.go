@@ -800,6 +800,51 @@ func TestServerReadinessEndpointReturnsServiceUnavailableWhenProbeFails(t *testi
 	}
 }
 
+// TestServerReadinessFailsWhenTheDatabaseIsUnusableWhileLivenessStaysOK is the
+// container healthcheck's contract, asserted through the production readiness
+// check rather than a stub: the same server that answers /healthz from a
+// constant must answer /readyz with 503 once its store stops working. The
+// container HEALTHCHECK probes /readyz precisely because the constant answer
+// cannot distinguish a serving process from a wedged one, and /healthz keeps
+// answering 200 so a proxy or uptime check still has a pure liveness signal.
+func TestServerReadinessFailsWhenTheDatabaseIsUnusableWhileLivenessStaysOK(t *testing.T) {
+	store, _ := newFileBackedTestStore(t)
+	handler := newTestServerWithOptions(t, serverTestOptions{
+		store:          store,
+		readinessCheck: store.CheckReady,
+	})
+
+	performJSONRequest(t, handler, http.MethodGet, "/readyz", nil, "", http.StatusOK)
+
+	if err := store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	response := performJSONRequest(
+		t,
+		handler,
+		http.MethodGet,
+		"/readyz",
+		nil,
+		"",
+		http.StatusServiceUnavailable,
+	)
+
+	var payload map[string]string
+	decodeResponse(t, response.Body.Bytes(), &payload)
+	if payload["error"] != "not_ready" {
+		t.Fatalf("unexpected readiness payload: %#v", payload)
+	}
+
+	livenessResponse := performJSONRequest(t, handler, http.MethodGet, "/healthz", nil, "", http.StatusOK)
+
+	var livenessPayload map[string]string
+	decodeResponse(t, livenessResponse.Body.Bytes(), &livenessPayload)
+	if livenessPayload["status"] != "ok" {
+		t.Fatalf("expected liveness to stay ok with an unusable database, got %#v", livenessPayload)
+	}
+}
+
 func TestServerRejectsOversizedBlobByConfiguredLimit(t *testing.T) {
 	handler := newTestServerWithOptions(t, serverTestOptions{maxBlobBytes: 4})
 
