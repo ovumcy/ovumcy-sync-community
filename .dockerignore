@@ -1,0 +1,34 @@
+# Default-deny build context.
+#
+# Both Dockerfiles in this repository copy whole directories -- `COPY . .` in
+# ./Dockerfile and `COPY . $SRC/ovumcy-sync-community` in
+# .clusterfuzzlite/Dockerfile -- and `docker build` reads this file from the
+# context root for every build that uses that root. Without it the context
+# carries the entire working tree to the daemon: `.git` with full history,
+# local agent worktrees under `.claude/`, the gitignored `data/` SQLite
+# database, editor and tooling state. All of it lands in the build cache, and
+# any of it can be baked into a layer by a wildcard COPY.
+#
+# So: deny everything, then re-include exactly what a build reads.
+*
+
+# Module graph. ./Dockerfile runs `COPY go.mod go.sum ./` before `go mod
+# download` so dependency resolution caches independently of the sources.
+!go.mod
+!go.sum
+
+# The Go trees `go build ./cmd/ovumcy-sync-community` compiles.
+#
+# `*_test.go` is included on purpose: .clusterfuzzlite/build.sh compiles the
+# fuzz targets (FuzzNormalizeLogin, FuzzParseClientIP, ...) and every one of
+# them lives in a _test.go file.
+!cmd/**/*.go
+!internal/**/*.go
+
+# Schema migrations, embedded into the binary by internal/db (`//go:embed
+# migrations/*.sql`) -- a missing .sql here is a build failure, not a runtime
+# one.
+!internal/db/migrations/*.sql
+
+# .clusterfuzzlite/Dockerfile copies its own build script out of the context.
+!.clusterfuzzlite/**
