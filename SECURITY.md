@@ -277,6 +277,23 @@ on the account's next successful login.
 | Request-derived values reaching a log line (method, path) carry no control character — the C0 range and DEL are stripped, so a caller can neither forge a log entry (CWE-117) nor drive the terminal an operator reads the log with | `TestSanitizeLogValueStripsControlCharacters` in [internal/api/recovery_test.go](internal/api/recovery_test.go) |
 | The auth-endpoint JSON body ceiling sits at the documented 4 KiB — an oversized body is rejected as `invalid_json`, while a body under the cap reaches the credential check | `TestAuthEndpointJSONBodyCeilingIsEnforced` in [internal/api/planned_regressions_test.go](internal/api/planned_regressions_test.go) |
 
+### Container Readiness (Fail-Closed)
+
+The container `HEALTHCHECK` probes `GET /readyz`, not `GET /healthz`. Liveness
+answers from a constant and consults nothing, so it cannot go red for the most
+likely failure a self-hosted deployment has — a database that has become
+unreadable. Readiness touches the store, and it applies the same
+migration-name-set comparison that gates startup, so it also refuses a
+database a newer image migrated out from under a still-running process.
+`GET /healthz` is unchanged and remains the pure liveness answer for a proxy
+or uptime check.
+
+| Claim | Enforced by |
+| --- | --- |
+| The container healthcheck fails while readiness is unavailable, even though liveness answers `200` — the probe is bound to `/readyz` | `TestRunHealthcheckProbesReadinessNotLiveness` in [cmd/ovumcy-sync-community/healthcheck_test.go](cmd/ovumcy-sync-community/healthcheck_test.go) |
+| Readiness turns `503 not_ready` once the database stops answering, while `/healthz` keeps returning `200` | `TestServerReadinessFailsWhenTheDatabaseIsUnusableWhileLivenessStaysOK` in [internal/api/server_test.go](internal/api/server_test.go) |
+| The readiness check refuses a database ahead of this build, an uninitialized schema, and a store that no longer answers — it is the startup gate's set comparison, re-run per probe | `TestCheckReadyRefusesADatabaseAheadOfThisBuild`, `TestCheckReadyRefusesAnUninitializedSchema`, `TestCheckReadyFailsOnAClosedStore`, `TestCheckReadyPassesOnAMigratedDatabase` in [internal/db/migrations_schema_ahead_test.go](internal/db/migrations_schema_ahead_test.go) |
+
 ### Policy-Level Claims (Human-Reviewed, Exempt from the Matrix)
 
 - Secrets, tokens, recovery codes, login identifiers, and blob contents are

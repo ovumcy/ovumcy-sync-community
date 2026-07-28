@@ -154,6 +154,8 @@ them, or restore the database backup taken before that upgrade
 
 This is deliberate. The check previously compared how many migrations had been applied against how many the binary embedded, so a rolled-back binary passed it and served traffic against a schema it did not understand — reading and writing rows whose shape had changed under it. Refusing to start is the safe outcome; a downgraded binary quietly serving is not.
 
+The same comparison also runs on every `GET /readyz`, so it covers a process that is *already* running. If a newer image migrates the volume while an older `serve` still holds it, that older process turns not-ready instead of continuing to look serviceable. The container `HEALTHCHECK` probes `/readyz`, so this shows up as an unhealthy container. `GET /healthz` is unaffected — it answers `200` from a constant and is the right target for a proxy or uptime check that only needs to know the process is up.
+
 So a rollback is a *pair*: the older image **and** the database backup taken before the upgrade.
 
 1. Stop the service.

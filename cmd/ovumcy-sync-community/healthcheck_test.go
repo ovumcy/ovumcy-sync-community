@@ -45,6 +45,28 @@ func TestRunHealthcheckSucceedsOnHealthyServer(t *testing.T) {
 	}
 }
 
+// TestRunHealthcheckProbesReadinessNotLiveness pins which endpoint backs the
+// container HEALTHCHECK. /healthz answers from a constant and consults
+// nothing, so a container whose database has become unusable answers it
+// forever; only readiness touches the store. The stand-in server below
+// answers 200 on /healthz and 503 on /readyz — exactly the split a wedged
+// database produces — and the probe must fail.
+func TestRunHealthcheckProbesReadinessNotLiveness(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	bindAddr := strings.TrimPrefix(server.URL, "http://")
+	if err := runHealthcheck(bindAddr, time.Second); err == nil {
+		t.Fatal("expected the container probe to fail while readiness is unavailable")
+	}
+}
+
 func TestRunHealthcheckFailsOnNon2xx(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)

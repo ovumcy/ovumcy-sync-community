@@ -11,12 +11,21 @@ import (
 const (
 	defaultHealthcheckPort    = "8080"
 	defaultHealthcheckTimeout = 5 * time.Second
-	healthcheckPath           = "/healthz"
+	healthcheckPath           = "/readyz"
 )
 
-// runHealthcheck probes the local server's /healthz endpoint and returns nil
+// runHealthcheck probes the local server's /readyz endpoint and returns nil
 // on a 2xx response. It backs the container HEALTHCHECK so the distroless
 // runtime image does not need curl or wget.
+//
+// It deliberately probes readiness rather than /healthz. /healthz is a
+// constant answer that consults nothing, so a container whose database has
+// become unusable — deleted, corrupt, permission-locked, or migrated past
+// this build by a newer image — reported healthy to the runtime forever. The
+// container health signal is worth having only if it can go red for the most
+// likely failure, and readiness is the probe that touches the store.
+// /healthz stays as the constant liveness answer for a proxy or uptime check
+// that wants to know the HTTP loop is alive and nothing more.
 func runHealthcheck(bindAddr string, timeout time.Duration) error {
 	if timeout <= 0 {
 		timeout = defaultHealthcheckTimeout

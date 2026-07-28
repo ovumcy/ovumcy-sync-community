@@ -128,7 +128,7 @@ func runServe(cfg config.Config) error {
 				AuthRateLimitCount:  cfg.AuthRateLimitCount,
 				AuthRateLimitWindow: cfg.AuthRateLimitWindow,
 				MaxBlobBytes:        cfg.MaxBlobBytes,
-				ReadinessCheck:      store.Ping,
+				ReadinessCheck:      store.CheckReady,
 				TrustedProxyCIDRs:   cfg.TrustedProxyCIDRs,
 			},
 		),
