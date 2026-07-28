@@ -137,14 +137,17 @@ func TestPanicValueSummaryDescribesShapeOnly(t *testing.T) {
 	}
 }
 
-// TestSanitizeLogValueStripsControlCharacters covers both halves of what a
-// control character in a method or path can do: a line break forges or splits
-// an entry in the log file, and an ESC byte rewrites the line in the terminal
-// the operator reads that file with. Neither is legitimate input here, so the
-// whole C0 range and DEL are asserted gone.
+// TestSanitizeLogValueStripsControlCharacters covers what a steering character
+// in a method or path can do: a line break forges or splits an entry in the log
+// file, an ESC byte rewrites the line in the terminal the operator reads that
+// file with, U+009B does the same as a single character, and a bidirectional
+// override reorders how the entry is displayed. None is legitimate input here,
+// so the C0 range, DEL, the C1 range and the Unicode format category are all
+// asserted gone, while ordinary non-ASCII text is asserted intact.
 //
-// Before this the sanitizer removed CR and LF only, and every case below
-// except "line breaks" came back through it unchanged.
+// The characters under test are written as escape sequences on purpose: a
+// literal one in this file would be invisible in review and in a diff, which
+// is the property that makes them worth stripping in the first place.
 func TestSanitizeLogValueStripsControlCharacters(t *testing.T) {
 	for _, testCase := range []struct {
 		name  string
@@ -192,7 +195,7 @@ func TestSanitizeLogValueStripsControlCharacters(t *testing.T) {
 			// only the C0 range left the escape route open. The path arrives
 			// percent-decoded, so %C2%9B is all a caller needs to reach here.
 			name:  "c1 control sequence introducer",
-			value: "/sync/blob2K1G200 OK",
+			value: "/sync/blob\u009b2K\u009b1G200 OK",
 			want:  "/sync/blob2K1G200 OK",
 		},
 		{
@@ -200,14 +203,14 @@ func TestSanitizeLogValueStripsControlCharacters(t *testing.T) {
 			// rest of the entry is displayed, so the reader sees a different
 			// request than the one that was served.
 			name:  "bidi override",
-			value: "/sync/blob‮kcatta‬",
+			value: "/sync/blob\u202ekcatta\u202c",
 			want:  "/sync/blobkcatta",
 		},
 		{
 			// A zero-width joiner is invisible: it splits a word for a log
 			// parser while looking untouched to the operator reading it.
 			name:  "zero-width format character",
-			value: "/sync/‍blob",
+			value: "/sync/\u200dblob",
 			want:  "/sync/blob",
 		},
 		{
