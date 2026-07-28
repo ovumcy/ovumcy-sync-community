@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"net/netip"
@@ -31,6 +32,7 @@ type Server struct {
 	metrics             *Metrics
 	metricsBearerToken  string
 	authLimiter         *security.RateLimiter
+	sessionReadLimiter  *security.RateLimiter
 	allowedOrigins      map[string]struct{}
 	trustedProxyCIDRs   []netip.Prefix
 	maxBlobRequestBytes int64
@@ -72,14 +74,18 @@ func NewServer(
 	}
 
 	server := &Server{
-		auth:                auth,
-		sync:                sync,
-		managedBridge:       managedBridge,
-		totp:                totp,
-		managedBridgeToken:  strings.TrimSpace(options.ManagedBridgeToken),
-		metrics:             metrics,
-		metricsBearerToken:  strings.TrimSpace(options.MetricsBearerToken),
-		authLimiter:         security.NewRateLimiter(options.AuthRateLimitCount, options.AuthRateLimitWindow),
+		auth:               auth,
+		sync:               sync,
+		managedBridge:      managedBridge,
+		totp:               totp,
+		managedBridgeToken: strings.TrimSpace(options.ManagedBridgeToken),
+		metrics:            metrics,
+		metricsBearerToken: strings.TrimSpace(options.MetricsBearerToken),
+		authLimiter:        security.NewRateLimiter(options.AuthRateLimitCount, options.AuthRateLimitWindow),
+		sessionReadLimiter: security.NewRateLimiter(
+			sessionReadRateLimitCount(options.AuthRateLimitCount),
+			options.AuthRateLimitWindow,
+		),
 		allowedOrigins:      originSet,
 		trustedProxyCIDRs:   parseTrustedProxyCIDRs(options.TrustedProxyCIDRs),
 		maxBlobRequestBytes: encodedBlobRequestLimit(options.MaxBlobBytes),
@@ -96,6 +102,29 @@ func NewServer(
 	return server
 }
 
+// routes registers the full HTTP surface. Every route that can spend server
+// resources on a caller's behalf passes a rate limiter inside its handler; the
+// exemptions below are deliberate and are the operator-monitoring surface:
+//
+//   - GET /healthz, GET /readyz — the container HEALTHCHECK polls readiness on
+//     a fixed interval, and an uptime monitor or load balancer polls liveness on
+//     its own. Throttling either turns routine monitoring into a reported
+//     outage: the probe would answer 429, the runtime would mark the container
+//     unhealthy, and an orchestrator acting on health would restart or
+//     depool a server that was serving correctly. Both handlers are also the
+//     cheapest on the surface — a constant, and two small statements against an
+//     already-open database — so there is nothing to conserve by limiting them.
+//   - GET /metrics — a scrape endpoint, off unless METRICS_ENABLED, and polled
+//     on the collector's interval for the same reason. It is reachable only
+//     from wherever the operator exposes it, and gated by METRICS_BEARER_TOKEN
+//     when set.
+//   - POST /managed/session, DELETE /managed/accounts/{account_id},
+//     POST /managed/accounts/{account_id}/premium — the machine-to-machine
+//     bridge, disabled unless MANAGED_BRIDGE_TOKEN is set (503 otherwise) and
+//     unreachable without that operator-held secret. Its one legitimate caller
+//     is a first-party service on a single address that may reconcile in
+//     bursts, so a per-IP ceiling would throttle the operator's own control
+//     plane while doing nothing an attacker without the token could trip.
 func (s *Server) routes() {
 	s.handleRoute("GET /healthz", "healthz", http.HandlerFunc(s.handleHealth))
 	s.handleRoute("GET /readyz", "readyz", http.HandlerFunc(s.handleReady))
@@ -609,7 +638,18 @@ func mapTOTPError(writer http.ResponseWriter, err error) {
 	}
 }
 
+// handleLogout implements DELETE /auth/session. It is registered without
+// s.withAuth because it authenticates by consuming the bearer token itself, so
+// no account identity exists before the revoke: the limiter here is the per-IP
+// auth bucket, the same one POST /auth/totp/challenge uses for the same reason.
+// Unthrottled, an anonymous caller could drive one session lookup and delete
+// attempt per request with a token it invented. A real client revokes once, on
+// an explicit disconnect.
 func (s *Server) handleLogout(writer http.ResponseWriter, request *http.Request) {
+	if !s.allowAuthRequest(writer, request) {
+		return
+	}
+
 	if err := s.auth.RevokeSession(request.Context(), bearerTokenFromRequest(request)); err != nil {
 		writeError(writer, http.StatusUnauthorized, "unauthorized")
 		return
@@ -723,7 +763,15 @@ func (s *Server) handleManagedAccountPremium(writer http.ResponseWriter, request
 	writeJSON(writer, http.StatusOK, map[string]string{"status": "lapse_recorded"})
 }
 
-func (s *Server) handleCapabilities(writer http.ResponseWriter, _ *http.Request, account models.Account) {
+func (s *Server) handleCapabilities(
+	writer http.ResponseWriter,
+	request *http.Request,
+	account models.Account,
+) {
+	if !s.allowSessionReadRequestForAccount(writer, request, account.ID) {
+		return
+	}
+
 	writeJSON(writer, http.StatusOK, s.sync.CapabilitiesForAccount(account))
 }
 
@@ -737,7 +785,15 @@ type accountSessionView struct {
 	TOTPEnabled bool   `json:"totp_enabled"`
 }
 
-func (s *Server) handleCurrentSession(writer http.ResponseWriter, _ *http.Request, account models.Account) {
+func (s *Server) handleCurrentSession(
+	writer http.ResponseWriter,
+	request *http.Request,
+	account models.Account,
+) {
+	if !s.allowSessionReadRequestForAccount(writer, request, account.ID) {
+		return
+	}
+
 	writeJSON(writer, http.StatusOK, accountSessionView{
 		AccountID:   account.ID,
 		Login:       account.Login,
@@ -788,6 +844,10 @@ func (s *Server) handleListDevices(
 	request *http.Request,
 	account models.Account,
 ) {
+	if !s.allowSessionReadRequestForAccount(writer, request, account.ID) {
+		return
+	}
+
 	devices, err := s.sync.ListDevices(request.Context(), account.ID)
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, "internal_error")
@@ -1019,14 +1079,11 @@ func decodeJSON(writer http.ResponseWriter, request *http.Request, target any, m
 }
 
 func (s *Server) allowAuthRequest(writer http.ResponseWriter, request *http.Request) bool {
-	key := request.URL.Path + ":" + s.clientIPForRateLimit(request)
-	if s.authLimiter.Allow(key) {
-		return true
-	}
-
-	writer.Header().Set("Retry-After", "60")
-	writeError(writer, http.StatusTooManyRequests, "rate_limited")
-	return false
+	return allowUnderLimiter(
+		s.authLimiter,
+		writer,
+		request.URL.Path+":"+s.clientIPForRateLimit(request),
+	)
 }
 
 func (s *Server) allowAuthRequestForAccount(
@@ -1043,7 +1100,58 @@ func (s *Server) allowAuthRequestForAccount(
 // own bucket and let a caller sidestep the per-account ceiling — so they pass a
 // stable route-scoped key instead.
 func (s *Server) allowAuthRequestWithKey(writer http.ResponseWriter, key string) bool {
-	if s.authLimiter.Allow(key) {
+	return allowUnderLimiter(s.authLimiter, writer, key)
+}
+
+// sessionReadRateLimitMultiplier scales AUTH_RATE_LIMIT_COUNT into the budget
+// for the authenticated read-only account-state routes (GET /auth/session,
+// GET /sync/capabilities, GET /sync/devices). Those routes return state the
+// caller's own session already entitles it to, so the limiter there is a
+// resource ceiling, not a credential gate: it exists so a looping or hostile
+// client cannot drive unbounded session lookups and device queries against a
+// single-instance server, and it must sit far above any cadence a real client
+// produces.
+//
+// It is a multiple of the existing knob rather than a knob of its own, so an
+// operator who tightens AUTH_RATE_LIMIT_COUNT tightens these proportionally
+// and there is one rate-limit dial to reason about. At the 10-per-minute
+// default the budget is 300 per minute per account per route — five requests
+// a second, sustained — while the app issues these one per screen focus or
+// per explicit tap, with no polling timer behind them. A person flipping
+// between screens as fast as a person can flip does not approach it; a runaway
+// loop hits it immediately.
+const sessionReadRateLimitMultiplier = 30
+
+// sessionReadRateLimitCount derives the read budget, leaving a non-positive or
+// overflow-prone configured count untouched: a silently negative product would
+// invert the intent and make the most generous bucket the strictest one.
+// config.Validate already rejects a non-positive AUTH_RATE_LIMIT_COUNT at
+// startup, so in a running server this only guards the arithmetic.
+func sessionReadRateLimitCount(authRateLimitCount int) int {
+	if authRateLimitCount <= 0 || authRateLimitCount > math.MaxInt/sessionReadRateLimitMultiplier {
+		return authRateLimitCount
+	}
+	return authRateLimitCount * sessionReadRateLimitMultiplier
+}
+
+// allowSessionReadRequestForAccount applies the read-state limiter, keyed per
+// route and per authenticated account. Account keying (not client IP) is what
+// the ceiling needs: the caller is already authenticated, so the identity that
+// can actually spend server resources is the account, and one account roaming
+// across addresses must not get a fresh bucket per address.
+func (s *Server) allowSessionReadRequestForAccount(
+	writer http.ResponseWriter,
+	request *http.Request,
+	accountID string,
+) bool {
+	return allowUnderLimiter(s.sessionReadLimiter, writer, request.URL.Path+":"+accountID)
+}
+
+// allowUnderLimiter is the single throttled-response path, so every rate-limited
+// route answers in exactly one shape: 429 with the stable `rate_limited` key and
+// a Retry-After header.
+func allowUnderLimiter(limiter *security.RateLimiter, writer http.ResponseWriter, key string) bool {
+	if limiter.Allow(key) {
 		return true
 	}
 
@@ -1071,14 +1179,7 @@ func (s *Server) allowLoginRequestForIdentifier(
 	if normalized == "" {
 		return true
 	}
-	key := "login_identifier:" + normalized
-	if s.authLimiter.Allow(key) {
-		return true
-	}
-
-	writer.Header().Set("Retry-After", "60")
-	writeError(writer, http.StatusTooManyRequests, "rate_limited")
-	return false
+	return allowUnderLimiter(s.authLimiter, writer, "login_identifier:"+normalized)
 }
 
 func (s *Server) clientIPForRateLimit(request *http.Request) string {

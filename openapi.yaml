@@ -677,6 +677,8 @@ paths:
                 $ref: "#/components/schemas/AccountSessionView"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
     delete:
       tags: [auth]
       operationId: logout
@@ -703,6 +705,8 @@ paths:
               examples:
                 unauthorized:
                   value: { error: unauthorized }
+        "429":
+          $ref: "#/components/responses/RateLimited"
 
   /account:
     delete:
@@ -981,6 +985,8 @@ paths:
                 $ref: "#/components/schemas/CapabilityDocument"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
 
   /sync/devices:
     post:
@@ -1043,6 +1049,8 @@ paths:
                 $ref: "#/components/schemas/DeviceListResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/InternalError"
 
