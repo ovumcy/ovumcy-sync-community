@@ -6,11 +6,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"net/netip"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -179,13 +181,23 @@ func (w *recoveryWriter) Write(b []byte) (int, error) {
 // serveWithPanicRecovery runs next and converts a handler panic into a clean
 // 500 instead of net/http's default (which drops the connection and logs an
 // unbounded stack trace to stderr). The recovery log line is deliberately
-// secret-free — method and path only, never the body, headers, or query — so
-// it stays inside the zero-knowledge no-secret-in-logs contract.
+// secret-free — method, path, the panic value's shape, and the stack, never
+// the body, headers, query, or the panic value itself — so it stays inside
+// the zero-knowledge no-secret-in-logs contract.
 func serveWithPanicRecovery(writer http.ResponseWriter, request *http.Request, next http.Handler) {
 	rw := &recoveryWriter{ResponseWriter: writer}
 	defer func() {
 		if rec := recover(); rec != nil {
-			log.Printf("recovered panic serving %s %s: %v", sanitizeLogValue(request.Method), sanitizeLogValue(request.URL.Path), rec)
+			// The stack is the multi-line tail of the entry on purpose: it is
+			// built from the binary's own symbol table and argument words, so
+			// it carries no request-derived text and needs no sanitizing.
+			log.Printf(
+				"recovered panic serving %s %s: %s\n%s",
+				sanitizeLogValue(request.Method),
+				sanitizeLogValue(request.URL.Path),
+				panicValueSummary(rec),
+				debug.Stack(),
+			)
 			if !rw.wrote {
 				writeError(rw, http.StatusInternalServerError, "internal_error")
 			}
@@ -193,6 +205,24 @@ func serveWithPanicRecovery(writer http.ResponseWriter, request *http.Request, n
 	}()
 
 	next.ServeHTTP(rw, request)
+}
+
+// panicValueSummary describes a recovered panic value by its dynamic type and
+// the size of its rendering, and never renders the value.
+//
+// A panic value is request-reachable: a handler that panics mid-request
+// routinely carries request-derived text in it — a wrapped error built from a
+// header, a login, a decoded blob field — and interpolating it would put that
+// text in the log, which SECURITY.md forbids. Truncating it would not help
+// either: a short secret survives any bound intact.
+//
+// So the value contributes only what cannot encode its own content. The type
+// name is a compile-time identifier and the length is a count, matching how
+// the sweep loops report untrusted rows (counts and ids, never contents); the
+// stack trace logged beside this is what a panic actually needs to be
+// debugged from.
+func panicValueSummary(rec any) string {
+	return fmt.Sprintf("panic_type=%T panic_len=%d", rec, len(fmt.Sprintf("%v", rec)))
 }
 
 // sanitizeLogValue strips CR and LF from a request-derived value (method,
