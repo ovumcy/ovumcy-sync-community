@@ -182,9 +182,10 @@ See [backup-restore.md](backup-restore.md) for a simple restore drill and operat
 ## Verifying Release Integrity
 
 The container image is signed with [Sigstore](https://www.sigstore.dev/) keyless signing (no
-long-lived keys to manage) and carries SLSA build provenance. Verifying the image before you run it
-confirms it was built by this repository's CI from this source and was not tampered with in
-transit. (Images published before this was in place may not yet carry these assets.)
+long-lived keys to manage) and carries SLSA build provenance plus an SBOM in both SPDX and
+CycloneDX. Verifying the image before you run it confirms it was built by this repository's CI from
+this source and was not tampered with in transit. (Images published before this was in place may not
+yet carry these assets.)
 
 The published image is cosign-signed and carries build provenance:
 
@@ -193,6 +194,49 @@ cosign verify ghcr.io/ovumcy/ovumcy-sync-community:<tag> \
   --certificate-identity-regexp '^https://github.com/ovumcy/ovumcy-sync-community/\.github/workflows/docker-image\.yml@.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
+
+### Attestations
+
+Three attestations are published against the image digest: the build provenance and one SBOM per
+format. `gh attestation verify` checks one at a time, selected by predicate type — it enforces
+`https://slsa.dev/provenance/v1` unless you pass `--predicate-type`, so a bare invocation verifies
+the provenance and says nothing about either SBOM. Run all three to cover all three:
+
+```bash
+# Build provenance — how and from what source the image was built.
+gh attestation verify oci://ghcr.io/ovumcy/ovumcy-sync-community:<tag> \
+  --repo ovumcy/ovumcy-sync-community
+
+# SPDX SBOM — what is inside the image.
+gh attestation verify oci://ghcr.io/ovumcy/ovumcy-sync-community:<tag> \
+  --repo ovumcy/ovumcy-sync-community \
+  --predicate-type https://spdx.dev/Document/v2.3
+
+# CycloneDX SBOM — the same inventory, for tooling that reads CycloneDX.
+gh attestation verify oci://ghcr.io/ovumcy/ovumcy-sync-community:<tag> \
+  --repo ovumcy/ovumcy-sync-community \
+  --predicate-type https://cyclonedx.org/bom
+```
+
+Both SBOMs describe the same image, so verifying whichever format your scanner or policy engine
+ingests is enough — they are published as a pair only so that neither consumer has to convert a
+document out of the signature that covers it.
+
+To read an inventory rather than only check it, ask for the verified predicate back:
+
+```bash
+gh attestation verify oci://ghcr.io/ovumcy/ovumcy-sync-community:<tag> \
+  --repo ovumcy/ovumcy-sync-community \
+  --predicate-type https://cyclonedx.org/bom \
+  --format json --jq '.[].verificationResult.statement.predicate' > sbom.cyclonedx.json
+```
+
+Take the SBOM from that output rather than from a separate download: it is the copy the verification
+just covered.
+
+Two notes on the `oci://` form: resolve the tag to a digest yourself if you want to pin what you
+verified, and log in to `ghcr.io` first — `gh attestation verify` reads the image reference through
+your container registry credentials.
 
 ## Account Deletion
 
