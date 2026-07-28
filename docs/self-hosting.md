@@ -189,7 +189,7 @@ CycloneDX. Verifying the image before you run it confirms it was built by this r
 this source and was not tampered with in transit. (Images published before this was in place may not
 yet carry these assets.)
 
-The published image is cosign-signed and carries build provenance:
+The published image is cosign-signed and carries build provenance. **Verification requires cosign v3 or newer** — the signatures are published as Sigstore bundle v0.3 referrers, which cosign 2.x does not look for and therefore cannot see:
 
 ```bash
 cosign verify ghcr.io/ovumcy/ovumcy-sync-community:<tag> \
