@@ -46,7 +46,7 @@ This service itself does not terminate TLS. Production deployments should not ex
 - `SESSION_TTL=720h`
 - `MAX_DEVICES=5`
 - `MAX_BLOB_BYTES=16777216`
-- `AUTH_RATE_LIMIT_COUNT=10`
+- `AUTH_RATE_LIMIT_COUNT=10` requests per window, keyed on the client IP for the public auth surface and on the account for authenticated routes. The authenticated read-only routes — `GET /auth/session`, `GET /sync/capabilities`, `GET /sync/devices` — get 30× this budget per account (300/min at the default), because they answer from state the caller's session already owns and a client calls them on screen focus rather than on a timer. `GET /healthz` and `GET /readyz` are never rate-limited, so a container healthcheck or uptime monitor polling on a fixed interval can never be throttled into reporting an outage
 - `AUTH_RATE_LIMIT_WINDOW=1m`
 - `METRICS_ENABLED=false`
 - `METRICS_BEARER_TOKEN=` optional bearer token for `GET /metrics`

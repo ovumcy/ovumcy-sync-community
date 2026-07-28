@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Four routes reached the store with no rate limit at all.** `GET /auth/session`, `GET /sync/capabilities`, `GET /sync/devices`, and `DELETE /auth/session` were the only routes that could spend server work on a caller's behalf without passing a limiter, so a looping client or a captured session could drive session lookups and device queries at whatever rate the connection allowed. The three authenticated read-only routes now carry a per-account ceiling and `DELETE /auth/session` a per-client-IP one — the latter because it consumes the bearer token instead of authenticating through it, leaving no account identity to key on before the revoke. `openapi.yaml` records the added `429` on all four.
+
+  The read ceiling is a fixed multiple of the existing `AUTH_RATE_LIMIT_COUNT` (300 per minute per account per route at the default) rather than a new knob, so there is still one rate-limit dial. It is deliberately far above any real client cadence: these routes are called on screen focus or an explicit tap, never on a timer, so the bound is reachable by a runaway loop and not by a person navigating an app.
+
+  Decision (2026-07-28): `GET /healthz` and `GET /readyz` stay unlimited, now pinned by a regression test. A container healthcheck polls readiness on a fixed interval and an uptime monitor polls liveness on its own; throttling either would turn routine monitoring into a reported outage, with an orchestrator restarting or depooling a server that was answering correctly. `GET /metrics` (off by default, scraped on the collector's interval) and the `MANAGED_BRIDGE_TOKEN` machine-to-machine bridge routes (disabled by default, one first-party caller that may reconcile in bursts) stay unlimited for the same operator-facing reasons.
+
 - **The container healthcheck now reports database health.** `HEALTHCHECK` probed `GET /healthz`, which answers from a constant and consults nothing, so a container whose database had become unreadable — deleted, corrupt, permission-locked — reported `healthy` to the runtime and to any orchestrator for as long as the HTTP loop kept accepting connections. It probes `GET /readyz` instead, which touches the store. `GET /healthz` is unchanged and stays the pure liveness answer for a proxy or uptime check.
 
 ### Changed

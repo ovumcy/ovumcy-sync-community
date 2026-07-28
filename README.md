@@ -106,7 +106,7 @@ go run ./cmd/ovumcy-sync-community serve
 | `SESSION_TTL` | `720h` | Session token lifetime |
 | `MAX_DEVICES` | `5` | Devices attachable per account |
 | `MAX_BLOB_BYTES` | `16777216` | Ciphertext size cap (16 MiB) |
-| `AUTH_RATE_LIMIT_COUNT` | `10` | Auth requests allowed per window |
+| `AUTH_RATE_LIMIT_COUNT` | `10` | Auth requests allowed per window; also sizes the read ceiling on the authenticated read-only routes (30× this, per account) |
 | `AUTH_RATE_LIMIT_WINDOW` | `1m` | Auth rate-limit window |
 | `METRICS_ENABLED` | `false` | Enables `GET /metrics` |
 | `METRICS_BEARER_TOKEN` | _(unset)_ | Bearer token for `/metrics` (requires `METRICS_ENABLED=true`) |
