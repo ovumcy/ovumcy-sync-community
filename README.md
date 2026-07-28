@@ -57,7 +57,7 @@ The server **never** holds:
 
 **Do I have to trust the operator?** For confidentiality of your health data, no — that is the point of the zero-knowledge design. The operator does control availability and sees account/device *metadata* (see the boundary above).
 
-**Can I verify a release?** Yes. The container image is signed with keyless [cosign](https://www.sigstore.dev/) and carries SLSA build provenance. See [Verifying release integrity](docs/self-hosting.md#verifying-release-integrity).
+**Can I verify a release?** Yes. The container image is signed with keyless [cosign](https://www.sigstore.dev/) and carries SLSA build provenance plus an SBOM attested in both SPDX and CycloneDX. See [Verifying release integrity](docs/self-hosting.md#verifying-release-integrity).
 
 ## Features
 
@@ -182,7 +182,7 @@ internal/api  →  internal/services  →  internal/db     (+ internal/security,
 - **Language:** Go 1.26, `net/http`, CGO-free build.
 - **Storage:** SQLite in WAL mode; forward-only SQL migrations (explicit `migrate` before `serve`).
 - **Runtime image:** multi-stage, distroless, non-root, digest-pinned base images.
-- **Supply chain:** cosign-signed image, SLSA provenance, CycloneDX SBOM, digest-pinned GitHub Actions.
+- **Supply chain:** cosign-signed image, SLSA provenance, an SBOM attested in both SPDX and CycloneDX, digest-pinned GitHub Actions.
 
 ## Advanced: managed bridge
 
