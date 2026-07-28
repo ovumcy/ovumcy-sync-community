@@ -58,6 +58,8 @@ Pick one WAL-safe method:
 
 Store the backup with the same care you would use for other sensitive application metadata.
 
+Note which image tag was running when the backup was taken. A backup and the build that produced it are a pair: the database can be migrated forward onto a newer build, but a build can never be pointed at a database a *newer* build already migrated — it refuses to start rather than serve on a schema it does not embed (see [self-hosting.md](self-hosting.md#upgrading-and-rolling-back)). Taking the backup **before** running `migrate` on an upgrade is what keeps a rollback possible at all.
+
 ## Simple Restore Flow
 
 1. Stop the running service.
@@ -67,6 +69,14 @@ Store the backup with the same care you would use for other sensitive applicatio
 ```bash
 docker compose run --rm ovumcy-sync-community migrate
 ```
+
+   If this step reports `database schema is ahead of this binary`, the restored
+   file was migrated by a newer build than the image you are running. Nothing
+   has been changed — `migrate` refuses before touching the database. Run the
+   build named in the message, or restore a backup that predates that upgrade.
+   Do not try to force the older image onto it: `serve` refuses the same way,
+   and the refusal is what stops it from operating on a schema it cannot
+   interpret.
 
 4. Start the service again:
 
