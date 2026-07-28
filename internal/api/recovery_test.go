@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 // captureStandardLog redirects the standard logger for the duration of run and
@@ -186,6 +187,37 @@ func TestSanitizeLogValueStripsControlCharacters(t *testing.T) {
 			want:  "GET/sync/blob",
 		},
 		{
+			// U+009B is the single-character CSI: a terminal decoding the log
+			// as UTF-8 acts on it exactly as it would on \x1b[, so stripping
+			// only the C0 range left the escape route open. The path arrives
+			// percent-decoded, so %C2%9B is all a caller needs to reach here.
+			name:  "c1 control sequence introducer",
+			value: "/sync/blob2K1G200 OK",
+			want:  "/sync/blob2K1G200 OK",
+		},
+		{
+			// The bidirectional override executes nothing; it reorders how the
+			// rest of the entry is displayed, so the reader sees a different
+			// request than the one that was served.
+			name:  "bidi override",
+			value: "/sync/blob‮kcatta‬",
+			want:  "/sync/blobkcatta",
+		},
+		{
+			// A zero-width joiner is invisible: it splits a word for a log
+			// parser while looking untouched to the operator reading it.
+			name:  "zero-width format character",
+			value: "/sync/‍blob",
+			want:  "/sync/blob",
+		},
+		{
+			// Legitimate non-ASCII text is not a control character and stays:
+			// a path is text, and mangling it would lose what was requested.
+			name:  "non-ascii text survives",
+			value: "/sync/blob/тест",
+			want:  "/sync/blob/тест",
+		},
+		{
 			name:  "no control characters",
 			value: "POST /sync/blob",
 			want:  "POST /sync/blob",
@@ -197,7 +229,7 @@ func TestSanitizeLogValueStripsControlCharacters(t *testing.T) {
 				t.Fatalf("sanitizeLogValue(%q) = %q, want %q", testCase.value, got, testCase.want)
 			}
 			for _, r := range got {
-				if r < 0x20 || r == 0x7F {
+				if r < 0x20 || r == 0x7F || (r >= 0x80 && r <= 0x9F) || unicode.Is(unicode.Cf, r) {
 					t.Fatalf("sanitized value still holds control character %#U: %q", r, got)
 				}
 			}

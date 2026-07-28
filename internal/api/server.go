@@ -16,6 +16,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/ovumcy/ovumcy-sync-community/internal/config"
 	"github.com/ovumcy/ovumcy-sync-community/internal/models"
@@ -254,28 +255,46 @@ func panicValueSummary(rec any) string {
 	return fmt.Sprintf("panic_type=%T panic_len=%d", rec, len(fmt.Sprintf("%v", rec)))
 }
 
-// sanitizeLogValue strips every control character from a request-derived value
-// (method, path) before it reaches a log call: the C0 range below 0x20, which
-// includes CR and LF, plus 0x7F (DEL).
+// sanitizeLogValue strips every character a request-derived value (method,
+// path) could steer a log reader with, before it reaches a log call: the C0
+// range below 0x20, which includes CR and LF, 0x7F (DEL), the C1 range
+// 0x80-0x9F, and the Unicode format category (Cf).
 //
 // Line breaks are the classic case — they let a caller forge or split entries
-// in the log file (CWE-117 log injection). The rest of the range does the same
-// damage one consumer later: an operator reads these logs in a terminal, and
-// 0x1B opens an ANSI escape sequence, so a path carrying \x1b[2K or \x1b[31m
-// erases or recolours the text around it on screen. That is the same forgery,
-// executed by the terminal instead of by a log parser, and dropping only CR
-// and LF left it open.
+// in the log file (CWE-117 log injection). The rest does the same damage one
+// consumer later: an operator reads these logs in a terminal, and 0x1B opens
+// an ANSI escape sequence, so a path carrying \x1b[2K or \x1b[31m erases or
+// recolours the text around it on screen. That is the same forgery, executed
+// by the terminal instead of by a log parser.
 //
-// The whole range goes rather than an enumeration of the harmful members of
-// it, because none of it is legitimate here: an HTTP method is a token, and a
-// path arrives percent-encoded, so neither can hold a control character —
-// not even a tab — without the caller having put it there deliberately.
+// Decision (2026-07-28): the C1 range and Cf go with them. A path arrives
+// percent-decoded, so %C2%9B reaches this function as U+009B — the
+// single-character form of CSI, which a terminal decoding the log as UTF-8
+// acts on exactly like \x1b[, reopening the escape route the C0 strip closed.
+// Cf carries the bidirectional overrides (U+202E and family): they execute
+// nothing, but they reorder how the rest of the entry is displayed, so a
+// crafted path can make a log line read as a different request than the one
+// that was served. Both fall under the same rule as the C0 range: none of it
+// is legitimate here — an HTTP method is a token and a path is text, so
+// neither can hold one of these without the caller having put it there
+// deliberately.
+//
+// What deliberately stays: every printable rune, including non-ASCII text and
+// homoglyphs. Dropping those would mangle legitimate paths, and they mislead
+// only a reader who was going to be misled by an ordinary lookalike string
+// anyway.
 func sanitizeLogValue(value string) string {
 	return strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7F {
+		switch {
+		case r < 0x20, r == 0x7F:
 			return -1
+		case r >= 0x80 && r <= 0x9F:
+			return -1
+		case unicode.Is(unicode.Cf, r):
+			return -1
+		default:
+			return r
 		}
-		return r
 	}, value)
 }
 
