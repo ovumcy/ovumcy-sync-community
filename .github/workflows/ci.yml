@@ -78,7 +78,7 @@ jobs:
           cache: true
 
       - name: Install Staticcheck
-        run: go install honnef.co/go/tools/cmd/staticcheck@v0.6.1
+        run: go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
 
       - name: Staticcheck
         run: $(go env GOPATH)/bin/staticcheck ./...
