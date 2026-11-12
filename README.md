@@ -106,7 +106,7 @@ go run ./cmd/ovumcy-sync-community serve
 | `SESSION_TTL` | `720h` | Session token lifetime |
 | `MAX_DEVICES` | `5` | Devices attachable per account |
 | `MAX_BLOB_BYTES` | `16777216` | Ciphertext size cap (16 MiB) |
-| `AUTH_RATE_LIMIT_COUNT` | `10` | Auth requests allowed per window; also sizes the read ceiling on the authenticated read-only routes (30× this, per account) |
+| `AUTH_RATE_LIMIT_COUNT` | `10` | Requests per window, per route: anonymous auth routes count per client IP, authenticated routes (including `GET /sync/blob` and `GET /sync/recovery-key`) per account, and `POST /auth/login` also per login identifier across all IPs. Only `GET /auth/session`, `GET /sync/capabilities`, and `GET /sync/devices` get 30× this, per account |
 | `AUTH_RATE_LIMIT_WINDOW` | `1m` | Auth rate-limit window |
 | `METRICS_ENABLED` | `false` | Enables `GET /metrics` |
 | `METRICS_BEARER_TOKEN` | _(unset)_ | Bearer token for `/metrics` (requires `METRICS_ENABLED=true`) |
@@ -161,6 +161,19 @@ See [docs/self-hosting.md](docs/self-hosting.md) for the reverse-proxy, TLS, 2FA
 
 > **Publishing on all interfaces.** The baseline binds loopback only. To expose the port directly (a reverse proxy is preferred), add a `docker-compose.override.yml` (auto-loaded) with `ports: !override` — the `!override` tag *replaces* the loopback mapping; a plain `ports:` list would append and double-bind port 8080, failing to start.
 
+## Documentation
+
+- [docs/self-hosting.md](docs/self-hosting.md) — deployment, reverse proxy, TLS, 2FA, release verification
+- [docs/examples/reverse-proxy/](docs/examples/reverse-proxy/) — nginx and Traefik edges
+- [docs/upgrading.md](docs/upgrading.md) — upgrades, migrations, rollback
+- [docs/backup-restore.md](docs/backup-restore.md) — backup and restore drill
+- [docs/troubleshooting.md](docs/troubleshooting.md) — common failures and fixes
+- [docs/architecture.md](docs/architecture.md) — layers, data model, request flow
+- [docs/security/threat-model.md](docs/security/threat-model.md) — assets, adversaries, residual risks
+- [docs/security/auth-policy-and-rate-limits.md](docs/security/auth-policy-and-rate-limits.md) — auth policy and every rate-limit bucket
+- [docs/security/data-handling.md](docs/security/data-handling.md) — what is stored, for how long, and how it is erased
+- [docs/security/logging.md](docs/security/logging.md) — what is and is never logged
+
 ## Security
 
 Confidentiality of health data is a property of the client encryption — the server is deliberately blind to payload contents. On top of that, the server is built to be correct about authentication and storage and paranoid about the primitives it owns: bcrypt password/recovery-code hashing, hashed session tokens, AES-256-GCM field encryption for TOTP secrets, enumeration- and timing-safe auth, and per-account rate limiting.
@@ -195,7 +208,7 @@ A lapsed managed account's data is retained for `LAPSED_ACCOUNT_GRACE_PERIOD` (d
 ```bash
 go test ./...
 go vet ./...
-go run honnef.co/go/tools/cmd/staticcheck@v0.6.1 ./...
+go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
 ```
 
 Project layout:
