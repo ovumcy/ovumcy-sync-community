@@ -1,4 +1,4 @@
-FROM gcr.io/oss-fuzz-base/base-builder-go@sha256:bb153df7a0308f72195d3f8b3d48c98a06ae0db7a7e350a1bfea68a15ec1b785
+FROM gcr.io/oss-fuzz-base/base-builder-go@sha256:1dbadefbb28c6bfd796c64d9c2115977deb8f19494533cc5a3b724c3441df23d
 COPY . $SRC/ovumcy-sync-community
 WORKDIR $SRC/ovumcy-sync-community
 COPY .clusterfuzzlite/build.sh $SRC/
