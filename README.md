@@ -5,7 +5,7 @@
 [![Coverage](https://codecov.io/gh/ovumcy/ovumcy-sync-community/graph/badge.svg)](https://app.codecov.io/gh/ovumcy/ovumcy-sync-community)
 [![Tested](https://img.shields.io/badge/tested-mutation%20%C2%B7%20fuzz%20%C2%B7%20property-2ea44f)](https://github.com/ovumcy/ovumcy-sync-community/blob/main/TESTING.md)
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm%20NC%201.0.0-blue.svg)](https://polyformproject.org/licenses/noncommercial/1.0.0/)
-[![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/Go-1.27+-00ADD8?logo=go)](https://go.dev/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker)](https://github.com/ovumcy/ovumcy-sync-community/actions/workflows/docker-image.yml)
 [![Release](https://img.shields.io/github/v/release/ovumcy/ovumcy-sync-community?display_name=tag&sort=semver)](https://github.com/ovumcy/ovumcy-sync-community/releases)
 [![Self-hosted](https://img.shields.io/badge/Self--hosted-yes-2ea44f)](https://github.com/ovumcy/ovumcy-sync-community/blob/main/docs/self-hosting.md)
@@ -179,7 +179,7 @@ internal/api  →  internal/services  →  internal/db     (+ internal/security,
                    SyncService)           forward-only migrations)
 ```
 
-- **Language:** Go 1.26, `net/http`, CGO-free build.
+- **Language:** Go 1.27, `net/http`, CGO-free build.
 - **Storage:** SQLite in WAL mode; forward-only SQL migrations (explicit `migrate` before `serve`).
 - **Runtime image:** multi-stage, distroless, non-root, digest-pinned base images.
 - **Supply chain:** cosign-signed image, SLSA provenance, an SBOM attested in both SPDX and CycloneDX, digest-pinned GitHub Actions.
