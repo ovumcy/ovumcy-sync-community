@@ -1,5 +1,5 @@
 # Reference Traefik edge for ovumcy-sync-community. Use alongside the base
-# compose file; see README.md in this directory.
+# compose file; see setup.md in this directory.
 #
 #   docker compose -f docker-compose.yml -f docs/examples/reverse-proxy/traefik/docker-compose.traefik.yml up -d
 #

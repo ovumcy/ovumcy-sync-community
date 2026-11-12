@@ -27,7 +27,7 @@ keys the auth rate limiter on the TCP peer, which is the proxy. All users then s
    `X-Real-IP` is used only when `X-Forwarded-For` yields no usable address. If the connecting
    peer is not trusted, both headers are ignored.
 3. Have the proxy overwrite client-supplied values rather than append to them. Working examples:
-   [nginx](examples/reverse-proxy/nginx/README.md), [Traefik](examples/reverse-proxy/traefik/README.md).
+   [nginx](examples/reverse-proxy/nginx/setup.md), [Traefik](examples/reverse-proxy/traefik/setup.md).
 
 Do not trust a whole public range just to silence the 429: any client could then pick its own
 rate-limit key.
