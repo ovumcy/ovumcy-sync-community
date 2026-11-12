@@ -1,4 +1,12 @@
 services:
+  ovumcy-sync-community:
+    # Caddy is the only peer whose X-Forwarded-For is trusted, so per-client
+    # auth rate limiting keys on real client IPs instead of one shared bucket.
+    environment:
+      TRUSTED_PROXY_CIDRS: "${SYNC_PROXY_IP:-172.30.99.10}/32"
+    networks:
+      - edge
+
   caddy:
     image: caddy:2.10.2-alpine
     depends_on:
@@ -12,7 +20,16 @@ services:
       - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
+    networks:
+      edge:
+        ipv4_address: "${SYNC_PROXY_IP:-172.30.99.10}"
     restart: unless-stopped
+
+networks:
+  edge:
+    ipam:
+      config:
+        - subnet: "${SYNC_EDGE_SUBNET:-172.30.99.0/24}"
 
 volumes:
   caddy-data:

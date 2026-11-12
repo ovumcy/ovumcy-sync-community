@@ -58,7 +58,7 @@ snapshot.
   accepted for the single-instance self-hosted baseline.
 - **Field-encryption key rotation.** Rotating `FIELD_ENCRYPTION_KEY`
   invalidates every stored TOTP ciphertext; affected accounts fail closed on
-  the next login until they reset via their recovery code. Operator
+  the next login until they sign in with a recovery code and re-enroll. Operator
   responsibility, documented rather than defended at runtime.
 - **Timing-equalization tests assert call counts, not wall-clock latency.**
   The guarded property is "equalizing bcrypt work runs on every early-return
@@ -78,7 +78,8 @@ snapshot.
   bridge signals a lapse, this server keeps the account's `encrypted_blobs`,
   `recovery_key_packages`, `devices`, and shadow `accounts` row for
   `LAPSED_ACCOUNT_GRACE_PERIOD` (default 60 days, operator-tunable) before
-  `purge-lapsed-accounts` erases them. This is a deliberate data-minimization
+  the in-process sweep (`LAPSED_ACCOUNT_SWEEP_INTERVAL`, default daily) or a
+  manual `purge-lapsed-accounts` run erases them. This is a deliberate data-minimization
   trade-off, not a plaintext-exposure risk — the retained blobs are the same
   end-to-end-encrypted ciphertext an active account holds, this server never
   gains any additional ability to read them, and sync access itself is cut
@@ -276,7 +277,7 @@ on the account's next successful login.
 | Claim | Enforced by |
 | --- | --- |
 | `/metrics` is absent when disabled and requires the bearer token when configured | `TestServerMetricsEndpointReturnsNotFoundWhenDisabled`, `TestServerMetricsEndpointRequiresBearerTokenWhenConfigured`, `TestServerMetricsEndpointReturnsPrometheusPayload` in [internal/api/server_test.go](internal/api/server_test.go) |
-| Baseline hardening headers (`Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options`, `Cache-Control: no-store`) are asserted on unauthenticated responses | `TestServerUnauthorizedSyncAccess` in [internal/api/server_test.go](internal/api/server_test.go) |
+| Baseline hardening headers (`Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`, `Cache-Control: no-store`) are asserted on unauthenticated responses | `TestServerUnauthorizedSyncAccess` in [internal/api/server_test.go](internal/api/server_test.go) |
 | CORS allows a configured origin on preflight and rejects unknown origins | `TestServerAllowsConfiguredOriginPreflight`, `TestServerRejectsUnknownOriginPreflight` in [internal/api/server_test.go](internal/api/server_test.go) |
 | A handler panic is recovered into a clean `500 internal_error` instead of a dropped connection, and the recovery log entry carries only the panic value's type and length beside the stack trace — never the value itself, which can hold request-derived text | `TestServeWithPanicRecoveryReturns500`, `TestServeWithPanicRecoveryPassesThroughNormalResponse`, `TestServeWithPanicRecoveryDoesNotLogThePanicValue`, `TestPanicValueSummaryDescribesShapeOnly` in [internal/api/recovery_test.go](internal/api/recovery_test.go) |
 | Request-derived values reaching a log line (method, path) carry nothing that steers a reader — the C0 range, DEL, the C1 range (whose U+009B is a bare CSI), and the Unicode format category (bidirectional overrides, zero-width joiners) are all stripped, so a caller can neither forge a log entry (CWE-117), nor drive the terminal an operator reads the log with, nor reorder how the entry is displayed | `TestSanitizeLogValueStripsControlCharacters` in [internal/api/recovery_test.go](internal/api/recovery_test.go) |

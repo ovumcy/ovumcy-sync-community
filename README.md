@@ -78,14 +78,17 @@ docker compose run --rm ovumcy-sync-community migrate
 docker compose up --build
 ```
 
-The baseline publishes on `127.0.0.1:8080` (loopback only) and persists SQLite under `./data`. For remote or LAN access, put a reverse proxy in front of the loopback port — see [Self-hosting in production](#self-hosting-in-production).
+The baseline publishes on `127.0.0.1:8080` (loopback only) and persists SQLite under `./data`. Every [configuration](#configuration) variable is passed through from your shell or a `.env` file next to `docker-compose.yml`; leave one unset to keep the server default. For remote or LAN access, put a reverse proxy in front of the loopback port — see [Self-hosting in production](#self-hosting-in-production).
 
 **Docker (without Compose):**
 
+The image runs as the distroless `nonroot` user (uid 65532), so the bind-mounted `./data` must be writable by that uid first (Compose does this in its `init-data-perms` step):
+
 ```bash
 docker build -t ovumcy-sync-community .
+mkdir -p data && sudo chown 65532:65532 data
 docker run --rm -v "$(pwd)/data:/data" ovumcy-sync-community migrate
-docker run --rm -p 8080:8080 -v "$(pwd)/data:/data" ovumcy-sync-community serve
+docker run --rm -p 127.0.0.1:8080:8080 -v "$(pwd)/data:/data" ovumcy-sync-community serve
 ```
 
 **Local (Go toolchain).** The schema must exist first, so `migrate` before `serve`:
@@ -145,12 +148,12 @@ TOTP endpoints stay inactive (`503 totp_not_configured`) until `FIELD_ENCRYPTION
 
 - Put the service behind HTTPS (terminate TLS at a reverse proxy such as Caddy, Nginx, or Traefik).
 - Persist the `/data` volume so SQLite survives restarts.
-- Set `TRUSTED_PROXY_CIDRS` to your reverse-proxy addresses so auth rate limiting sees real client IPs.
+- Set `TRUSTED_PROXY_CIDRS` to your reverse-proxy addresses so auth rate limiting sees real client IPs. The proxy must send `X-Forwarded-For` (or, failing that, `X-Real-IP`); without a trusted proxy every client shares the proxy's single rate-limit bucket.
 - Enable `METRICS_ENABLED` only when needed, and keep `/metrics` internal or protect it with `METRICS_BEARER_TOKEN`.
 - Leave `MANAGED_BRIDGE_TOKEN` unset unless you operate a separate trusted managed-auth service.
 - Set `ALLOWED_ORIGINS` only when browser clients need direct CORS access.
 
-A ready-to-adapt Caddy edge (which blocks `/metrics` publicly by default):
+A ready-to-adapt Caddy edge (which blocks `/metrics` publicly by default). It pins Caddy to a fixed address on its own network (`SYNC_PROXY_IP`, default `172.30.99.10`, inside `SYNC_EDGE_SUBNET`, default `172.30.99.0/24`) and trusts only that address via `TRUSTED_PROXY_CIDRS`:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.caddy.yml run --rm ovumcy-sync-community migrate
