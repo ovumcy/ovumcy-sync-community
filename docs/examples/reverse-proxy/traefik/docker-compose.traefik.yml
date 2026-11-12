@@ -1,0 +1,62 @@
+# Reference Traefik edge for ovumcy-sync-community. Use alongside the base
+# compose file; see README.md in this directory.
+#
+#   docker compose -f docker-compose.yml -f docs/examples/reverse-proxy/traefik/docker-compose.traefik.yml up -d
+#
+# Set SYNC_HOST (public hostname) and ACME_EMAIL in the environment.
+
+services:
+  traefik:
+    image: traefik:v3.6
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      # A direct client is never trusted to supply X-Forwarded-*.
+      - --entrypoints.websecure.forwardedheaders.insecure=false
+      - --entrypoints.websecure.transport.respondingtimeouts.readtimeout=30s
+      - --entrypoints.websecure.transport.respondingtimeouts.writetimeout=30s
+      - --certificatesresolvers.le.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.le.acme.storage=/acme/acme.json
+      - --certificatesresolvers.le.acme.tlschallenge=true
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-acme:/acme
+
+  ovumcy-sync-community:
+    environment:
+      # Traefik's address on the shared network; use the network subnet.
+      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:?set to the Docker network subnet}
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.ovumcy-sync.loadbalancer.server.port=8080
+
+      # Public API.
+      - traefik.http.routers.ovumcy-sync.rule=Host(`${SYNC_HOST}`)
+      - traefik.http.routers.ovumcy-sync.entrypoints=websecure
+      - traefik.http.routers.ovumcy-sync.tls.certresolver=le
+      - traefik.http.routers.ovumcy-sync.service=ovumcy-sync
+      - traefik.http.routers.ovumcy-sync.middlewares=ovumcy-sync-body
+
+      # /metrics is never public: higher priority router, answered by the
+      # same service but with an IP allowlist that matches nothing, giving 403.
+      - traefik.http.routers.ovumcy-sync-metrics.rule=Host(`${SYNC_HOST}`) && Path(`/metrics`)
+      - traefik.http.routers.ovumcy-sync-metrics.priority=100
+      - traefik.http.routers.ovumcy-sync-metrics.entrypoints=websecure
+      - traefik.http.routers.ovumcy-sync-metrics.tls.certresolver=le
+      - traefik.http.routers.ovumcy-sync-metrics.service=ovumcy-sync
+      - traefik.http.routers.ovumcy-sync-metrics.middlewares=ovumcy-sync-deny
+
+      # Body limit: 32 MiB (the app accepts about 21.3 MiB for a 16 MiB blob).
+      - traefik.http.middlewares.ovumcy-sync-body.buffering.maxrequestbodybytes=33554432
+      - traefik.http.middlewares.ovumcy-sync-body.buffering.memrequestbodybytes=1048576
+      - traefik.http.middlewares.ovumcy-sync-deny.ipallowlist.sourcerange=192.0.2.1/32
+
+volumes:
+  traefik-acme:
