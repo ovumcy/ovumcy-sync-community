@@ -49,7 +49,7 @@ the strength of the phrase and the client KDF, which are client concerns and out
 | Password and recovery-code hashes | `accounts.password_hash`, `accounts.recovery_code_hash` | bcrypt cost 12 |
 | Session, reset and challenge token hashes | `sessions.token_hash`, `password_reset_tokens.token_hash`, `totp_challenges.challenge_id_hash` | 32-byte random tokens, SHA-256 at rest |
 | TOTP secrets | `accounts.totp_secret_encrypted` | AES-256-GCM, key from `FIELD_ENCRYPTION_KEY` via HKDF-SHA256, AAD bound to the account id (`internal/security/field_crypto.go`, `internal/services/totp_service.go`) |
-| `FIELD_ENCRYPTION_KEY` | Process environment | Without it, TOTP enrollment is unavailable; loss makes stored TOTP secrets unreadable |
+| `FIELD_ENCRYPTION_KEY` | Process environment | Without it, TOTP enrollment is unavailable and an already-enrolled account fails closed at login (503 `totp_not_configured`), never falling back to password-only; loss makes stored TOTP secrets unreadable |
 | `MANAGED_BRIDGE_TOKEN` | Process environment | Authorizes the managed bridge routes; unset means the bridge answers 503 |
 | `METRICS_BEARER_TOKEN` | Process environment | Optional guard on the metrics endpoint |
 
@@ -110,8 +110,8 @@ the strength of the phrase and the client KDF, which are client concerns and out
 - Mitigation: `X-Forwarded-For` and `X-Real-IP` are honoured only when the direct peer is inside
   `TRUSTED_PROXY_CIDRS`; the forwarded chain is walked right to left past trusted hops
   (`forwardedClientIP`, `internal/api/server.go`). Default is no trusted proxy.
-- Residual: a proxy in the trusted set can claim any client address, which defeats per-IP limiting
-  and misattributes nothing else, since addresses are not logged by the application. A compromised
+- Residual: a proxy in the trusted set can claim any client address, which defeats per-IP limiting;
+  nothing else depends on the address, since the application does not log it. A compromised
   proxy sees all traffic, including credentials and bearer tokens, in the clear.
 
 ### Managed-bridge impersonation
