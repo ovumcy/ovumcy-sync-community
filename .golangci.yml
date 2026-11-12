@@ -1,4 +1,4 @@
-# golangci-lint v2 configuration (CI pins v2.12.2 in .github/workflows/ci.yml).
+# golangci-lint v2 configuration (CI pins v2.15.0 in .github/workflows/ci.yml).
 #
 # Baseline: the standard default linters (errcheck, govet, ineffassign,
 # staticcheck, unused) — exactly what CI ran before this file existed, so
@@ -8,7 +8,7 @@
 # under (CI's zero-issue run enforces it stays that way) with no style churn
 # or subjective rules:
 #   - copyloopvar: flags loop-variable copies made redundant by Go 1.22
-#     per-iteration loop variables; pure dead code under go 1.26.
+#     per-iteration loop variables; pure dead code under go 1.27.
 #   - intrange: canonical Go 1.22 `for i := range n` counting loops instead
 #     of the three-clause form.
 #   - misspell: objective spelling fixes in comments and strings; locale left

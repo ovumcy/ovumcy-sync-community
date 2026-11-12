@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Go 1.27.** The Go directive moves to 1.27.4 and the build image to `golang:1.27-bookworm`; CI's golangci-lint pin moves to v2.15.0 to analyse the 1.27 toolchain. A source build now needs Go 1.27.4 or later.
+
 - **`GET /readyz` is schema-aware.** Readiness now applies the same applied-migration name-set comparison that gates startup, so a still-running `serve` whose volume a newer image has migrated turns not-ready instead of continuing to look serviceable — the running-process half of the refusal that already stopped a downgraded binary from booting (see [docs/self-hosting.md](docs/self-hosting.md#upgrading-and-rolling-back)). Operator-visible consequence: a container can now go `unhealthy` for a reason other than the process being gone, and an orchestrator configured to act on health will act on it. The probe stays two small statements — a `sqlite_master` lookup and the `schema_migrations` name set — so polling it on the healthcheck interval costs nothing measurable.
 
 ## [0.3.0] - 2026-07-24
