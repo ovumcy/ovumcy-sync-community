@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The container healthcheck now reports database health.** `HEALTHCHECK` probed `GET /healthz`, which answers from a constant and consults nothing, so a container whose database had become unreadable — deleted, corrupt, permission-locked — reported `healthy` to the runtime and to any orchestrator for as long as the HTTP loop kept accepting connections. It probes `GET /readyz` instead, which touches the store. `GET /healthz` is unchanged and stays the pure liveness answer for a proxy or uptime check.
 
+- **The bundled Caddy edge collapsed every client into one rate-limit bucket.** `docker-compose.caddy.yml` set no `TRUSTED_PROXY_CIDRS`, so every request reached the server from Caddy's address and a few failed logins from anyone throttled auth for all users for the window. Caddy now sits at a fixed address on its own network (`SYNC_PROXY_IP` in `SYNC_EDGE_SUBNET`) and only that address is trusted.
+
+- **Compose could not configure 2FA, sweeps, or timeouts.** `docker-compose.yml` hard-coded its environment and omitted `FIELD_ENCRYPTION_KEY`, `TOTP_ISSUER`, the sweep variables, and both HTTP timeouts, so the documented way to enable TOTP did not reach the container. Every configuration variable is now passed through from the shell or a `.env` file, with the server default when unset.
+
+- **Docs drift.** The plain `docker run` quick start now prepares `./data` for the non-root image and binds loopback like Compose; the lint pin in `CONTRIBUTING.md` matches CI; `SECURITY.md` names the in-process lapse sweep, the recovery-then-re-enroll path after a key rotation, and all six asserted hardening headers; the proxy docs name the forwarded-IP headers.
+
 ### Changed
 
 - **Go 1.27.** The Go directive moves to 1.27.4 and the build image to `golang:1.27-bookworm`; CI's golangci-lint pin moves to v2.15.0 to analyse the 1.27 toolchain. A source build now needs Go 1.27.4 or later.

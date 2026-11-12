@@ -225,6 +225,12 @@ func TestServerUnauthorizedSyncAccess(t *testing.T) {
 	if got := response.Header().Get("Cache-Control"); got != "no-store" {
 		t.Fatalf("expected Cache-Control no-store, got %q", got)
 	}
+	if got := response.Header().Get("Referrer-Policy"); got != "no-referrer" {
+		t.Fatalf("expected Referrer-Policy no-referrer, got %q", got)
+	}
+	if got := response.Header().Get("Permissions-Policy"); !strings.Contains(got, "camera=()") || !strings.Contains(got, "geolocation=()") {
+		t.Fatalf("expected restrictive Permissions-Policy, got %q", got)
+	}
 }
 
 func TestServerRateLimitsAuthEndpoints(t *testing.T) {

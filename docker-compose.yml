@@ -15,19 +15,30 @@ services:
     depends_on:
       init-data-perms:
         condition: service_completed_successfully
+    # Every knob is read from the shell or a `.env` file next to this file;
+    # an empty value means "use the server default".
     environment:
       BIND_ADDR: ":8080"
       DB_PATH: "/data/ovumcy-sync-community.sqlite"
-      SESSION_TTL: "720h"
-      MAX_DEVICES: "5"
-      MAX_BLOB_BYTES: "16777216"
-      AUTH_RATE_LIMIT_COUNT: "10"
-      AUTH_RATE_LIMIT_WINDOW: "1m"
-      METRICS_ENABLED: "false"
-      METRICS_BEARER_TOKEN: ""
-      MANAGED_BRIDGE_TOKEN: ""
-      ALLOWED_ORIGINS: ""
-      TRUSTED_PROXY_CIDRS: ""
+      SESSION_TTL: "${SESSION_TTL:-720h}"
+      MAX_DEVICES: "${MAX_DEVICES:-5}"
+      MAX_BLOB_BYTES: "${MAX_BLOB_BYTES:-16777216}"
+      AUTH_RATE_LIMIT_COUNT: "${AUTH_RATE_LIMIT_COUNT:-10}"
+      AUTH_RATE_LIMIT_WINDOW: "${AUTH_RATE_LIMIT_WINDOW:-1m}"
+      METRICS_ENABLED: "${METRICS_ENABLED:-false}"
+      METRICS_BEARER_TOKEN: "${METRICS_BEARER_TOKEN:-}"
+      MANAGED_BRIDGE_TOKEN: "${MANAGED_BRIDGE_TOKEN:-}"
+      ALLOWED_ORIGINS: "${ALLOWED_ORIGINS:-}"
+      TRUSTED_PROXY_CIDRS: "${TRUSTED_PROXY_CIDRS:-}"
+      FIELD_ENCRYPTION_KEY: "${FIELD_ENCRYPTION_KEY:-}"
+      TOTP_ISSUER: "${TOTP_ISSUER:-}"
+      LAPSED_ACCOUNT_GRACE_PERIOD: "${LAPSED_ACCOUNT_GRACE_PERIOD:-}"
+      LAPSED_ACCOUNT_SWEEP_INTERVAL: "${LAPSED_ACCOUNT_SWEEP_INTERVAL:-}"
+      LAPSED_ACCOUNT_SWEEP_LIMIT: "${LAPSED_ACCOUNT_SWEEP_LIMIT:-}"
+      EXPIRED_ROWS_SWEEP_INTERVAL: "${EXPIRED_ROWS_SWEEP_INTERVAL:-}"
+      EXPIRED_ROWS_SWEEP_LIMIT: "${EXPIRED_ROWS_SWEEP_LIMIT:-}"
+      HTTP_READ_TIMEOUT: "${HTTP_READ_TIMEOUT:-}"
+      HTTP_WRITE_TIMEOUT: "${HTTP_WRITE_TIMEOUT:-}"
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
