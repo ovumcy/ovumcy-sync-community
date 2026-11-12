@@ -39,7 +39,7 @@ jobs:
           cache: true
 
       - name: Install gosec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.22.4
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.30.0
 
       - name: Prepare security artifact directory
         run: mkdir -p .tmp/security
@@ -86,7 +86,7 @@ jobs:
       # Call-graph reachability gate: fails only when the code actually calls
       # a vulnerable symbol; Trivy covers vulnerable-but-unreachable packages.
       - name: Govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
   trivy-fs:
     runs-on: ubuntu-latest
