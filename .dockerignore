@@ -5,7 +5,7 @@
 # .clusterfuzzlite/Dockerfile -- and `docker build` reads this file from the
 # context root for every build that uses that root. Without it the context
 # carries the entire working tree to the daemon: `.git` with full history,
-# local agent worktrees under `.claude/`, the gitignored `data/` SQLite
+# local agent worktrees, the gitignored `data/` SQLite
 # database, editor and tooling state. All of it lands in the build cache, and
 # any of it can be baked into a layer by a wildcard COPY.
 #
