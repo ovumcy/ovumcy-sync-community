@@ -538,6 +538,31 @@ func (s *AuthService) RevokeSession(ctx context.Context, sessionToken string) er
 	return nil
 }
 
+// ConfirmCurrentPassword re-authenticates the session's owner before a write
+// a stolen session must not be able to make alone: account deletion and the
+// recovery-key overwrite. A wrong password returns the same
+// ErrInvalidCurrentPassword as every other step-up, after a full bcrypt
+// compare. Managed accounts have no password (sessions come only from the
+// managed bridge, whose own re-authentication stands in), so they pass.
+func (s *AuthService) ConfirmCurrentPassword(ctx context.Context, accountID string, currentPassword string) error {
+	account, err := s.store.FindAccountByID(ctx, accountID)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return ErrUnauthorized
+		}
+		return err
+	}
+
+	if account.Mode == "managed" {
+		return nil
+	}
+
+	if err := security.ComparePasswordHash(account.PasswordHash, currentPassword); err != nil {
+		return ErrInvalidCurrentPassword
+	}
+	return nil
+}
+
 // DeleteAccount permanently erases every row this server holds for
 // accountID: the account row, its sessions, its devices, its encrypted sync
 // blob, its wrapped recovery-key package, any pending password reset token,

@@ -131,6 +131,7 @@ func TestServerRegisterLoginAndSyncFlow(t *testing.T) {
 			"wrap_nonce_hex":         strings.Repeat("a", 48),
 			"wrapped_master_key_hex": strings.Repeat("b", 96),
 			"phrase_fingerprint_hex": strings.Repeat("c", 16),
+			"current_password":       "correct horse battery staple",
 		},
 		registerPayload.SessionToken,
 		http.StatusOK,
@@ -1243,6 +1244,7 @@ func TestServerSyncEndpointValidationErrors(t *testing.T) {
 			"wrap_nonce_hex":         strings.Repeat("a", 48),
 			"wrapped_master_key_hex": strings.Repeat("b", 96),
 			"phrase_fingerprint_hex": strings.Repeat("c", 16),
+			"current_password":       "correct horse battery staple",
 		},
 		registered.SessionToken,
 		http.StatusBadRequest,
@@ -1396,6 +1398,7 @@ func TestServerPutRecoveryKeyRateLimitedPerAccount(t *testing.T) {
 		"wrap_nonce_hex":         strings.Repeat("a", 48),
 		"wrapped_master_key_hex": strings.Repeat("b", 96),
 		"phrase_fingerprint_hex": strings.Repeat("c", 16),
+		"current_password":       "correct horse battery staple",
 	}
 
 	performJSONRequest(
@@ -1500,6 +1503,7 @@ func TestServerSyncRoutesReturnInternalErrorWhenStoreFails(t *testing.T) {
 			"wrap_nonce_hex":         strings.Repeat("a", 48),
 			"wrapped_master_key_hex": strings.Repeat("b", 96),
 			"phrase_fingerprint_hex": strings.Repeat("c", 16),
+			"current_password":       "correct horse battery staple",
 		},
 		registered.SessionToken,
 		http.StatusInternalServerError,
@@ -1529,7 +1533,7 @@ func TestServerDeleteAccountReturnsInternalErrorAndRateLimitsRetry(t *testing.T)
 		handler,
 		http.MethodDelete,
 		"/account",
-		nil,
+		currentPasswordBody,
 		registered.SessionToken,
 		http.StatusInternalServerError,
 	)
@@ -1546,7 +1550,7 @@ func TestServerDeleteAccountReturnsInternalErrorAndRateLimitsRetry(t *testing.T)
 		handler,
 		http.MethodDelete,
 		"/account",
-		nil,
+		currentPasswordBody,
 		registered.SessionToken,
 		http.StatusTooManyRequests,
 	)
@@ -1555,6 +1559,51 @@ func TestServerDeleteAccountReturnsInternalErrorAndRateLimitsRetry(t *testing.T)
 	if secondPayload["error"] != "rate_limited" {
 		t.Fatalf("unexpected delete-account rate limit payload: %#v", secondPayload)
 	}
+}
+
+// A stolen session alone must not overwrite the wrapped recovery key: the
+// write re-checks the password, and a refused one stores nothing.
+func TestPutRecoveryKeyRequiresCurrentPassword(t *testing.T) {
+	handler := newTestServer(t)
+	registered := registerOwner(t, handler)
+
+	for _, currentPassword := range []any{"wrong password here", nil} {
+		body := map[string]any{
+			"algorithm":              "xchacha20poly1305",
+			"kdf":                    "bip39_seed_hkdf_sha256",
+			"mnemonic_word_count":    12,
+			"wrap_nonce_hex":         strings.Repeat("a", 48),
+			"wrapped_master_key_hex": strings.Repeat("b", 96),
+			"phrase_fingerprint_hex": strings.Repeat("c", 16),
+		}
+		if currentPassword != nil {
+			body["current_password"] = currentPassword
+		}
+		response := performJSONRequest(
+			t,
+			handler,
+			http.MethodPut,
+			"/sync/recovery-key",
+			body,
+			registered.SessionToken,
+			http.StatusUnauthorized,
+		)
+		var payload map[string]string
+		decodeResponse(t, response.Body.Bytes(), &payload)
+		if payload["error"] != "invalid_current_password" {
+			t.Fatalf("unexpected refusal payload for %v: %#v", currentPassword, payload)
+		}
+	}
+
+	performJSONRequest(
+		t,
+		handler,
+		http.MethodGet,
+		"/sync/recovery-key",
+		nil,
+		registered.SessionToken,
+		http.StatusNotFound,
+	)
 }
 
 func TestServerAuthRoutesReturnInternalErrorWhenStoreFails(t *testing.T) {

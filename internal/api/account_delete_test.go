@@ -56,6 +56,7 @@ func TestDeleteAccountEndpointErasesBlobDeviceAndSession(t *testing.T) {
 			"wrap_nonce_hex":         strings.Repeat("a", 48),
 			"wrapped_master_key_hex": strings.Repeat("b", 96),
 			"phrase_fingerprint_hex": strings.Repeat("c", 16),
+			"current_password":       "correct horse battery staple",
 		},
 		registerPayload.SessionToken,
 		http.StatusOK,
@@ -83,7 +84,7 @@ func TestDeleteAccountEndpointErasesBlobDeviceAndSession(t *testing.T) {
 		handler,
 		http.MethodDelete,
 		"/account",
-		nil,
+		currentPasswordBody,
 		registerPayload.SessionToken,
 		http.StatusOK,
 	)
@@ -186,7 +187,7 @@ func TestDeleteAccountEndpointDoesNotAffectOtherAccounts(t *testing.T) {
 		handler,
 		http.MethodDelete,
 		"/account",
-		nil,
+		currentPasswordBody,
 		targetPayload.SessionToken,
 		http.StatusOK,
 	)
@@ -231,7 +232,7 @@ func TestDeleteAccountEndpointIsIdempotentOnRepeat(t *testing.T) {
 		handler,
 		http.MethodDelete,
 		"/account",
-		nil,
+		currentPasswordBody,
 		registerPayload.SessionToken,
 		http.StatusOK,
 	)
@@ -246,8 +247,75 @@ func TestDeleteAccountEndpointIsIdempotentOnRepeat(t *testing.T) {
 		handler,
 		http.MethodDelete,
 		"/account",
-		nil,
+		currentPasswordBody,
 		registerPayload.SessionToken,
 		http.StatusUnauthorized,
+	)
+}
+
+var currentPasswordBody = map[string]string{"current_password": "correct horse battery staple"}
+
+// A stolen session alone must not erase the account: deletion re-checks the
+// password, and a refused attempt leaves the session and data in place.
+func TestDeleteAccountEndpointRequiresCurrentPassword(t *testing.T) {
+	handler := newTestServer(t)
+
+	registerResponse := performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/auth/register",
+		map[string]string{
+			"login":    "owner@example.com",
+			"password": "correct horse battery staple",
+		},
+		"",
+		http.StatusCreated,
+	)
+	var registerPayload struct {
+		SessionToken string `json:"session_token"`
+	}
+	decodeResponse(t, registerResponse.Body.Bytes(), &registerPayload)
+
+	for _, body := range []any{
+		map[string]string{"current_password": "wrong password here"},
+		map[string]string{},
+	} {
+		response := performJSONRequest(
+			t,
+			handler,
+			http.MethodDelete,
+			"/account",
+			body,
+			registerPayload.SessionToken,
+			http.StatusUnauthorized,
+		)
+		var payload map[string]string
+		decodeResponse(t, response.Body.Bytes(), &payload)
+		if payload["error"] != "invalid_current_password" {
+			t.Fatalf("unexpected refusal payload for %#v: %#v", body, payload)
+		}
+	}
+
+	performJSONRequest(
+		t,
+		handler,
+		http.MethodGet,
+		"/sync/capabilities",
+		nil,
+		registerPayload.SessionToken,
+		http.StatusOK,
+	)
+	performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/auth/login",
+		map[string]string{
+			"login":    "owner@example.com",
+			"password": "correct horse battery staple",
+		},
+		"",
+		http.StatusOK,
 	)
 }

@@ -725,10 +725,17 @@ paths:
         sync blob, the wrapped recovery-key package, pending password-reset
         tokens, and pending TOTP challenges. The account is derived only from
         the authenticated session — there is no field to name a different
-        account. Idempotent: a retry after a successful delete still reports
-        success.
+        account. Requires the current password, so a stolen session alone
+        cannot erase the account; managed accounts (no password) are exempt.
+        Idempotent: a retry after a successful delete still reports success.
       security:
         - sessionBearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CurrentPasswordRequest"
       responses:
         "200":
           description: Account and all owned data erased (or already gone).
@@ -739,8 +746,26 @@ paths:
               examples:
                 deleted:
                   value: { status: account_deleted }
+        "400":
+          description: Missing or malformed JSON body.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidJSON:
+                  value: { error: invalid_json }
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          description: Missing/invalid session, or wrong current password.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  value: { error: unauthorized }
+                invalidCurrentPassword:
+                  value: { error: invalid_current_password }
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
@@ -1192,7 +1217,9 @@ paths:
         Upserts the account's client-wrapped master-key package. All fields
         are opaque to the server beyond format validation (fixed algorithm/KDF
         identifiers, fixed word count, hex length checks) — the server never
-        derives or sees the unwrapped key.
+        derives or sees the unwrapped key. Requires the current password, so a
+        stolen session alone cannot overwrite the owner's recovery path;
+        managed accounts (no password) are exempt.
       security:
         - sessionBearerAuth: []
       requestBody:
@@ -1218,7 +1245,16 @@ paths:
                 invalidPackage:
                   value: { error: invalid_recovery_package }
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          description: Missing/invalid session, or wrong current password.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  value: { error: unauthorized }
+                invalidCurrentPassword:
+                  value: { error: invalid_current_password }
         "403":
           $ref: "#/components/responses/SyncDisabled"
         "429":
@@ -1459,6 +1495,15 @@ components:
           type: string
           format: password
       required: [reset_token, new_password]
+      additionalProperties: false
+
+    CurrentPasswordRequest:
+      type: object
+      properties:
+        current_password:
+          type: string
+          format: password
+          description: Required for self-hosted accounts; ignored for managed accounts.
       additionalProperties: false
 
     RegenerateRecoveryCodeRequest:
@@ -1706,7 +1751,7 @@ components:
         generation:
           type: integer
           format: int64
-          description: Must be positive and strictly greater than the currently stored generation.
+          description: Must be positive, strictly greater than the currently stored generation, and at most 15 minutes (in milliseconds) ahead of server time.
         checksum_sha256:
           type: string
           description: Lowercase hex SHA-256 of the decoded ciphertext; 64 hex characters.
@@ -1773,6 +1818,10 @@ components:
           type: string
           description: Lowercase hex, exactly 16 characters.
           pattern: "^[a-f0-9]{16}$"
+        current_password:
+          type: string
+          format: password
+          description: Required for self-hosted accounts; ignored for managed accounts. Never stored or echoed.
       required:
         - algorithm
         - kdf

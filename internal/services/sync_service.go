@@ -30,9 +30,11 @@ var lowercaseHexPattern = regexp.MustCompile(`^[a-f0-9]+$`)
 // timestamp (ovumcy-app's nextRemoteGeneration, which is
 // max(now_ms, last+1)), so a legitimate value never runs ahead of server time
 // by more than the clock difference between the two machines plus a stray
-// millisecond per same-millisecond write. A day is far more than that and
-// still far less than any value that could cause trouble.
-const blobGenerationSkew = 24 * time.Hour
+// millisecond per same-millisecond write. The bound is also how long a
+// generation parked at the ceiling by a since-revoked session keeps the
+// owner's writes stale, so it stays short: 15 minutes covers real device
+// clock drift and caps that lock-out.
+const blobGenerationSkew = 15 * time.Minute
 
 // maxAcceptableBlobGeneration bounds a write to a plausible timestamp, and it
 // moves with the clock on purpose.

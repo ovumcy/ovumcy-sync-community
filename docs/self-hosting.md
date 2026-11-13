@@ -249,7 +249,7 @@ your container registry credentials.
 Operational notes:
 
 - The delete is irreversible. There is no soft-delete, undo window, or server-side recovery once the transaction commits — the only way back is restoring the whole `/data` volume from a backup taken before the delete, which would also roll back every other account's state in the same restore.
-- The request is authenticated the same way as every other account-scoped endpoint (`Authorization: Bearer <session token>`). The server only ever erases the account behind that session; there is no request field that can name a different account, so a stolen or forged request cannot be used to erase someone else's data.
+- The request carries the session (`Authorization: Bearer <session token>`) and the account's current password in the body (`{"current_password": "..."}`), so a stolen session alone cannot erase the account; a wrong password returns `401 invalid_current_password`. Managed accounts have no password and are exempt. The server only ever erases the account behind that session; there is no request field that can name a different account, so a stolen or forged request cannot be used to erase someone else's data.
 - The endpoint is idempotent at the account-data level: once an account is gone, a request that could somehow still prove ownership of it would be a no-op rather than an error. In practice a repeat call with the same bearer token gets `401 unauthorized` instead, because the session itself was deleted along with the account — the same outcome ("this account's data does not exist") either way.
 - This is a one-account operation. It does not touch, rate-limit, or otherwise affect other accounts on the same server.
 
