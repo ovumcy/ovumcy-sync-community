@@ -429,4 +429,18 @@ func TestFieldEncryptionKeyFromEnvRejectsInvalidHexCharacters(t *testing.T) {
 	if !strings.Contains(err.Error(), "must be a hex-encoded byte string") {
 		t.Fatalf("error = %q, want it to explain the hex-encoding requirement", err.Error())
 	}
+	// The startup log must not carry any character of the key.
+	if strings.ContainsAny(err.Error(), "zZ") {
+		t.Fatalf("error = %q quotes key material", err.Error())
+	}
+}
+
+func TestLoadRejectsMetricsWithoutBearerToken(t *testing.T) {
+	t.Setenv("METRICS_ENABLED", "true")
+	t.Setenv("METRICS_BEARER_TOKEN", "  ")
+
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "METRICS_ENABLED=true requires METRICS_BEARER_TOKEN") {
+		t.Fatalf("expected Load to refuse an unauthenticated /metrics, got %v", err)
+	}
 }

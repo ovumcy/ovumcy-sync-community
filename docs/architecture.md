@@ -101,7 +101,7 @@ Expiry is enforced at read time regardless, so the sweeps only bound table growt
 | `migrate` | Applies embedded forward-only migrations and records them in `schema_migrations` |
 | `serve` | Opens the database, refuses to start if the schema is not initialized, starts the HTTP server and the sweep loops |
 | `healthcheck` | Used by the container `HEALTHCHECK` (`Dockerfile`); probes the local server's `/readyz` and exits non-zero on a non-2xx answer |
-| `purge-lapsed-accounts` | On-demand run of the lapsed-account purge; flags `-dry-run` and `-limit N` |
+| `purge-lapsed-accounts` | On-demand run of the lapsed-account purge; flags `-dry-run` and `-limit N`; refuses a database whose schema is not current instead of migrating it |
 
 ## Data model
 

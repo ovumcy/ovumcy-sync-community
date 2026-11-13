@@ -622,11 +622,13 @@ func (s *Server) handleTOTPDisable(
 }
 
 func (s *Server) handleTOTPChallenge(writer http.ResponseWriter, request *http.Request) {
-	if s.totp == nil {
-		writeError(writer, http.StatusServiceUnavailable, "totp_not_configured")
+	// Limiter first: an anonymous caller must not be able to probe whether
+	// TOTP is configured at an unmetered rate.
+	if !s.allowAuthRequest(writer, request) {
 		return
 	}
-	if !s.allowAuthRequest(writer, request) {
+	if s.totp == nil {
+		writeError(writer, http.StatusServiceUnavailable, "totp_not_configured")
 		return
 	}
 
@@ -1069,11 +1071,22 @@ func (s *Server) handleGetRecoveryKey(
 
 func (s *Server) withAuth(next func(http.ResponseWriter, *http.Request, models.Account)) http.HandlerFunc {
 	return func(writer http.ResponseWriter, request *http.Request) {
+		// The session lookup is server work a caller without a session can
+		// trigger, so a per-client-IP bucket gates it. Only failed lookups
+		// stay charged: a valid session refunds its slot and is metered per
+		// account inside the handler, so callers sharing one address (a NAT)
+		// are not throttled by one another's legitimate traffic.
+		key := unauthenticatedRateLimitKeyPrefix + s.clientIPForRateLimit(request)
+		if !allowUnderLimiter(s.sessionReadLimiter, writer, key) {
+			return
+		}
+
 		account, err := s.auth.Authenticate(request.Context(), bearerTokenFromRequest(request))
 		if err != nil {
 			writeError(writer, http.StatusUnauthorized, "unauthorized")
 			return
 		}
+		s.sessionReadLimiter.Refund(key)
 
 		next(writer, request, account)
 	}
@@ -1097,6 +1110,8 @@ func (s *Server) requireSyncEnabled(
 		next(writer, request, account)
 	}
 }
+
+const unauthenticatedRateLimitKeyPrefix = "unauthenticated:"
 
 func (s *Server) withManagedBridge(next http.HandlerFunc) http.HandlerFunc {
 	return func(writer http.ResponseWriter, request *http.Request) {
@@ -1135,7 +1150,9 @@ func decodeJSON(writer http.ResponseWriter, request *http.Request, target any, m
 		writeError(writer, http.StatusBadRequest, "invalid_json")
 		return false
 	}
-	if err := decoder.Decode(&struct{}{}); err != nil && !errors.Is(err, io.EOF) {
+	// Anything after the first value — even a well-formed `{}` or `null` —
+	// is a malformed body, not padding to ignore.
+	if err := decoder.Decode(&json.RawMessage{}); !errors.Is(err, io.EOF) {
 		writeError(writer, http.StatusBadRequest, "invalid_json")
 		return false
 	}

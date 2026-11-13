@@ -118,6 +118,6 @@ Do at least one restore drill before you rely on this server operationally:
 
 If you enable `/metrics`, treat it as an operator endpoint:
 
+- it always requires `METRICS_BEARER_TOKEN` (startup refuses metrics without one);
 - keep it internal when possible;
-- or protect it with `METRICS_BEARER_TOKEN`;
 - or block it at the reverse proxy and scrape the backend container directly from your private network.

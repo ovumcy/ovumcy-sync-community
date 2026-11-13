@@ -202,7 +202,9 @@ func fieldEncryptionKeyFromEnv(name string) ([]byte, error) {
 	}
 	decoded, err := hex.DecodeString(raw)
 	if err != nil {
-		return nil, fmt.Errorf("%s must be a hex-encoded byte string: %w", name, err)
+		// The decoder's error quotes the offending character, which is a
+		// character of the key: report the shape of the problem only.
+		return nil, fmt.Errorf("%s must be a hex-encoded byte string", name)
 	}
 	if len(decoded) < 32 {
 		return nil, fmt.Errorf(
@@ -252,6 +254,11 @@ func (c Config) Validate() error {
 		if _, err := ParseTrustedProxyCIDR(value); err != nil {
 			return fmt.Errorf("TRUSTED_PROXY_CIDRS entry %q is invalid: %w", value, err)
 		}
+	}
+	// An unauthenticated /metrics is one reverse-proxy rule away from public,
+	// and the edge block is not something this process can verify.
+	if c.MetricsEnabled && strings.TrimSpace(c.MetricsBearerToken) == "" {
+		return fmt.Errorf("METRICS_ENABLED=true requires METRICS_BEARER_TOKEN")
 	}
 	if c.LapsedAccountGracePeriod <= 0 {
 		return fmt.Errorf("LAPSED_ACCOUNT_GRACE_PERIOD must be positive")

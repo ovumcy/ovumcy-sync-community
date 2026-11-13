@@ -30,7 +30,7 @@ Core tracking in the Ovumcy app still remains local-first. This server is for op
 3. Expose the service only through HTTPS on the public internet.
 4. Keep `MANAGED_BRIDGE_TOKEN` empty unless you operate a separate trusted managed-auth service. When set it must be at least 32 bytes (`openssl rand -hex 32`); a shorter token is a startup error.
 5. Set `TRUSTED_PROXY_CIDRS` to the reverse proxy's address so auth rate limiting keys on real client IPs. The proxy must send `X-Forwarded-For`; `X-Real-IP` is not read. Without it every client shares the proxy's single rate-limit bucket, so a handful of failed logins locks everyone out for the window. The bundled `docker-compose.caddy.yml` already does this.
-6. Keep `/metrics` internal or protect it with `METRICS_BEARER_TOKEN` if you enable metrics.
+6. If you enable metrics, set `METRICS_BEARER_TOKEN` (startup refuses metrics without it) and keep `/metrics` internal.
 
 ## Example Reverse Proxy Pattern
 
@@ -49,7 +49,7 @@ This service itself does not terminate TLS. Production deployments should not ex
 - `AUTH_RATE_LIMIT_COUNT=10` requests per window, keyed on the client IP for the public auth surface and on the account for authenticated routes. The authenticated read-only routes — `GET /auth/session`, `GET /sync/capabilities`, `GET /sync/devices` — get 30× this budget per account (300/min at the default), because they answer from state the caller's session already owns and a client calls them on screen focus rather than on a timer. `GET /healthz` and `GET /readyz` are never rate-limited, so a container healthcheck or uptime monitor polling on a fixed interval can never be throttled into reporting an outage
 - `AUTH_RATE_LIMIT_WINDOW=1m`
 - `METRICS_ENABLED=false`
-- `METRICS_BEARER_TOKEN=` optional bearer token for `GET /metrics`
+- `METRICS_BEARER_TOKEN=` bearer token for `GET /metrics`; required when `METRICS_ENABLED=true`
 - `TRUSTED_PROXY_CIDRS=` set this to your reverse-proxy IP or CIDR when you want forwarded client IPs to participate in auth rate limiting
 - `FIELD_ENCRYPTION_KEY=` optional hex-encoded master key (>=32 bytes / 64 hex chars) that enables the TOTP second-factor surface; leave unset to disable 2FA entirely (see *Optional Two-Factor Authentication* below)
 - `TOTP_ISSUER=ovumcy-sync-community` optional label embedded in `otpauth://` provisioning URIs so authenticator apps know which instance the secret belongs to
@@ -284,6 +284,8 @@ ovumcy-sync-community purge-lapsed-accounts            # deletes eligible accoun
 ovumcy-sync-community purge-lapsed-accounts -dry-run    # report only, deletes nothing
 ovumcy-sync-community purge-lapsed-accounts -limit 200  # cap how many candidates one run examines
 ```
+
+The subcommand never migrates: against a database whose schema is not at its build's version it exits with an error and changes nothing. Run `migrate` with the same build first.
 
 Both triggers drive the identical eligibility path and are idempotent, so an existing cron or systemd timer alongside the in-process sweep is harmless — neither can delete anything the other would have spared. Each subcommand run prints a stable, greppable summary to stdout and never logs anything beyond account ids:
 
