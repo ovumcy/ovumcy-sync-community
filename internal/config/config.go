@@ -373,12 +373,20 @@ func csvListFromEnv(name string) []string {
 // unique-local IPv6 range (inside fc00::/7) may be as wide as fd00::/8, and any
 // other IPv6 range must be /32 or narrower.
 const (
-	MinTrustedProxyIPv4PrefixBits        = 8
-	MinTrustedProxyIPv6PrefixBits        = 32
-	MinTrustedProxyUniqueLocalPrefixBits = 8
+	minTrustedProxyIPv4PrefixBits        = 8
+	minTrustedProxyIPv6PrefixBits        = 32
+	minTrustedProxyUniqueLocalPrefixBits = 8
 )
 
-var uniqueLocalIPv6 = netip.MustParsePrefix("fc00::/7")
+var (
+	uniqueLocalIPv6         = netip.MustParsePrefix("fc00::/7")
+	errTrustedProxyTooBroad = fmt.Errorf(
+		"prefix is too broad; list the proxy's own address or network (at most an IPv4 /%d, an IPv6 /%d, or a unique-local IPv6 /%d)",
+		minTrustedProxyIPv4PrefixBits,
+		minTrustedProxyIPv6PrefixBits,
+		minTrustedProxyUniqueLocalPrefixBits,
+	)
+)
 
 // ParseTrustedProxyCIDR parses one TRUSTED_PROXY_CIDRS entry: either a CIDR
 // ("10.0.0.0/24") or a bare address ("127.0.0.1"), normalized to a masked,
@@ -413,19 +421,15 @@ func ParseTrustedProxyCIDR(value string) (netip.Prefix, error) {
 	}
 	addr = addr.WithZone("")
 
-	minBits := MinTrustedProxyIPv4PrefixBits
+	minBits := minTrustedProxyIPv4PrefixBits
 	if addr.Is6() {
-		minBits = MinTrustedProxyIPv6PrefixBits
+		minBits = minTrustedProxyIPv6PrefixBits
 		if uniqueLocalIPv6.Contains(addr) {
-			minBits = MinTrustedProxyUniqueLocalPrefixBits
+			minBits = minTrustedProxyUniqueLocalPrefixBits
 		}
 	}
 	if bits < minBits {
-		return netip.Prefix{}, fmt.Errorf(
-			"prefix /%d is broader than /%d; list the proxy's own address or network",
-			bits,
-			minBits,
-		)
+		return netip.Prefix{}, errTrustedProxyTooBroad
 	}
 
 	return netip.PrefixFrom(addr, bits).Masked(), nil
