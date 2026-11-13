@@ -116,6 +116,7 @@ detected and refused (`internal/db/migrations_schema_ahead_test.go`).
 | `recovery_key_packages` | 0002 | The client-wrapped recovery key package (opaque hex fields) |
 | `password_reset_tokens` | 0004 | One hashed reset token per account; `consumed_at` added in 0007 |
 | `totp_challenges` | 0005 | Hashed login second-factor challenge ids; `failed_attempts` added in 0006 |
+| `totp_failure_windows` | 0009 | Per-account failed-TOTP count and window start (unix seconds) |
 
 Every child table references `accounts(id)` with `ON DELETE CASCADE`, so account erasure is one delete.
 

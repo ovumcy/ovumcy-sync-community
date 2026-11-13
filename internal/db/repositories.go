@@ -219,6 +219,7 @@ func (s *Store) DeleteAccount(ctx context.Context, accountID string) error {
 		"recovery_key_packages",
 		"password_reset_tokens",
 		"totp_challenges",
+		"totp_failure_windows",
 	}
 	for _, table := range childTables {
 		if _, err := tx.ExecContext(
@@ -232,7 +233,7 @@ func (s *Store) DeleteAccount(ctx context.Context, accountID string) error {
 
 	result, err := tx.ExecContext(ctx, `DELETE FROM accounts WHERE id = ?`, accountID)
 	if err != nil {
-		return fmt.Errorf("delete account row: %w", err) // codecov:ignore -- isolating this specific step needs "accounts" to exist for all 6 child-table deletes above to succeed, then vanish only for this one; dropping "accounts" wholesale instead fails the very first child delete (confirmed empirically: with foreign_keys=ON, SQLite rejects DML against a child table whose FK-referenced table is gone, even though the statement never touches the FK column), same as TestDeleteAccountReturnsErrorAndRollsBackWhenAChildTableIsDropped. Needs a fake driver.
+		return fmt.Errorf("delete account row: %w", err) // codecov:ignore -- isolating this specific step needs "accounts" to exist for all 7 child-table deletes above to succeed, then vanish only for this one; dropping "accounts" wholesale instead fails the very first child delete (confirmed empirically: with foreign_keys=ON, SQLite rejects DML against a child table whose FK-referenced table is gone, even though the statement never touches the FK column), same as TestDeleteAccountReturnsErrorAndRollsBackWhenAChildTableIsDropped. Needs a fake driver.
 	}
 
 	affected, err := result.RowsAffected()
@@ -434,6 +435,7 @@ func (s *Store) DeleteLapsedManagedAccount(ctx context.Context, accountID string
 		"recovery_key_packages",
 		"password_reset_tokens",
 		"totp_challenges",
+		"totp_failure_windows",
 	}
 	for _, table := range childTables {
 		if _, err := tx.ExecContext(
@@ -713,6 +715,67 @@ func (s *Store) DeleteTOTPChallengeByHash(
 	)
 	if err != nil {
 		return fmt.Errorf("delete totp challenge: %w", err)
+	}
+	return nil
+}
+
+// ReserveTOTPAttempt takes one slot of the account's failed-TOTP budget
+// before a code is checked, in a single upsert: a window that started at or
+// before now-window restarts at now with the count at 1; otherwise the count
+// rises only while it is below maxAttempts. Reserving ahead of the check is
+// what stops concurrent guesses from each passing a stale read. When the
+// budget is spent it returns reserved=false and the instant the window ends.
+func (s *Store) ReserveTOTPAttempt(
+	ctx context.Context,
+	accountID string,
+	now time.Time,
+	window time.Duration,
+	maxAttempts int,
+) (reserved bool, windowEndsAt time.Time, err error) {
+	nowUnix := now.UTC().Unix()
+	cutoff := nowUnix - int64(window/time.Second)
+
+	var startedUnix int64
+	err = s.db.QueryRowContext(
+		ctx,
+		`INSERT INTO totp_failure_windows (account_id, window_started_unix, failed_attempts)
+VALUES (?1, ?2, 1)
+ON CONFLICT(account_id) DO UPDATE SET
+  window_started_unix = CASE WHEN window_started_unix <= ?3 THEN excluded.window_started_unix ELSE window_started_unix END,
+  failed_attempts = CASE WHEN window_started_unix <= ?3 THEN 1 ELSE failed_attempts + 1 END
+WHERE window_started_unix <= ?3 OR failed_attempts < ?4
+RETURNING window_started_unix`,
+		accountID,
+		nowUnix,
+		cutoff,
+		maxAttempts,
+	).Scan(&startedUnix)
+	if err == nil {
+		return true, time.Time{}, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return false, time.Time{}, fmt.Errorf("reserve totp attempt: %w", err)
+	}
+
+	if err := s.db.QueryRowContext(
+		ctx,
+		`SELECT window_started_unix FROM totp_failure_windows WHERE account_id = ?`,
+		accountID,
+	).Scan(&startedUnix); err != nil {
+		return false, time.Time{}, fmt.Errorf("read totp failure window: %w", err) // codecov:ignore -- the upsert above just found this row over budget in the same synchronous call; it vanishing before this read needs a concurrent account delete, a TOCTOU not deterministically reachable in-process.
+	}
+	return false, time.Unix(startedUnix, 0).UTC().Add(window), nil
+}
+
+// ResetTOTPFailures clears the account's failed-TOTP window after a
+// successful verify.
+func (s *Store) ResetTOTPFailures(ctx context.Context, accountID string) error {
+	if _, err := s.db.ExecContext(
+		ctx,
+		`DELETE FROM totp_failure_windows WHERE account_id = ?`,
+		accountID,
+	); err != nil {
+		return fmt.Errorf("reset totp failures: %w", err)
 	}
 	return nil
 }

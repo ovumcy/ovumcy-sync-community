@@ -65,7 +65,7 @@ func NewMetrics() *Metrics {
 			Namespace: "ovumcy",
 			Subsystem: "sync_community",
 			Name:      "totp_challenge_completion_total",
-			Help:      "TOTP login challenge outcomes (`ok`, `invalid_code`, `replayed`, `challenge_invalid`, `burnt`, `secret_failed`).",
+			Help:      "TOTP login challenge outcomes (`ok`, `invalid_code`, `replayed`, `challenge_invalid`, `burnt`, `locked`, `secret_failed`).",
 		},
 		[]string{"result"},
 	)
@@ -103,11 +103,12 @@ func (m *Metrics) ObserveTOTPEnrollmentCompletion(result string) {
 
 // ObserveTOTPChallengeCompletion records the outcome of a single
 // `POST /auth/totp/challenge` call. `result` must be one of: `ok`,
-// `invalid_code`, `replayed`, `challenge_invalid`, `burnt`,
+// `invalid_code`, `replayed`, `challenge_invalid`, `burnt`, `locked`,
 // `secret_failed`. The `burnt` label fires when the per-challenge
 // attempt counter crossed `maxTOTPChallengeFailedAttempts` and the
-// challenge id was destroyed — this is the alerting signal for an
-// online brute-force attempt.
+// challenge id was destroyed; `locked` fires when the account's
+// failed-TOTP window is spent. Both are alerting signals for an online
+// brute-force attempt.
 func (m *Metrics) ObserveTOTPChallengeCompletion(result string) {
 	if m == nil {
 		return

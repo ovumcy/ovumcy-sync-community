@@ -540,7 +540,9 @@ paths:
         Requires both the current password AND a current TOTP code, so a
         temporarily-borrowed authenticator alone cannot remove 2FA. On
         success, the secret is cleared, and every session and pending
-        challenge for the account is revoked/deleted.
+        challenge for the account is revoked/deleted. Code attempts here
+        share the account's failed-TOTP window with `/auth/totp/challenge`
+        (429 `rate_limited` once spent).
       security:
         - sessionBearerAuth: []
       requestBody:
@@ -607,7 +609,11 @@ paths:
         `POST /auth/login` plus a current authenticator code, and issues a
         session on success. Each challenge allows a bounded number of failed
         code attempts before it is burnt and the caller must restart from
-        password login.
+        password login. Code attempts are also capped per account across
+        all challenges (10 per 15-minute window, cleared by a successful
+        verify): past the cap this route answers 429 `rate_limited` with
+        `Retry-After` set to the end of the window, and logging in again
+        does not reset it.
       security: []
       requestBody:
         required: true

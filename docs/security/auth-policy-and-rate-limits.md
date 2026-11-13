@@ -92,6 +92,7 @@ Notes on the table:
 | Password-reset token lifetime | 30 minutes, single use (`PasswordResetTokenTTL`) | `internal/services/auth_service.go` |
 | TOTP login challenge lifetime | 5 minutes, single use (`TOTPChallengeTTL`) | `internal/services/totp_service.go` |
 | TOTP failed attempts per challenge | 5, after which the challenge is burnt (`maxTOTPChallengeFailedAttempts`) | `internal/services/totp_service.go` |
+| TOTP code attempts per account | 10 per fixed 15-minute window across all challenges and disable (`maxTOTPAccountFailedAttempts`, `TOTPFailureWindow`); past it 429 `rate_limited` until the window ends; a new login does not reset it, a successful verify does | `internal/services/totp_service.go`, `Store.ReserveTOTPAttempt` |
 | TOTP code | 6 digits, 30 s step; a used step cannot be replayed | `internal/security/totp.go`, `totp_replayed` |
 | TOTP secret at rest | AES-256-GCM under `FIELD_ENCRYPTION_KEY` | `internal/security/field_crypto.go` |
 
