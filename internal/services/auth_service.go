@@ -382,7 +382,14 @@ func (s *AuthService) ForgotPassword(
 		TokenHash: tokenHash,
 		CreatedAt: now,
 		ExpiresAt: expiresAt,
-	}); err != nil {
+	}, account.RecoveryCodeHash); err != nil {
+		// codecov:ignore:start -- TOCTOU: the code was rotated (or the account
+		// deleted) between the compare above and this write; the store-level
+		// guard is pinned by TestUpsertPasswordResetTokenRequiresVerifiedRecoveryHash.
+		if errors.Is(err, db.ErrNotFound) {
+			return ForgotPasswordResult{}, ErrInvalidRecoveryCredentials
+		}
+		// codecov:ignore:end
 		return ForgotPasswordResult{}, err
 	}
 

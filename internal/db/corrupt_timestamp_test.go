@@ -59,7 +59,7 @@ func newCorruptTimestampFixture(t *testing.T) corruptTimestampFixture {
 		TokenHash: "hash-corrupt-reset",
 		CreatedAt: now,
 		ExpiresAt: now.Add(30 * time.Minute),
-	}); err != nil {
+	}, "not-a-real-hash"); err != nil {
 		t.Fatalf("upsert reset token: %v", err)
 	}
 	if _, err := store.UpsertDevice(ctx, models.Device{

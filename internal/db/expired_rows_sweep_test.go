@@ -133,7 +133,7 @@ func TestDeleteExpiredPasswordResetTokensDeletesOnlyExpiredRows(t *testing.T) {
 		TokenHash: "hash-expired",
 		CreatedAt: cutoff.Add(-2 * time.Hour),
 		ExpiresAt: cutoff.Add(-time.Hour),
-	}); err != nil {
+	}, expiredOwner.RecoveryCodeHash); err != nil {
 		t.Fatalf("upsert expired reset token: %v", err)
 	}
 	if err := store.UpsertPasswordResetToken(ctx, models.PasswordResetToken{
@@ -141,7 +141,7 @@ func TestDeleteExpiredPasswordResetTokensDeletesOnlyExpiredRows(t *testing.T) {
 		TokenHash: "hash-live",
 		CreatedAt: cutoff.Add(-2 * time.Hour),
 		ExpiresAt: cutoff.Add(time.Hour),
-	}); err != nil {
+	}, liveOwner.RecoveryCodeHash); err != nil {
 		t.Fatalf("upsert live reset token: %v", err)
 	}
 
