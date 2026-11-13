@@ -444,6 +444,9 @@ func (s *Store) ApplyEntitlementSignal(ctx context.Context, accountID string, si
 			return ErrStaleEntitlementSignal
 		}
 		if !signal.Active && !signal.AsOf.IsZero() && orderAt < stored.Int64 {
+			if lapsedAt.Valid {
+				return nil // already lapsed by a newer signal
+			}
 			return ErrStaleEntitlementSignal
 		}
 		orderAt = max(orderAt, stored.Int64)
