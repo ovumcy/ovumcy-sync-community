@@ -188,7 +188,7 @@ func TestOpenFailsWhenParentDirectoryCannotBeCreated(t *testing.T) {
 // TestOpenFailsWhenSQLiteConfigurationRejectsTheDSN exercises Open's
 // "configure sqlite" error branch: the parent directory exists (MkdirAll
 // succeeds) but the path carries a malformed sqlite DSN query suffix, so
-// the very first Exec (the PRAGMA batch) fails. This is a real driver-level
+// the Ping that dials the first connection and runs its DSN pragmas fails. This is a real driver-level
 // DSN parse error reached through Open's public path argument, not a fake
 // driver.
 func TestOpenFailsWhenSQLiteConfigurationRejectsTheDSN(t *testing.T) {
