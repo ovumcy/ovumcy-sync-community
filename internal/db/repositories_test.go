@@ -556,7 +556,7 @@ func TestApplyEntitlementSignalOrdersAndRevokesInOneTransaction(t *testing.T) {
 		t.Fatalf("expected a reactivation older than the stored point to be stale, got %v", err)
 	}
 
-	// A lapse recorded before migration 0010 has no stored point; it is
+	// A lapse recorded before migration 0011 has no stored point; it is
 	// ordered by lapsed_at, so an older reactivation cannot undo it.
 	const legacyID = "managed-signal-legacy"
 	createLapseTestAccount(t, store, legacyID, "managed")
