@@ -371,14 +371,19 @@ func (s *Server) handleLogin(writer http.ResponseWriter, request *http.Request) 
 	// one victim's password / 2FA across many source IPs. Keying the
 	// secondary bucket on the normalized login string forces all those IPs
 	// to share one quota for that identifier, capping practical brute
-	// throughput against a single account. Trade-off: an attacker can lock
-	// out a known victim's login by spamming bad credentials; rate-limit
-	// burns out on its own window, and recovery-code is the unblock path.
+	// throughput against a single account. Only failures stay charged: a
+	// login that issues a session refunds its slot. Trade-off: an attacker
+	// can still lock out a known victim's login by spamming bad credentials
+	// for as long as the flood lasts; the bucket burns out on its own window,
+	// and proving the recovery code (forgot-password) clears it.
 	if !s.allowLoginRequestForIdentifier(writer, request, payload.Login) {
 		return
 	}
 
 	result, err := s.auth.Login(request.Context(), payload.Login, payload.Password)
+	if err == nil && result.TOTPChallenge == nil {
+		s.refundLoginIdentifier(payload.Login)
+	}
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrInvalidCredentials):
@@ -459,6 +464,10 @@ func (s *Server) handleForgotPassword(writer http.ResponseWriter, request *http.
 		}
 		return
 	}
+	// The recovery code is the account's catch-all credential, so whoever
+	// proves it is the owner: the login lockout an attacker built up against
+	// this identifier no longer stands between them and the reset login.
+	s.clearLoginIdentifier(payload.Login)
 
 	writeJSON(writer, http.StatusOK, result)
 }
@@ -1206,7 +1215,23 @@ func (s *Server) allowLoginRequestForIdentifier(
 	if normalized == "" {
 		return true
 	}
-	return allowUnderLimiter(s.authLimiter, writer, "login_identifier:"+normalized)
+	return allowUnderLimiter(s.authLimiter, writer, loginIdentifierKey(normalized))
+}
+
+func loginIdentifierKey(normalizedLogin string) string {
+	return "login_identifier:" + normalizedLogin
+}
+
+func (s *Server) refundLoginIdentifier(login string) {
+	if normalized := security.NormalizeLogin(login); normalized != "" {
+		s.authLimiter.Refund(loginIdentifierKey(normalized))
+	}
+}
+
+func (s *Server) clearLoginIdentifier(login string) {
+	if normalized := security.NormalizeLogin(login); normalized != "" {
+		s.authLimiter.Reset(loginIdentifierKey(normalized))
+	}
 }
 
 // clientIPForRateLimit resolves the rate-limit key for the caller. X-Real-IP is

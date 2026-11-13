@@ -65,8 +65,11 @@ Notes on the table:
   `GET /sync/devices`. `GET /sync/blob` and `GET /sync/recovery-key` are not in that set and use the
   10/min per-account budget.
 - Login carries a second ceiling keyed on the normalized login (`login_identifier:<login>` in the same
-  limiter), so a distributed attacker cannot multiply the budget across source IPs. The cost is that
-  someone can exhaust a known login's budget for the rest of the window. An empty login consumes no slot.
+  limiter), so a distributed attacker cannot multiply the budget across source IPs. A slot is reserved
+  before the password check and refunded when the login issues a session, so only failures (and
+  password successes that stop at a TOTP challenge) stay charged. The cost is that someone can exhaust a
+  known login's budget for as long as they keep failing; a successful `POST /auth/forgot-password`
+  (the recovery code proven) clears that login's bucket. An empty login consumes no slot.
 - `POST /auth/totp/challenge` answers 503 before limiting when TOTP is not configured.
 - The body is decoded strictly: unknown fields and trailing data are `400 invalid_json`, as is any body over
   the cap.

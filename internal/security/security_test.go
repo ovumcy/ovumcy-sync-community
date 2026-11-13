@@ -236,6 +236,44 @@ func TestRateLimiterResetsAfterWindow(t *testing.T) {
 	}
 }
 
+func TestRateLimiterRefundAndReset(t *testing.T) {
+	limiter := NewRateLimiter(1, time.Minute)
+	base := time.Date(2026, 3, 23, 9, 0, 0, 0, time.UTC)
+	limiter.now = func() time.Time { return base }
+
+	if !limiter.Allow("k") {
+		t.Fatal("expected first request to pass")
+	}
+	limiter.Refund("k")
+	if !limiter.Allow("k") {
+		t.Fatal("expected a refunded slot to be usable again")
+	}
+	if limiter.Allow("k") {
+		t.Fatal("expected the ceiling to hold after the refunded slot is spent")
+	}
+
+	limiter.Reset("k")
+	if !limiter.Allow("k") {
+		t.Fatal("expected Reset to open a fresh window")
+	}
+
+	// A refund never carries into a later window or below zero.
+	limiter.Refund("k")
+	limiter.Refund("k")
+	if !limiter.Allow("k") || limiter.Allow("k") {
+		t.Fatal("expected repeated refunds to restore at most the slots granted")
+	}
+	base = base.Add(2 * time.Minute)
+	limiter.Refund("k")
+	if !limiter.Allow("k") || limiter.Allow("k") {
+		t.Fatal("expected a refund against an expired window to be a no-op")
+	}
+	limiter.Refund("missing")
+	if _, ok := limiter.entries["missing"]; ok {
+		t.Fatal("expected Refund on an unknown key to create nothing")
+	}
+}
+
 // TestRateLimiterSweepsExpiredEntries proves the amortized sweep actually
 // removes entries whose window has fully elapsed, rather than leaking them for
 // the process lifetime. It also confirms the sweep is behavior-preserving: an
