@@ -746,11 +746,16 @@ func (s *Server) confirmCurrentPassword(
 		return true
 	case errors.Is(err, services.ErrInvalidCurrentPassword):
 		writeError(writer, http.StatusUnauthorized, "invalid_current_password")
+	// codecov:ignore:start -- withAuth has just loaded this account through the
+	// same FindAccountByID query, with no store write in between: a missing row
+	// is a concurrent-delete TOCTOU and a read error needs a fake driver (same
+	// limitation as the Authenticate TouchSession block).
 	case errors.Is(err, services.ErrUnauthorized):
 		writeError(writer, http.StatusUnauthorized, "unauthorized")
 	default:
 		writeError(writer, http.StatusInternalServerError, "internal_error")
 	}
+	// codecov:ignore:end
 	return false
 }
 

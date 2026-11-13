@@ -277,6 +277,21 @@ func TestDeleteAccountEndpointRequiresCurrentPassword(t *testing.T) {
 	}
 	decodeResponse(t, registerResponse.Body.Bytes(), &registerPayload)
 
+	malformed := performJSONRequest(
+		t,
+		handler,
+		http.MethodDelete,
+		"/account",
+		map[string]string{"current_password": "correct horse battery staple", "confirm": "yes"},
+		registerPayload.SessionToken,
+		http.StatusBadRequest,
+	)
+	var malformedPayload map[string]string
+	decodeResponse(t, malformed.Body.Bytes(), &malformedPayload)
+	if malformedPayload["error"] != "invalid_json" {
+		t.Fatalf("unexpected payload for an unknown field: %#v", malformedPayload)
+	}
+
 	for _, body := range []any{
 		map[string]string{"current_password": "wrong password here"},
 		map[string]string{},
