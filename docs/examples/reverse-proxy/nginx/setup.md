@@ -2,7 +2,8 @@
 
 A reference edge for `ovumcy-sync-community`: TLS termination, the real client address forwarded
 for rate limiting, a request size and timeout budget that fits blob uploads, and `/metrics` and
-`/managed/*` blocked publicly. [nginx.conf](nginx.conf) is a `conf.d` file; adapt `server_name` and the certificate paths.
+`/managed/*` blocked publicly. [nginx.conf](nginx.conf) is a `conf.d` file; adapt `server_name` and
+the certificate paths.
 
 ## What it does and why
 

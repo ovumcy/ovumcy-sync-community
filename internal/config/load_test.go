@@ -28,13 +28,13 @@ var loadEnvVars = []string{
 	"LAPSED_ACCOUNT_GRACE_PERIOD",
 }
 
+// bridgeTokenFixture is exactly MinManagedBridgeTokenBytes long.
+const bridgeTokenFixture = "bridge-token-fixture-32-bytes-ok"
+
 // clearLoadEnv resets every Load-relevant environment variable to empty via
 // t.Setenv, so Load observes only the overrides a test explicitly sets
 // afterward. t.Setenv restores the prior value on test cleanup, so this is
 // safe to call from every subtest without cross-test leakage.
-// bridgeTokenFixture is exactly MinManagedBridgeTokenBytes long.
-const bridgeTokenFixture = "bridge-token-fixture-32-bytes-ok"
-
 func clearLoadEnv(t *testing.T) {
 	t.Helper()
 	for _, name := range loadEnvVars {
