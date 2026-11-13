@@ -113,12 +113,55 @@ func TestRunPurgeLapsedAccountsPropagatesDBOpenError(t *testing.T) {
 	}
 }
 
-// TestRunPurgeLapsedAccountsPropagatesApplyMigrationsError marks migration
-// 0001_init.sql as already applied without actually running it, so
-// ApplyMigrations skips straight to 0003_managed_account_fields.sql (which
-// ALTER TABLEs the accounts table 0001 would have created) and fails against
-// the missing table.
-func TestRunPurgeLapsedAccountsPropagatesApplyMigrationsError(t *testing.T) {
+// migratedDBPath returns a fresh database path that `serve` has already
+// brought to this build's schema, which the purge now requires.
+func migratedDBPath(t *testing.T, name string) string {
+	t.Helper()
+
+	dbPath := filepath.Join(t.TempDir(), name)
+	store, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := store.ApplyMigrations(context.Background()); err != nil {
+		t.Fatalf("apply migrations: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	return dbPath
+}
+
+func TestRunPurgeLapsedAccountsRefusesUnmigratedDatabase(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "fresh.sqlite")
+
+	var buf bytes.Buffer
+	err := runPurgeLapsedAccounts(testConfigForDBPath(dbPath), nil, &buf)
+	if !errors.Is(err, errSchemaNotCurrent) {
+		t.Fatalf("expected errSchemaNotCurrent on a fresh database, got %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("expected no output on refusal, got %q", buf.String())
+	}
+
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer func() { _ = raw.Close() }()
+	var tables int
+	if err := raw.QueryRow(`SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 'accounts'`).Scan(&tables); err != nil {
+		t.Fatalf("inspect schema: %v", err)
+	}
+	if tables != 0 {
+		t.Fatal("expected the purge to leave an unmigrated database unmigrated")
+	}
+}
+
+// TestRunPurgeLapsedAccountsRefusesPendingMigrations marks only
+// 0001_init.sql as applied: the remaining migrations are pending, and the
+// purge must refuse rather than apply them.
+func TestRunPurgeLapsedAccountsRefusesPendingMigrations(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "fake-applied.sqlite")
 
 	raw, err := sql.Open("sqlite", dbPath)
@@ -139,16 +182,29 @@ func TestRunPurgeLapsedAccountsPropagatesApplyMigrationsError(t *testing.T) {
 
 	var buf bytes.Buffer
 	err = runPurgeLapsedAccounts(cfg, nil, &buf)
-	if err == nil || !strings.Contains(err.Error(), "apply migrations") {
-		t.Fatalf("expected an apply-migrations error, got %v", err)
+	if !errors.Is(err, errSchemaNotCurrent) {
+		t.Fatalf("expected errSchemaNotCurrent, got %v", err)
 	}
 	if buf.Len() != 0 {
-		t.Fatalf("expected no output on an apply-migrations failure, got %q", buf.String())
+		t.Fatalf("expected no output on refusal, got %q", buf.String())
+	}
+
+	raw, err = sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer func() { _ = raw.Close() }()
+	var applied int
+	if err := raw.QueryRow(`SELECT COUNT(1) FROM schema_migrations`).Scan(&applied); err != nil {
+		t.Fatalf("count applied migrations: %v", err)
+	}
+	if applied != 1 {
+		t.Fatalf("expected the purge to apply nothing, schema_migrations has %d rows", applied)
 	}
 }
 
 func TestRunPurgeLapsedAccountsReportsZeroOnEmptyDatabase(t *testing.T) {
-	cfg := testConfigForDBPath(filepath.Join(t.TempDir(), "empty.sqlite"))
+	cfg := testConfigForDBPath(migratedDBPath(t, "empty.sqlite"))
 
 	var buf bytes.Buffer
 	if err := runPurgeLapsedAccounts(cfg, nil, &buf); err != nil {
@@ -270,11 +326,11 @@ func TestRunPurgeLapsedAccountsReportsPartialProgressOnRunError(t *testing.T) {
 }
 
 func TestRunPurgeLapsedAccountsPropagatesSummaryWriteError(t *testing.T) {
-	cfg := testConfigForDBPath(filepath.Join(t.TempDir(), "write-fail-summary.sqlite"))
+	cfg := testConfigForDBPath(migratedDBPath(t, "write-fail-summary.sqlite"))
 
 	writer := &failingWriter{failAfter: 0}
-	if err := runPurgeLapsedAccounts(cfg, nil, writer); err == nil {
-		t.Fatal("expected a write error from the summary line")
+	if err := runPurgeLapsedAccounts(cfg, nil, writer); err == nil || errors.Is(err, errSchemaNotCurrent) {
+		t.Fatalf("expected a write error from the summary line, got %v", err)
 	}
 }
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -37,13 +38,18 @@ import (
 //	-limit N     cap how many candidate lapsed accounts this run examines
 //	             (0 or omitted = db.DefaultLapsedAccountSweepLimit)
 //
-// On a setup failure (bad flags, cannot open/migrate the database) nothing
+// On a setup failure (bad flags, cannot open the database, schema not at this
+// build's version) nothing
 // is written to w and the error is returned immediately. Once the sweep
 // itself has run, its report (examined/deleted counts, and the id of each
 // account actually deleted — account ids only, never any other field) is
 // written to w as stable key=value lines BEFORE any run error is returned,
 // mirroring gc-guest-accounts's "report the counts before the error"
 // convention.
+var errSchemaNotCurrent = errors.New(
+	"database schema is not at this build's version; run `migrate` with this build first, then rerun",
+)
+
 func runPurgeLapsedAccounts(cfg config.Config, args []string, w io.Writer) error {
 	flagSet := flag.NewFlagSet("purge-lapsed-accounts", flag.ContinueOnError)
 	flagSet.SetOutput(io.Discard)
@@ -61,9 +67,16 @@ func runPurgeLapsedAccounts(cfg config.Config, args []string, w io.Writer) error
 		_ = store.Close()
 	}()
 
+	// A maintenance command must not change the schema as a side effect: an
+	// operator running it against a database the deployed server has not yet
+	// migrated (or against a backup) would otherwise upgrade it unasked.
 	ctx := context.Background()
-	if err := store.ApplyMigrations(ctx); err != nil {
-		return fmt.Errorf("apply migrations: %w", err)
+	ready, err := store.SchemaReady(ctx)
+	if err != nil {
+		return fmt.Errorf("check schema: %w", err)
+	}
+	if !ready {
+		return errSchemaNotCurrent
 	}
 
 	sweepService := services.NewLapsedAccountSweepService(store, cfg.LapsedAccountGracePeriod)

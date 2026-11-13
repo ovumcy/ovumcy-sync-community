@@ -31,7 +31,7 @@ authenticated account id; **login** is the lowercased, trimmed login from the re
 | --- | --- | --- | --- | --- |
 | `GET /healthz` | none | none (deliberate) | unlimited | none |
 | `GET /readyz` | none | none (deliberate) | unlimited | none |
-| `GET /metrics` | optional bearer `METRICS_BEARER_TOKEN`; 404 unless `METRICS_ENABLED` | none (deliberate) | unlimited | none |
+| `GET /metrics` | bearer `METRICS_BEARER_TOKEN` (required when `METRICS_ENABLED`); 404 unless `METRICS_ENABLED` | none (deliberate) | unlimited | none |
 | `POST /auth/register` | none | auth, IP | 10/min | 4 KiB |
 | `POST /auth/login` | none | auth, IP, and a second auth bucket on login | 10/min each; both must pass | 4 KiB |
 | `POST /auth/forgot-password` | none | auth, IP | 10/min | 4 KiB |
@@ -70,7 +70,11 @@ Notes on the table:
   password successes that stop at a TOTP challenge) stay charged. The cost is that someone can exhaust a
   known login's budget for as long as they keep failing; a successful `POST /auth/forgot-password`
   (the recovery code proven) clears that login's bucket. An empty login consumes no slot.
-- `POST /auth/totp/challenge` answers 503 before limiting when TOTP is not configured.
+- `POST /auth/totp/challenge` is limited before it reports `503 totp_not_configured`, so the
+  configuration cannot be probed at an unmetered rate.
+- Every session-authenticated route first passes a per-client-IP bucket (`unauthenticated:<ip>` in the
+  read-state limiter, 30x budget) before the session lookup. A valid session refunds its slot, so only
+  failed lookups stay charged and callers sharing an address are not throttled by each other's traffic.
 - The body is decoded strictly: unknown fields and trailing data are `400 invalid_json`, as is any body over
   the cap.
 - Raising `AUTH_RATE_LIMIT_COUNT` or `AUTH_RATE_LIMIT_WINDOW` moves every bucket; the read budget has no
@@ -81,7 +85,8 @@ Notes on the table:
 - `GET /healthz`, `GET /readyz`: polled on a fixed interval by the container `HEALTHCHECK` and by uptime
   monitors. A 429 would be reported as an outage and could get a healthy server restarted. Both are
   cheap.
-- `GET /metrics`: a scrape endpoint, off unless `METRICS_ENABLED`, gated by `METRICS_BEARER_TOKEN` when set.
+- `GET /metrics`: a scrape endpoint, off unless `METRICS_ENABLED`, always gated by `METRICS_BEARER_TOKEN`
+  (startup refuses `METRICS_ENABLED=true` without it).
 - `/managed/*`: unreachable without the operator-held `MANAGED_BRIDGE_TOKEN` (at least 32 bytes,
   enforced at startup), refused at the public edge by the bundled proxy examples, and its one caller is a
   first-party service that may reconcile in bursts. A per-IP ceiling would throttle the operator's own

@@ -112,7 +112,7 @@ go run ./cmd/ovumcy-sync-community serve
 | `AUTH_RATE_LIMIT_COUNT` | `10` | Requests per window, per route: anonymous auth routes count per client IP, authenticated routes (including `GET /sync/blob` and `GET /sync/recovery-key`) per account, and `POST /auth/login` also per login identifier across all IPs. Only `GET /auth/session`, `GET /sync/capabilities`, and `GET /sync/devices` get 30× this, per account |
 | `AUTH_RATE_LIMIT_WINDOW` | `1m` | Auth rate-limit window |
 | `METRICS_ENABLED` | `false` | Enables `GET /metrics` |
-| `METRICS_BEARER_TOKEN` | _(unset)_ | Bearer token for `/metrics` (requires `METRICS_ENABLED=true`) |
+| `METRICS_BEARER_TOKEN` | _(unset)_ | Bearer token for `/metrics`; required when `METRICS_ENABLED=true`, rejected otherwise |
 | `MANAGED_BRIDGE_TOKEN` | _(unset)_ | Enables the managed-bridge endpoints (leave unset for community use) |
 | `ALLOWED_ORIGINS` | _(empty)_ | Explicit CORS allowlist for browser clients |
 | `TRUSTED_PROXY_CIDRS` | _(unset)_ | Reverse-proxy CIDRs whose forwarded client IP is trusted for rate limiting; a range wider than an IPv4 /8, an IPv6 /32 or a unique-local IPv6 /8 fails startup |
@@ -149,7 +149,7 @@ TOTP endpoints stay inactive (`503 totp_not_configured`) until `FIELD_ENCRYPTION
 - Put the service behind HTTPS (terminate TLS at a reverse proxy such as Caddy, Nginx, or Traefik).
 - Persist the `/data` volume so SQLite survives restarts.
 - Set `TRUSTED_PROXY_CIDRS` to your reverse-proxy addresses so auth rate limiting sees real client IPs. The proxy must send `X-Forwarded-For` (`X-Real-IP` is not read); without a trusted proxy every client shares the proxy's single rate-limit bucket.
-- Enable `METRICS_ENABLED` only when needed, and keep `/metrics` internal or protect it with `METRICS_BEARER_TOKEN`.
+- Enable `METRICS_ENABLED` only when needed; it requires `METRICS_BEARER_TOKEN`, and `/metrics` should stay internal as well.
 - Leave `MANAGED_BRIDGE_TOKEN` unset unless you operate a separate trusted managed-auth service.
 - Set `ALLOWED_ORIGINS` only when browser clients need direct CORS access.
 

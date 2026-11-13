@@ -131,7 +131,6 @@ the strength of the phrase and the client KDF, which are client concerns and out
 
 ### Metrics endpoint exposure
 
-- Mitigation: the endpoint is off unless `METRICS_ENABLED=true`; with `METRICS_BEARER_TOKEN` set it
-  requires that token, compared in constant time (`handleMetrics`).
-- Residual: with metrics enabled and no token, the endpoint is unauthenticated; restrict it at the
-  proxy or network layer.
+- Mitigation: the endpoint is off unless `METRICS_ENABLED=true`, and startup refuses that setting
+  without `METRICS_BEARER_TOKEN`; the token is compared in constant time (`handleMetrics`).
+- Residual: anyone holding the token reads the counters; keep the endpoint internal as well.

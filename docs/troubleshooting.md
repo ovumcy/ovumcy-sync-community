@@ -112,7 +112,7 @@ answers `OPTIONS` itself, make sure it does not strip these headers.
 ## `/metrics` returns `404 not_found`, `401 unauthorized` or `403`
 
 - `404 not_found` — `METRICS_ENABLED` is not `true`; the endpoint is off by default.
-- `401 unauthorized` — `METRICS_BEARER_TOKEN` is set and the scraper did not send a matching
+- `401 unauthorized` — the scraper did not send `METRICS_BEARER_TOKEN` as a matching
   `Authorization: Bearer <token>`.
 - `403` with body `metrics_not_exposed` — the reference proxy configs block `/metrics` at the
   public edge on purpose. Scrape it from inside the Docker network instead of through the proxy.
