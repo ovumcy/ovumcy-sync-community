@@ -88,6 +88,9 @@ func TestReLoginCannotResetTheAccountTOTPBudget(t *testing.T) {
 			if !errors.As(err, &locked) {
 				t.Fatalf("cycle %d attempt %d: expected ErrTOTPLocked, got %v", cycle, attempt, err)
 			}
+			if locked.Error() != ErrTOTPLocked.Error() {
+				t.Fatalf("locked error text = %q, want %q", locked.Error(), ErrTOTPLocked.Error())
+			}
 			if locked.RetryAfter <= 0 || locked.RetryAfter > TOTPFailureWindow {
 				t.Fatalf("attempt %d: RetryAfter %v outside (0, %v]", attempt, locked.RetryAfter, TOTPFailureWindow)
 			}
