@@ -99,6 +99,10 @@ func TestBindSessionToDeviceIsOnceAndAccountScoped(t *testing.T) {
 	if err := store.BindSessionToDevice(ctx, "acct-b", "a-session", "device-first11"); err != nil {
 		t.Fatalf("cross-account bind: %v", err)
 	}
+	// A device removed before the bind lands must not capture the session.
+	if err := store.BindSessionToDevice(ctx, "acct-a", "a-session", "device-removed"); err != nil {
+		t.Fatalf("bind to a missing device: %v", err)
+	}
 	if err := store.BindSessionToDevice(ctx, "acct-a", "a-session", "device-first11"); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
