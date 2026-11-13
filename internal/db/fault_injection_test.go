@@ -1223,6 +1223,18 @@ func TestDeleteLapsedManagedAccountFaultInjection(t *testing.T) {
 	})
 }
 
+func TestUpdateAccountRecoveryCodeHashFailsAtBeginTransactionOnClosedStore(t *testing.T) {
+	store := openTestStore(t)
+	if err := store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	err := store.UpdateAccountRecoveryCodeHash(context.Background(), "account-target", "any-recovery-hash")
+	if err == nil || !strings.Contains(err.Error(), "begin update account recovery code") {
+		t.Fatalf("expected the begin-transaction error to surface, got %v", err)
+	}
+}
+
 // TestDeleteAccountFailsAtBeginTransactionOnClosedStore exercises
 // DeleteAccount's BeginTx error branch, mirroring
 // TestDeleteLapsedManagedAccountFaultInjection's identical "closed store"

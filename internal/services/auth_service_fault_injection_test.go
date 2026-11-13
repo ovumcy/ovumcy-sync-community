@@ -430,10 +430,21 @@ func TestRegenerateRecoveryCodeStoreErrors(t *testing.T) {
 		if err != nil {
 			t.Fatalf("register: %v", err)
 		}
+		before, err := store.FindAccountByID(ctx, registered.AccountID)
+		if err != nil {
+			t.Fatalf("find account: %v", err)
+		}
 		dropTable(t, dbPath, "password_reset_tokens")
 
 		if _, err := service.RegenerateRecoveryCode(ctx, registered.AccountID, password); err == nil {
 			t.Fatal("expected the reset-token cleanup failure to surface")
+		}
+		after, err := store.FindAccountByID(ctx, registered.AccountID)
+		if err != nil {
+			t.Fatalf("find account after failed rotation: %v", err)
+		}
+		if after.RecoveryCodeHash != before.RecoveryCodeHash {
+			t.Fatal("a failed cleanup must roll the rotation back; the hash changed")
 		}
 	})
 }

@@ -160,12 +160,24 @@ func (s *Store) UpdateAccountPasswordAndRecoveryHash(
 	return nil
 }
 
+// UpdateAccountRecoveryCodeHash rotates the recovery code hash and deletes the
+// account's pending reset tokens in one transaction: a token issued against
+// the old code must not outlive the rotation, and a failed cleanup must not
+// leave the hash rotated with the new code never handed out.
 func (s *Store) UpdateAccountRecoveryCodeHash(
 	ctx context.Context,
 	accountID string,
 	recoveryCodeHash string,
 ) error {
-	result, err := s.db.ExecContext(
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin update account recovery code: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	result, err := tx.ExecContext(
 		ctx,
 		`UPDATE accounts SET recovery_code_hash = ? WHERE id = ?`,
 		recoveryCodeHash,
@@ -181,6 +193,18 @@ func (s *Store) UpdateAccountRecoveryCodeHash(
 	}
 	if affected == 0 {
 		return ErrNotFound
+	}
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`DELETE FROM password_reset_tokens WHERE account_id = ?`,
+		accountID,
+	); err != nil {
+		return fmt.Errorf("delete reset tokens on recovery code rotation: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit update account recovery code: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteAccount's COMMIT branch in fault_injection_test.go.
 	}
 
 	return nil
