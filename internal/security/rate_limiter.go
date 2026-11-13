@@ -82,6 +82,31 @@ func (l *RateLimiter) allowLocked(key string, now time.Time) bool {
 	return true
 }
 
+// Refund returns one slot that Allow granted to key in the current window, so
+// a caller can reserve before slow work and give the slot back when the
+// outcome should not count. Reserving first keeps the ceiling exact under
+// concurrency: parallel requests cannot all pass a check that has not been
+// charged yet.
+func (l *RateLimiter) Refund(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	entry, exists := l.entries[key]
+	if !exists || entry.count <= 0 || l.now().UTC().Sub(entry.windowStart) >= l.window {
+		return
+	}
+	entry.count--
+	l.entries[key] = entry
+}
+
+// Reset drops key's window, so its next Allow starts a fresh one.
+func (l *RateLimiter) Reset(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	delete(l.entries, key)
+}
+
 // maybeSweepLocked runs an amortized, opportunistic sweep of expired entries.
 // It is called from Allow with l.mu already held and fires once every
 // rateLimiterSweepInterval Allow calls. The trigger is deliberately
