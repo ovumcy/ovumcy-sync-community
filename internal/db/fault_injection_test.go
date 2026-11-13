@@ -1078,6 +1078,25 @@ func TestLapseMarkerMethodsReturnErrorWhenAccountsTableIsDropped(t *testing.T) {
 	}
 }
 
+// TestApplyEntitlementSignalSurfacesCorruptLegacyLapsedAt: a legacy lapse
+// (no stored ordering point) whose lapsed_at cannot be parsed fails the
+// signal instead of ordering it against nothing.
+func TestApplyEntitlementSignalSurfacesCorruptLegacyLapsedAt(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	const accountID = "managed-corrupt-lapse"
+	createLapseTestAccount(t, store, accountID, "managed")
+
+	if _, err := store.db.ExecContext(ctx, `UPDATE accounts SET lapsed_at = 'not-a-time' WHERE id = ?`, accountID); err != nil {
+		t.Fatalf("corrupt lapsed_at: %v", err)
+	}
+
+	now := time.Now().UTC()
+	if err := store.ApplyEntitlementSignal(ctx, accountID, EntitlementSignal{Active: true, AsOf: now, ReceivedAt: now}); err == nil || errors.Is(err, ErrStaleEntitlementSignal) {
+		t.Fatalf("expected a scan error for a corrupt lapsed_at, got %v", err)
+	}
+}
+
 // TestListLapsedManagedAccountIDsSurfacesScanErrorOnNullAccountID exercises
 // ListLapsedManagedAccountIDs' rows.Scan error branch with a real corrupted
 // row rather than a fake driver. accounts.id is `TEXT PRIMARY KEY` with no

@@ -31,6 +31,8 @@ var ErrDeviceLimitReached = errors.New("device_limit_reached")
 
 // ErrAccountLapsed is returned by UpsertManagedAccount when the managed
 // account carries an entitlement-lapse marker: a mint never reverses a lapse.
+// It also covers an id that turned self-hosted after the caller's mode check;
+// the upsert leaves such a row untouched.
 var ErrAccountLapsed = errors.New("account_lapsed")
 
 // ErrStaleEntitlementSignal is returned by ApplyEntitlementSignal when a
@@ -77,7 +79,7 @@ ON CONFLICT(id) DO UPDATE SET
   password_hash = excluded.password_hash,
   mode = excluded.mode,
   premium_active = excluded.premium_active
-WHERE accounts.lapsed_at IS NULL
+WHERE accounts.lapsed_at IS NULL AND accounts.mode = 'managed'
 `,
 		account.ID,
 		account.Login,
@@ -365,7 +367,9 @@ type EntitlementSignal struct {
 //     recorded, so replay never extends the grace period) and deletes every
 //     session the account holds.
 //
-// A refused signal returns ErrStaleEntitlementSignal and changes nothing.
+// A refused signal returns ErrStaleEntitlementSignal and changes nothing; a
+// retry of the reactivation that set the stored point is a no-op success. A
+// lapse recorded without a stored point is ordered by its lapsed_at.
 // The stored point only moves forward. Returns ErrNotFound when accountID
 // does not exist or is not a managed account.
 func (s *Store) ApplyEntitlementSignal(ctx context.Context, accountID string, signal EntitlementSignal) error {
@@ -379,11 +383,12 @@ func (s *Store) ApplyEntitlementSignal(ctx context.Context, accountID string, si
 
 	var mode string
 	var stored sql.NullInt64
+	var lapsedAt sql.NullString
 	err = tx.QueryRowContext(
 		ctx,
-		`SELECT mode, entitlement_signal_as_of FROM accounts WHERE id = ?`,
+		`SELECT mode, entitlement_signal_as_of, lapsed_at FROM accounts WHERE id = ?`,
 		accountID,
-	).Scan(&mode, &stored)
+	).Scan(&mode, &stored, &lapsedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
@@ -393,12 +398,24 @@ func (s *Store) ApplyEntitlementSignal(ctx context.Context, accountID string, si
 	if mode != "managed" {
 		return ErrNotFound
 	}
+	if !stored.Valid && lapsedAt.Valid {
+		// A lapse recorded before signals carried an ordering point is
+		// ordered by its own lapsed_at, so a stale reactivation cannot undo it.
+		legacyLapse, err := parseStoredTime(lapsedAt.String)
+		if err != nil {
+			return fmt.Errorf("account lapsed_at: %w", err)
+		}
+		stored = sql.NullInt64{Int64: legacyLapse.UnixNano(), Valid: true}
+	}
 
 	orderAt := signal.ReceivedAt.UnixNano()
 	if !signal.AsOf.IsZero() {
 		orderAt = signal.AsOf.UnixNano()
 	}
 	if stored.Valid {
+		if signal.Active && orderAt == stored.Int64 && !lapsedAt.Valid {
+			return nil // a retried reactivation that already applied
+		}
 		if signal.Active && orderAt <= stored.Int64 {
 			return ErrStaleEntitlementSignal
 		}
