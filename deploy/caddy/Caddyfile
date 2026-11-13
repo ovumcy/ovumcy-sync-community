@@ -4,5 +4,12 @@
 		body "metrics_not_exposed"
 	}
 
+	# The managed bridge is called by ovumcy-managed over the private network,
+	# never through the public edge.
+	@managed path /managed /managed/*
+	respond @managed 403 {
+		body "managed_bridge_not_exposed"
+	}
+
 	reverse_proxy ovumcy-sync-community:8080
 }

@@ -44,14 +44,15 @@ services:
       - traefik.http.routers.ovumcy-sync.service=ovumcy-sync
       - traefik.http.routers.ovumcy-sync.middlewares=ovumcy-sync-body
 
-      # /metrics is never public: higher priority router, answered by the
-      # same service but with an IP allowlist that matches nothing, giving 403.
-      - traefik.http.routers.ovumcy-sync-metrics.rule=Host(`${SYNC_HOST}`) && Path(`/metrics`)
-      - traefik.http.routers.ovumcy-sync-metrics.priority=100
-      - traefik.http.routers.ovumcy-sync-metrics.entrypoints=websecure
-      - traefik.http.routers.ovumcy-sync-metrics.tls.certresolver=le
-      - traefik.http.routers.ovumcy-sync-metrics.service=ovumcy-sync
-      - traefik.http.routers.ovumcy-sync-metrics.middlewares=ovumcy-sync-deny
+      # /metrics and the managed bridge are never public: higher priority
+      # router, answered by the same service but with an IP allowlist that
+      # matches nothing, giving 403.
+      - traefik.http.routers.ovumcy-sync-internal.rule=Host(`${SYNC_HOST}`) && (Path(`/metrics`) || Path(`/managed`) || PathPrefix(`/managed/`))
+      - traefik.http.routers.ovumcy-sync-internal.priority=100
+      - traefik.http.routers.ovumcy-sync-internal.entrypoints=websecure
+      - traefik.http.routers.ovumcy-sync-internal.tls.certresolver=le
+      - traefik.http.routers.ovumcy-sync-internal.service=ovumcy-sync
+      - traefik.http.routers.ovumcy-sync-internal.middlewares=ovumcy-sync-deny
 
       # Body limit: 32 MiB (the app accepts about 21.3 MiB for a 16 MiB blob).
       - traefik.http.middlewares.ovumcy-sync-body.buffering.maxrequestbodybytes=33554432

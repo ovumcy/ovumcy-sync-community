@@ -12,7 +12,9 @@ services:
     depends_on:
       - ovumcy-sync-community
     environment:
-      SYNC_SITE_ADDRESS: "${SYNC_SITE_ADDRESS:-:80}"
+      # A hostname makes Caddy obtain a certificate and serve HTTPS; there is
+      # deliberately no default, since a bare port would serve plain HTTP.
+      SYNC_SITE_ADDRESS: "${SYNC_SITE_ADDRESS:?set SYNC_SITE_ADDRESS to the public hostname, e.g. sync.example.com}"
     ports:
       - "80:80"
       - "443:443"

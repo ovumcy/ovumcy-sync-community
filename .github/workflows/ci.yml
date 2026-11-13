@@ -292,7 +292,16 @@ jobs:
         run: docker compose config
 
       - name: Docker Compose config with Caddy example
+        env:
+          SYNC_SITE_ADDRESS: sync.example.com
         run: docker compose -f docker-compose.yml -f docker-compose.caddy.yml config
+
+      - name: Caddy example refuses to start without a site address
+        run: |
+          if docker compose -f docker-compose.yml -f docker-compose.caddy.yml config >/dev/null 2>&1; then
+            echo "docker-compose.caddy.yml accepted an unset SYNC_SITE_ADDRESS"
+            exit 1
+          fi
 
       - name: Docker build
         run: docker build -t ovumcy-sync-community-ci:${{ github.sha }} .

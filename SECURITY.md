@@ -247,6 +247,7 @@ on the account's next successful login.
 | Claim | Enforced by |
 | --- | --- |
 | `POST /managed/session` is disabled unless `MANAGED_BRIDGE_TOKEN` is configured; requests without the bearer are refused | `TestServerRejectsManagedBridgeWhenDisabled` in [internal/api/server_test.go](internal/api/server_test.go) |
+| A set `MANAGED_BRIDGE_TOKEN` shorter than 32 bytes (after trimming) is a startup error | `TestLoadSurfacesEveryValidationAndParseError` in [internal/config/load_test.go](internal/config/load_test.go) |
 | A valid bridge token issues a managed session that authenticates against `/sync/capabilities` | `TestServerIssuesManagedBridgeSession` in [internal/api/server_test.go](internal/api/server_test.go) |
 | The bridge rejects too-short account IDs | `TestManagedBridgeRejectsInvalidAccountID` in [internal/services/managed_bridge_service_test.go](internal/services/managed_bridge_service_test.go) |
 | The bridge rejects reuse of an existing self-hosted account ID | `TestManagedBridgeRejectsExistingSelfHostedAccount` in [internal/services/managed_bridge_service_test.go](internal/services/managed_bridge_service_test.go) |
