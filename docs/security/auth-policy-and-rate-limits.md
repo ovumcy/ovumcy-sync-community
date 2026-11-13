@@ -19,7 +19,8 @@ A throttled request gets `429` with `{"error": "rate_limited"}` and `Retry-After
 every route has its own bucket. Limiter state is in memory, per process.
 
 Limiter keys: **IP** is the client IP resolved by `clientIPForRateLimit` (the socket peer, or the
-rightmost non-trusted forwarded address when the peer is in `TRUSTED_PROXY_CIDRS`); **account** is the
+rightmost non-trusted forwarded address when the peer is in `TRUSTED_PROXY_CIDRS`), an IPv6 client
+keyed by its /64; **account** is the
 authenticated account id; **login** is the lowercased, trimmed login from the request body.
 
 ## Routes

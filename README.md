@@ -148,7 +148,7 @@ TOTP endpoints stay inactive (`503 totp_not_configured`) until `FIELD_ENCRYPTION
 
 - Put the service behind HTTPS (terminate TLS at a reverse proxy such as Caddy, Nginx, or Traefik).
 - Persist the `/data` volume so SQLite survives restarts.
-- Set `TRUSTED_PROXY_CIDRS` to your reverse-proxy addresses so auth rate limiting sees real client IPs. The proxy must send `X-Forwarded-For` (or, failing that, `X-Real-IP`); without a trusted proxy every client shares the proxy's single rate-limit bucket.
+- Set `TRUSTED_PROXY_CIDRS` to your reverse-proxy addresses so auth rate limiting sees real client IPs. The proxy must send `X-Forwarded-For` (`X-Real-IP` is not read); without a trusted proxy every client shares the proxy's single rate-limit bucket.
 - Enable `METRICS_ENABLED` only when needed, and keep `/metrics` internal or protect it with `METRICS_BEARER_TOKEN`.
 - Leave `MANAGED_BRIDGE_TOKEN` unset unless you operate a separate trusted managed-auth service.
 - Set `ALLOWED_ORIGINS` only when browser clients need direct CORS access.
