@@ -324,10 +324,9 @@ func (s *AuthService) ChangePassword(
 	// A login challenge minted under the old password would otherwise still
 	// complete into a session after the change. Challenges go before sessions,
 	// as in ResetPassword, so a verify racing this call is more likely to land
-	// its session before the revoke below.
-	if err := s.store.DeleteTOTPChallengesForAccount(ctx, accountID); err != nil {
-		return err
-	}
+	// its session before the revoke below. A failed challenge delete must not
+	// skip the revoke, so its error is returned only after it.
+	challengeErr := s.store.DeleteTOTPChallengesForAccount(ctx, accountID)
 
 	if err := s.store.DeleteSessionsForAccountExcept(ctx, accountID, currentSessionTokenHash); err != nil {
 		return err
@@ -337,7 +336,7 @@ func (s *AuthService) ChangePassword(
 		return err
 	}
 
-	return nil
+	return challengeErr
 }
 
 // ForgotPassword verifies an account-level recovery code and issues a

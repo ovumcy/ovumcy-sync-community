@@ -240,6 +240,9 @@ func TestChangePasswordStoreErrors(t *testing.T) {
 		if !strings.Contains(err.Error(), "delete totp challenges") {
 			t.Fatalf("expected the challenge cleanup store error to surface, got %v", err)
 		}
+		if _, err := store.FindSessionByTokenHash(ctx, security.HashToken(result.SessionToken)); err == nil {
+			t.Fatal("expected sessions to be revoked even though the challenge cleanup failed")
+		}
 	})
 }
 
