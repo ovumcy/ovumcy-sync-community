@@ -16,7 +16,9 @@ numbers at their defaults from `internal/config/config.go`. The claims are pinne
 
 A throttled request gets `429` with `{"error": "rate_limited"}` and `Retry-After: 60`
 (`allowUnderLimiter`). Each limiter key is prefixed with the request path (or an explicit route key), so
-every route has its own bucket. Limiter state is in memory, per process.
+every route has its own bucket. Limiter state is in memory, per process. The one exception is the
+per-account TOTP code window below: it lives in the database (`totp_failure_windows`), so it survives a
+restart, and its `429` carries a `Retry-After` of the seconds left in the window (1–900).
 
 Limiter keys: **IP** is the client IP resolved by `clientIPForRateLimit` (the socket peer, or the
 rightmost non-trusted forwarded address when the peer is in `TRUSTED_PROXY_CIDRS`); **account** is the
@@ -92,7 +94,7 @@ Notes on the table:
 | Password-reset token lifetime | 30 minutes, single use (`PasswordResetTokenTTL`) | `internal/services/auth_service.go` |
 | TOTP login challenge lifetime | 5 minutes, single use (`TOTPChallengeTTL`) | `internal/services/totp_service.go` |
 | TOTP failed attempts per challenge | 5, after which the challenge is burnt (`maxTOTPChallengeFailedAttempts`) | `internal/services/totp_service.go` |
-| TOTP code attempts per account | 10 per fixed 15-minute window across all challenges and disable (`maxTOTPAccountFailedAttempts`, `TOTPFailureWindow`); past it 429 `rate_limited` until the window ends; a new login does not reset it, a successful verify does | `internal/services/totp_service.go`, `Store.ReserveTOTPAttempt` |
+| TOTP code attempts per account | 10 per fixed 15-minute window across all challenges and disable (`maxTOTPAccountFailedAttempts`, `TOTPFailureWindow`); past it 429 `rate_limited` until the window ends; a new login does not reset it, a successful verify or completed enrollment does. Trade-off: only someone who already holds the password can spend the window (a challenge is issued only after it), and while it is spent the owner's own correct code also gets 429; the way out is the window ending or a recovery-code reset | `internal/services/totp_service.go`, `Store.ReserveTOTPAttempt` |
 | TOTP code | 6 digits, 30 s step; a used step cannot be replayed | `internal/security/totp.go`, `totp_replayed` |
 | TOTP secret at rest | AES-256-GCM under `FIELD_ENCRYPTION_KEY` | `internal/security/field_crypto.go` |
 

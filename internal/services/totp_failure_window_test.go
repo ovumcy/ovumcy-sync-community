@@ -146,39 +146,40 @@ func TestAccountTOTPWindowEndsAndSuccessClearsIt(t *testing.T) {
 	}
 }
 
-// TestConcurrentTOTPGuessesNeverExceedTheAccountCap: the attempt is reserved
-// in one upsert before the code is checked, so guesses racing on the same
-// challenge cannot each pass a stale read.
-func TestConcurrentTOTPGuessesNeverExceedTheAccountCap(t *testing.T) {
+// TestCompletedEnrollmentClearsASpentWindow: a new secret is a fresh guessing
+// space, so a window spent before (re-)enrollment must not lock the first
+// login with the new secret.
+func TestCompletedEnrollmentClearsASpentWindow(t *testing.T) {
 	auth, totp, now := fixedTOTPClock(t)
 	ctx := context.Background()
-	accountID, _, secret, _ := enrollTOTP(t, auth, totp, now)
 
-	loginNow := now.Add(security.TOTPStepSeconds * time.Second)
-	setTOTPClock(auth, totp, loginNow)
-	wrong := wrongTOTPCode(t, secret, loginNow)
-	challengeID := freshChallengeID(t, totp, accountID)
-
-	const guesses = 40
-	results := make(chan error, guesses)
-	var wg sync.WaitGroup
-	for range guesses {
-		wg.Go(func() {
-			_, err := totp.VerifyChallenge(ctx, challengeID, wrong)
-			results <- err
-		})
+	registered, err := auth.Register(ctx, "owner@example.com", totpWindowTestPassword)
+	if err != nil {
+		t.Fatalf("register: %v", err)
 	}
-	wg.Wait()
-	close(results)
-
-	checked := 0
-	for err := range results {
-		if !errors.Is(err, ErrTOTPLocked) && !errors.Is(err, ErrTOTPChallengeInvalid) {
-			checked++
+	for range maxTOTPAccountFailedAttempts + 1 {
+		if _, _, err := totp.store.ReserveTOTPAttempt(ctx, registered.AccountID, now, TOTPFailureWindow, maxTOTPAccountFailedAttempts); err != nil {
+			t.Fatalf("reserve: %v", err)
 		}
 	}
-	if checked > maxTOTPAccountFailedAttempts {
-		t.Fatalf("%d guesses reached the code check, cap is %d", checked, maxTOTPAccountFailedAttempts)
+
+	start, err := totp.StartEnrollment(ctx, registered.AccountID, totpWindowTestPassword)
+	if err != nil {
+		t.Fatalf("StartEnrollment: %v", err)
+	}
+	secret, err := security.DecodeTOTPSecretBase32(start.SecretBase32)
+	if err != nil {
+		t.Fatalf("decode secret: %v", err)
+	}
+	if err := totp.CompleteEnrollment(ctx, registered.AccountID, security.HashToken(registered.SessionToken),
+		security.GenerateTOTPCode(secret, now.Unix()/security.TOTPStepSeconds)); err != nil {
+		t.Fatalf("CompleteEnrollment: %v", err)
+	}
+
+	later := now.Add(security.TOTPStepSeconds * time.Second)
+	setTOTPClock(auth, totp, later)
+	if _, err := totp.VerifyChallenge(ctx, freshChallengeID(t, totp, registered.AccountID), wrongTOTPCode(t, secret, later)); !errors.Is(err, ErrTOTPInvalidCode) {
+		t.Fatalf("expected a plain wrong-code answer after enrollment, got %v", err)
 	}
 }
 

@@ -63,6 +63,16 @@ func TestReserveTOTPAttemptCapsAndRestartsTheWindow(t *testing.T) {
 	if reserved, _, err := store.ReserveTOTPAttempt(ctx, "window-account", restart, window, 3); err != nil || !reserved {
 		t.Fatalf("after reset: reserved=%v err=%v", reserved, err)
 	}
+
+	// A clock stepped back behind the window's start restarts the window
+	// rather than stretching the lock past its length.
+	for range 3 {
+		_, _, _ = store.ReserveTOTPAttempt(ctx, "window-account", restart, window, 3)
+	}
+	stepBack := restart.Add(-time.Hour)
+	if reserved, _, err := store.ReserveTOTPAttempt(ctx, "window-account", stepBack, window, 3); err != nil || !reserved {
+		t.Fatalf("after a clock step back: reserved=%v err=%v", reserved, err)
+	}
 }
 
 func TestConcurrentReserveTOTPAttemptNeverExceedsTheCap(t *testing.T) {

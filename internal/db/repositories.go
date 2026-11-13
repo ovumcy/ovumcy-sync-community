@@ -721,10 +721,12 @@ func (s *Store) DeleteTOTPChallengeByHash(
 
 // ReserveTOTPAttempt takes one slot of the account's failed-TOTP budget
 // before a code is checked, in a single upsert: a window that started at or
-// before now-window restarts at now with the count at 1; otherwise the count
-// rises only while it is below maxAttempts. Reserving ahead of the check is
-// what stops concurrent guesses from each passing a stale read. When the
-// budget is spent it returns reserved=false and the instant the window ends.
+// before now-window (or in the future, after a clock step back) restarts at
+// now with the count at 1; otherwise the count rises until it reaches
+// maxAttempts+1 and stays there. A returned count within maxAttempts is a
+// reserved slot. Reserving ahead of the check, in one statement, is what
+// stops concurrent guesses from each passing a stale read. When the budget
+// is spent it returns reserved=false and the instant the window ends.
 func (s *Store) ReserveTOTPAttempt(
 	ctx context.Context,
 	accountID string,
@@ -736,33 +738,28 @@ func (s *Store) ReserveTOTPAttempt(
 	cutoff := nowUnix - int64(window/time.Second)
 
 	var startedUnix int64
-	err = s.db.QueryRowContext(
+	var attempts int
+	if err := s.db.QueryRowContext(
 		ctx,
 		`INSERT INTO totp_failure_windows (account_id, window_started_unix, failed_attempts)
 VALUES (?1, ?2, 1)
 ON CONFLICT(account_id) DO UPDATE SET
-  window_started_unix = CASE WHEN window_started_unix <= ?3 THEN excluded.window_started_unix ELSE window_started_unix END,
-  failed_attempts = CASE WHEN window_started_unix <= ?3 THEN 1 ELSE failed_attempts + 1 END
-WHERE window_started_unix <= ?3 OR failed_attempts < ?4
-RETURNING window_started_unix`,
+  window_started_unix = CASE WHEN window_started_unix <= ?3 OR window_started_unix > ?2 THEN ?2 ELSE window_started_unix END,
+  failed_attempts = CASE
+    WHEN window_started_unix <= ?3 OR window_started_unix > ?2 THEN 1
+    WHEN failed_attempts <= ?4 THEN failed_attempts + 1
+    ELSE failed_attempts
+  END
+RETURNING window_started_unix, failed_attempts`,
 		accountID,
 		nowUnix,
 		cutoff,
 		maxAttempts,
-	).Scan(&startedUnix)
-	if err == nil {
-		return true, time.Time{}, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
+	).Scan(&startedUnix, &attempts); err != nil {
 		return false, time.Time{}, fmt.Errorf("reserve totp attempt: %w", err)
 	}
-
-	if err := s.db.QueryRowContext(
-		ctx,
-		`SELECT window_started_unix FROM totp_failure_windows WHERE account_id = ?`,
-		accountID,
-	).Scan(&startedUnix); err != nil {
-		return false, time.Time{}, fmt.Errorf("read totp failure window: %w", err) // codecov:ignore -- the upsert above just found this row over budget in the same synchronous call; it vanishing before this read needs a concurrent account delete, a TOCTOU not deterministically reachable in-process.
+	if attempts <= maxAttempts {
+		return true, time.Time{}, nil
 	}
 	return false, time.Unix(startedUnix, 0).UTC().Add(window), nil
 }
