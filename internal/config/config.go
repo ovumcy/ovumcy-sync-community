@@ -367,10 +367,17 @@ func csvListFromEnv(name string) []string {
 	return result
 }
 
+// MinTrustedProxyPrefixBits is the shortest prefix length TRUSTED_PROXY_CIDRS
+// accepts.
+const MinTrustedProxyPrefixBits = 8
+
 // ParseTrustedProxyCIDR parses one TRUSTED_PROXY_CIDRS entry: either a CIDR
 // ("10.0.0.0/24") or a bare address ("127.0.0.1"), normalized to a masked
 // prefix. It is the single parser shared by config validation and the API
-// trusted-proxy matcher.
+// trusted-proxy matcher. A prefix broader than /8 is rejected: trusting it
+// lets a large share of the internet choose its own rate-limit key, and no
+// proxy deployment needs it (10.0.0.0/8 and fd00::/8 are the widest private
+// ranges an operator plausibly lists).
 func ParseTrustedProxyCIDR(value string) (netip.Prefix, error) {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
@@ -381,6 +388,17 @@ func ParseTrustedProxyCIDR(value string) (netip.Prefix, error) {
 		prefix, err := netip.ParsePrefix(trimmed)
 		if err != nil {
 			return netip.Prefix{}, err
+		}
+		bits := prefix.Bits()
+		if prefix.Addr().Is4In6() {
+			bits -= 96
+		}
+		if bits < MinTrustedProxyPrefixBits {
+			return netip.Prefix{}, fmt.Errorf(
+				"prefix /%d is broader than /%d; list the proxy's own address or network",
+				prefix.Bits(),
+				MinTrustedProxyPrefixBits,
+			)
 		}
 		return prefix.Masked(), nil
 	}

@@ -278,6 +278,27 @@ func TestParseTrustedProxyCIDRAcceptsBareIPv6Address(t *testing.T) {
 	}
 }
 
+func TestParseTrustedProxyCIDRRejectsOverBroadPrefixes(t *testing.T) {
+	for _, value := range []string{"0.0.0.0/0", "::/0", "128.0.0.0/1", "fc00::/7", "::ffff:0.0.0.0/96"} {
+		if _, err := ParseTrustedProxyCIDR(value); err == nil {
+			t.Errorf("expected %q to be rejected as over-broad", value)
+		}
+	}
+	for _, value := range []string{"10.0.0.0/8", "fd00::/8", "172.30.99.10/32", "2001:db8::/32"} {
+		if _, err := ParseTrustedProxyCIDR(value); err != nil {
+			t.Errorf("expected %q to be accepted, got %v", value, err)
+		}
+	}
+}
+
+func TestLoadRejectsOverBroadTrustedProxyCIDR(t *testing.T) {
+	t.Setenv("TRUSTED_PROXY_CIDRS", "10.0.0.2/32, 0.0.0.0/0")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected Load to reject TRUSTED_PROXY_CIDRS containing 0.0.0.0/0")
+	}
+}
+
 // TestLoadAcceptsADisabledLapsedAccountSweep pins the rollback lever. Every
 // other duration in this config is rejected when non-positive, so the obvious
 // "consistency" cleanup is to validate this one the same way — which would

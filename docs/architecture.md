@@ -47,7 +47,8 @@ is the only place the layers are wired together.
   The server itself speaks plain HTTP and the container publishes `127.0.0.1:8080` only
   (`docker-compose.yml`).
 - **Proxy to server.** The forwarded client address is honoured only when the immediate peer is inside
-  `TRUSTED_PROXY_CIDRS`; the rightmost non-trusted `X-Forwarded-For` entry wins, then `X-Real-IP`
+  `TRUSTED_PROXY_CIDRS`; the rightmost non-trusted `X-Forwarded-For` entry wins, across every
+  header line. `X-Real-IP` is never read, and an IPv6 client is keyed by its /64
   (`clientIPForRateLimit`, `forwardedClientIP` in `internal/api/server.go`).
 - **Server to SQLite.** One database file, one connection (`SetMaxOpenConns(1)`), WAL journal, foreign
   keys on, 5 s busy timeout, all set in the connection string so every pooled connection carries

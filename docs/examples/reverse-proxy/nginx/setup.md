@@ -9,7 +9,7 @@ the certificate paths.
 
 - **TLS** terminates at nginx; the app container speaks plain HTTP on `:8080`.
 - **Client address.** `X-Forwarded-For` and `X-Real-IP` are set to `$remote_addr`, replacing
-  anything the client sent. The server only honours these headers from addresses in
+  anything the client sent; the server reads only `X-Forwarded-For`, and only from addresses in
   `TRUSTED_PROXY_CIDRS`; see [troubleshooting.md](../../../troubleshooting.md).
 - **Body size.** `client_max_body_size 32m`. With the default `MAX_BLOB_BYTES` (16 MiB) a blob upload
   is a base64 JSON body of about 21.3 MiB. Raise the limit together with `MAX_BLOB_BYTES`.

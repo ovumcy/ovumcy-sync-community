@@ -29,7 +29,7 @@ Core tracking in the Ovumcy app still remains local-first. This server is for op
 2. Persist `/data` so SQLite survives container restarts.
 3. Expose the service only through HTTPS on the public internet.
 4. Keep `MANAGED_BRIDGE_TOKEN` empty unless you operate a separate trusted managed-auth service. When set it must be at least 32 bytes (`openssl rand -hex 32`); a shorter token is a startup error.
-5. Set `TRUSTED_PROXY_CIDRS` to the reverse proxy's address so auth rate limiting keys on real client IPs. The proxy must send `X-Forwarded-For` (`X-Real-IP` is the fallback). Without it every client shares the proxy's single rate-limit bucket, so a handful of failed logins locks everyone out for the window. The bundled `docker-compose.caddy.yml` already does this.
+5. Set `TRUSTED_PROXY_CIDRS` to the reverse proxy's address so auth rate limiting keys on real client IPs. The proxy must send `X-Forwarded-For`; `X-Real-IP` is not read. Without it every client shares the proxy's single rate-limit bucket, so a handful of failed logins locks everyone out for the window. The bundled `docker-compose.caddy.yml` already does this.
 6. Keep `/metrics` internal or protect it with `METRICS_BEARER_TOKEN` if you enable metrics.
 
 ## Example Reverse Proxy Pattern

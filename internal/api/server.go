@@ -1201,25 +1201,38 @@ func (s *Server) allowLoginRequestForIdentifier(
 	return allowUnderLimiter(s.authLimiter, writer, "login_identifier:"+normalized)
 }
 
+// clientIPForRateLimit resolves the rate-limit key for the caller. X-Real-IP is
+// never read: a proxy that passes it through verbatim hands the client the
+// key, and when every forwarded hop is trusted (a NAT gateway inside the
+// trusted range) nothing in the chain vouches for it. All X-Forwarded-For
+// header lines count — a proxy may append its own line instead of extending
+// the first.
 func (s *Server) clientIPForRateLimit(request *http.Request) string {
 	remoteAddr, ok := parseClientIP(strings.TrimSpace(request.RemoteAddr))
 	if !ok {
 		return strings.TrimSpace(request.RemoteAddr)
 	}
 
-	if !s.isTrustedProxy(remoteAddr) {
-		return remoteAddr.String()
+	if s.isTrustedProxy(remoteAddr) {
+		forwardedFor := strings.Join(request.Header.Values("X-Forwarded-For"), ",")
+		if forwarded, ok := forwardedClientIP(forwardedFor, s.isTrustedProxy); ok {
+			return rateLimitKeyForAddr(forwarded)
+		}
 	}
 
-	if forwarded, ok := forwardedClientIP(request.Header.Get("X-Forwarded-For"), s.isTrustedProxy); ok {
-		return forwarded.String()
-	}
+	return rateLimitKeyForAddr(remoteAddr)
+}
 
-	if realIP, ok := parseClientIP(request.Header.Get("X-Real-IP")); ok {
-		return realIP.String()
-	}
+// ipv6RateLimitPrefixBits is the IPv6 bucket width: a single subscriber is
+// routinely handed a whole /64, so per-address keying would give one caller
+// 2^64 buckets.
+const ipv6RateLimitPrefixBits = 64
 
-	return remoteAddr.String()
+func rateLimitKeyForAddr(addr netip.Addr) string {
+	if addr.Is6() {
+		return netip.PrefixFrom(addr, ipv6RateLimitPrefixBits).Masked().String()
+	}
+	return addr.String()
 }
 
 func (s *Server) isTrustedProxy(addr netip.Addr) bool {

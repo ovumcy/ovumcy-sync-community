@@ -23,9 +23,8 @@ keys the auth rate limiter on the TCP peer, which is the proxy. All users then s
 1. Set `TRUSTED_PROXY_CIDRS` to the proxy's address or network as the app container sees it
    (comma-separated, e.g. the Docker network subnet).
 2. Make the proxy send `X-Forwarded-For` carrying the real client address. The server walks that
-   header from the right and uses the first address that is not itself a trusted proxy;
-   `X-Real-IP` is used only when `X-Forwarded-For` yields no usable address. If the connecting
-   peer is not trusted, both headers are ignored.
+   header from the right and uses the first address that is not itself a trusted proxy.
+   `X-Real-IP` is never read. If the connecting peer is not trusted, the header is ignored.
 3. Have the proxy overwrite client-supplied values rather than append to them. Working examples:
    [nginx](examples/reverse-proxy/nginx/setup.md), [Traefik](examples/reverse-proxy/traefik/setup.md).
 
