@@ -367,50 +367,66 @@ func csvListFromEnv(name string) []string {
 	return result
 }
 
-// MinTrustedProxyPrefixBits is the shortest prefix length TRUSTED_PROXY_CIDRS
-// accepts.
-const MinTrustedProxyPrefixBits = 8
+// Shortest prefix lengths TRUSTED_PROXY_CIDRS accepts. Trusting a wider range
+// lets a large share of the internet choose its own rate-limit key, and no
+// proxy deployment needs it: 10.0.0.0/8 is the widest private IPv4 range, a
+// unique-local IPv6 range (inside fc00::/7) may be as wide as fd00::/8, and any
+// other IPv6 range must be /32 or narrower.
+const (
+	MinTrustedProxyIPv4PrefixBits        = 8
+	MinTrustedProxyIPv6PrefixBits        = 32
+	MinTrustedProxyUniqueLocalPrefixBits = 8
+)
+
+var uniqueLocalIPv6 = netip.MustParsePrefix("fc00::/7")
 
 // ParseTrustedProxyCIDR parses one TRUSTED_PROXY_CIDRS entry: either a CIDR
-// ("10.0.0.0/24") or a bare address ("127.0.0.1"), normalized to a masked
-// prefix. It is the single parser shared by config validation and the API
-// trusted-proxy matcher. A prefix broader than /8 is rejected: trusting it
-// lets a large share of the internet choose its own rate-limit key, and no
-// proxy deployment needs it (10.0.0.0/8 and fd00::/8 are the widest private
-// ranges an operator plausibly lists).
+// ("10.0.0.0/24") or a bare address ("127.0.0.1"), normalized to a masked,
+// zone-free prefix. An IPv4-mapped entry is unmapped, because client addresses
+// are unmapped before they are matched and a mapped prefix would never match.
+// It is the single parser shared by config validation and the API
+// trusted-proxy matcher.
 func ParseTrustedProxyCIDR(value string) (netip.Prefix, error) {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
 		return netip.Prefix{}, fmt.Errorf("must not be empty")
 	}
 
+	var addr netip.Addr
+	var bits int
 	if strings.Contains(trimmed, "/") {
 		prefix, err := netip.ParsePrefix(trimmed)
 		if err != nil {
 			return netip.Prefix{}, err
 		}
-		bits := prefix.Bits()
-		if prefix.Addr().Is4In6() {
-			bits -= 96
+		addr, bits = prefix.Addr(), prefix.Bits()
+	} else {
+		parsed, err := netip.ParseAddr(trimmed)
+		if err != nil {
+			return netip.Prefix{}, err
 		}
-		if bits < MinTrustedProxyPrefixBits {
-			return netip.Prefix{}, fmt.Errorf(
-				"prefix /%d is broader than /%d; list the proxy's own address or network",
-				prefix.Bits(),
-				MinTrustedProxyPrefixBits,
-			)
+		addr, bits = parsed, parsed.BitLen()
+	}
+
+	if addr.Is4In6() {
+		addr, bits = addr.Unmap(), bits-96
+	}
+	addr = addr.WithZone("")
+
+	minBits := MinTrustedProxyIPv4PrefixBits
+	if addr.Is6() {
+		minBits = MinTrustedProxyIPv6PrefixBits
+		if uniqueLocalIPv6.Contains(addr) {
+			minBits = MinTrustedProxyUniqueLocalPrefixBits
 		}
-		return prefix.Masked(), nil
+	}
+	if bits < minBits {
+		return netip.Prefix{}, fmt.Errorf(
+			"prefix /%d is broader than /%d; list the proxy's own address or network",
+			bits,
+			minBits,
+		)
 	}
 
-	addr, err := netip.ParseAddr(trimmed)
-	if err != nil {
-		return netip.Prefix{}, err
-	}
-
-	if addr.Is4() {
-		return netip.PrefixFrom(addr, 32), nil
-	}
-
-	return netip.PrefixFrom(addr, 128), nil
+	return netip.PrefixFrom(addr, bits).Masked(), nil
 }

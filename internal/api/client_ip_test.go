@@ -52,6 +52,30 @@ func TestClientIPConsidersEveryForwardedForHeaderLine(t *testing.T) {
 	}
 }
 
+func TestClientIPStopsAtUnparseableForwardedHop(t *testing.T) {
+	server := &Server{trustedProxyCIDRs: parseTrustedProxyCIDRs([]string{"10.0.0.0/24"})}
+
+	// The proxy recorded its peer as "unknown"; the address left of it is the
+	// client's own claim and must not become the key.
+	request := newClientIPTestRequest("10.0.0.2:4000", http.Header{
+		"X-Forwarded-For": {"198.51.100.1, unknown"},
+	})
+	if got := server.clientIPForRateLimit(request); got != "10.0.0.2" {
+		t.Fatalf("expected the direct peer 10.0.0.2, got %q", got)
+	}
+}
+
+func TestClientIPMatchesIPv4MappedTrustedEntry(t *testing.T) {
+	server := &Server{trustedProxyCIDRs: parseTrustedProxyCIDRs([]string{"::ffff:10.0.0.0/120"})}
+
+	request := newClientIPTestRequest("10.0.0.2:4000", http.Header{
+		"X-Forwarded-For": {"203.0.113.10"},
+	})
+	if got := server.clientIPForRateLimit(request); got != "203.0.113.10" {
+		t.Fatalf("expected the mapped entry to trust 10.0.0.2 and key on 203.0.113.10, got %q", got)
+	}
+}
+
 func TestClientIPKeysIPv6ByNetwork64(t *testing.T) {
 	server := &Server{trustedProxyCIDRs: parseTrustedProxyCIDRs([]string{"10.0.0.0/24"})}
 
