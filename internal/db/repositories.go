@@ -1042,11 +1042,15 @@ func (s *Store) ListDevicesForAccount(ctx context.Context, accountID string) ([]
 
 // BindSessionToDevice binds the session to deviceID if it is not bound yet;
 // a bound session keeps its first device. Scoped by account so a token hash
-// can never bind another account's session.
+// can never bind another account's session. The device must still exist in
+// the same statement, so a removal that commits between the attach and this
+// bind cannot leave a session bound to a deleted device.
 func (s *Store) BindSessionToDevice(ctx context.Context, accountID string, tokenHash string, deviceID string) error {
 	if _, err := s.db.ExecContext(
 		ctx,
-		`UPDATE sessions SET device_id = ? WHERE account_id = ? AND token_hash = ? AND device_id IS NULL`,
+		`UPDATE sessions SET device_id = ?1
+WHERE account_id = ?2 AND token_hash = ?3 AND device_id IS NULL
+  AND EXISTS (SELECT 1 FROM devices WHERE account_id = ?2 AND device_id = ?1)`,
 		deviceID,
 		accountID,
 		tokenHash,
