@@ -716,12 +716,42 @@ func (s *Server) handleDeleteAccount(
 		return
 	}
 
+	var payload accountDeleteRequest
+	if !decodeJSON(writer, request, &payload, 4<<10) {
+		return
+	}
+	if !s.confirmCurrentPassword(writer, request, account.ID, payload.CurrentPassword) {
+		return
+	}
+
 	if err := s.auth.DeleteAccount(request.Context(), account.ID); err != nil {
 		writeError(writer, http.StatusInternalServerError, "internal_error")
 		return
 	}
 
 	writeJSON(writer, http.StatusOK, map[string]string{"status": "account_deleted"})
+}
+
+// confirmCurrentPassword gates a destructive write behind a password
+// re-check, writing the error response itself when it refuses.
+func (s *Server) confirmCurrentPassword(
+	writer http.ResponseWriter,
+	request *http.Request,
+	accountID string,
+	currentPassword string,
+) bool {
+	err := s.auth.ConfirmCurrentPassword(request.Context(), accountID, currentPassword)
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, services.ErrInvalidCurrentPassword):
+		writeError(writer, http.StatusUnauthorized, "invalid_current_password")
+	case errors.Is(err, services.ErrUnauthorized):
+		writeError(writer, http.StatusUnauthorized, "unauthorized")
+	default:
+		writeError(writer, http.StatusInternalServerError, "internal_error")
+	}
+	return false
 }
 
 func (s *Server) handleManagedSession(writer http.ResponseWriter, request *http.Request) {
@@ -991,6 +1021,9 @@ func (s *Server) handlePutRecoveryKey(
 
 	var payload recoveryKeyPackageRequest
 	if !decodeJSON(writer, request, &payload, 8<<10) {
+		return
+	}
+	if !s.confirmCurrentPassword(writer, request, account.ID, payload.CurrentPassword) {
 		return
 	}
 
@@ -1508,6 +1541,11 @@ type recoveryKeyPackageRequest struct {
 	WrapNonceHex         string `json:"wrap_nonce_hex"`
 	WrappedMasterKeyHex  string `json:"wrapped_master_key_hex"`
 	PhraseFingerprintHex string `json:"phrase_fingerprint_hex"`
+	CurrentPassword      string `json:"current_password"`
+}
+
+type accountDeleteRequest struct {
+	CurrentPassword string `json:"current_password"`
 }
 
 type recoveryKeyPackageResponse struct {

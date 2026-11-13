@@ -84,6 +84,26 @@ func TestPutBlobHasNoTerminalGeneration(t *testing.T) {
 	}
 }
 
+// A generation parked at the ceiling by a session that is later revoked keeps
+// the owner's writes stale until the clock passes it; the skew is that
+// lock-out's length, so it must stay short.
+func TestPutBlobParkedGenerationLockOutIsBounded(t *testing.T) {
+	sync, accountID, input := newBlobGenerationFixture(t)
+
+	base := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	sync.now = func() time.Time { return base }
+	input.Generation = maxAcceptableBlobGeneration(base)
+	if _, err := sync.PutBlob(context.Background(), accountID, input); err != nil {
+		t.Fatalf("parking write: %v", err)
+	}
+
+	sync.now = func() time.Time { return base.Add(15*time.Minute + time.Millisecond) }
+	input.Generation = sync.now().UnixMilli()
+	if _, err := sync.PutBlob(context.Background(), accountID, input); err != nil {
+		t.Fatalf("owner's clock-derived write must win once the skew has passed, got %v", err)
+	}
+}
+
 func TestPutBlobStillRejectsStaleGenerationWithinTheBound(t *testing.T) {
 	sync, accountID, input := newBlobGenerationFixture(t)
 

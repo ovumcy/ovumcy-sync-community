@@ -128,7 +128,7 @@ curl -fsS -X POST "${BASE_URL}/sync/devices" \
 curl -fsS -X PUT "${BASE_URL}/sync/recovery-key" \
   -H "Authorization: Bearer ${session_token}" \
   -H 'Content-Type: application/json' \
-  -d '{"algorithm":"xchacha20poly1305","kdf":"bip39_seed_hkdf_sha256","mnemonic_word_count":12,"wrap_nonce_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","wrapped_master_key_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","phrase_fingerprint_hex":"cccccccccccccccc"}' >/dev/null
+  -d '{"algorithm":"xchacha20poly1305","kdf":"bip39_seed_hkdf_sha256","mnemonic_word_count":12,"wrap_nonce_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","wrapped_master_key_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","phrase_fingerprint_hex":"cccccccccccccccc","current_password":"'"${PASSWORD}"'"}' >/dev/null
 
 curl -fsS "${BASE_URL}/sync/recovery-key" \
   -H "Authorization: Bearer ${session_token}" >/dev/null
@@ -426,8 +426,19 @@ curl -fsS -X PUT "${BASE_URL}/sync/blob" \
   -H 'Content-Type: application/json' \
   -d "${delete_blob_payload}" >/dev/null
 
+wrong_password_delete_status="$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "${BASE_URL}/account" \
+  -H "Authorization: Bearer ${delete_session_token}" \
+  -H 'Content-Type: application/json' \
+  -d '{"current_password":"not the account password"}')"
+if [[ "${wrong_password_delete_status}" != "401" ]]; then
+  echo "expected DELETE /account with a wrong current_password to return 401, got ${wrong_password_delete_status}" >&2
+  exit 1
+fi
+
 delete_response="$(curl -fsS -X DELETE "${BASE_URL}/account" \
-  -H "Authorization: Bearer ${delete_session_token}")"
+  -H "Authorization: Bearer ${delete_session_token}" \
+  -H 'Content-Type: application/json' \
+  -d "{\"current_password\":\"${DELETE_PASSWORD}\"}")"
 delete_status_field="$("${PYTHON}" -c 'import json,sys; print(json.load(sys.stdin)["status"])' <<<"${delete_response}")"
 if [[ "${delete_status_field}" != "account_deleted" ]]; then
   echo "expected account_deleted status from DELETE /account, got: ${delete_response}" >&2
@@ -456,7 +467,9 @@ fi
 # "Account Deletion" for why the repeat surfaces as unauthenticated instead
 # of a second success).
 repeat_delete_status="$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "${BASE_URL}/account" \
-  -H "Authorization: Bearer ${delete_session_token}")"
+  -H "Authorization: Bearer ${delete_session_token}" \
+  -H 'Content-Type: application/json' \
+  -d "{\"current_password\":\"${DELETE_PASSWORD}\"}")"
 if [[ "${repeat_delete_status}" != "401" ]]; then
   echo "expected repeat DELETE /account with a revoked token to return 401, got ${repeat_delete_status}" >&2
   exit 1
