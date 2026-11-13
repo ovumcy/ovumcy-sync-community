@@ -372,7 +372,9 @@ func (s *Server) handleLogin(writer http.ResponseWriter, request *http.Request) 
 	// secondary bucket on the normalized login string forces all those IPs
 	// to share one quota for that identifier, capping practical brute
 	// throughput against a single account. Only failures stay charged: a
-	// login that issues a session refunds its slot. Trade-off: an attacker
+	// login that issues a session refunds its slot. A password success that
+	// stops at a TOTP challenge stays charged, so a stolen password cannot
+	// mint challenges past the ceiling. Trade-off: an attacker
 	// can still lock out a known victim's login by spamming bad credentials
 	// for as long as the flood lasts; the bucket burns out on its own window,
 	// and proving the recovery code (forgot-password) clears it.
@@ -1211,26 +1213,32 @@ func (s *Server) allowLoginRequestForIdentifier(
 	_ *http.Request,
 	login string,
 ) bool {
-	normalized := security.NormalizeLogin(login)
-	if normalized == "" {
+	key, ok := loginIdentifierKey(login)
+	if !ok {
 		return true
 	}
-	return allowUnderLimiter(s.authLimiter, writer, loginIdentifierKey(normalized))
+	return allowUnderLimiter(s.authLimiter, writer, key)
 }
 
-func loginIdentifierKey(normalizedLogin string) string {
-	return "login_identifier:" + normalizedLogin
+// loginIdentifierKey is the one place the identifier bucket's key is derived,
+// so charge, refund and clear always address the same bucket.
+func loginIdentifierKey(login string) (string, bool) {
+	normalized := security.NormalizeLogin(login)
+	if normalized == "" {
+		return "", false
+	}
+	return "login_identifier:" + normalized, true
 }
 
 func (s *Server) refundLoginIdentifier(login string) {
-	if normalized := security.NormalizeLogin(login); normalized != "" {
-		s.authLimiter.Refund(loginIdentifierKey(normalized))
+	if key, ok := loginIdentifierKey(login); ok {
+		s.authLimiter.Refund(key)
 	}
 }
 
 func (s *Server) clearLoginIdentifier(login string) {
-	if normalized := security.NormalizeLogin(login); normalized != "" {
-		s.authLimiter.Reset(loginIdentifierKey(normalized))
+	if key, ok := loginIdentifierKey(login); ok {
+		s.authLimiter.Reset(key)
 	}
 }
 
