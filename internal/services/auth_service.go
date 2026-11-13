@@ -329,6 +329,12 @@ func (s *AuthService) ChangePassword(
 		return err
 	}
 
+	// A login challenge minted under the old password would otherwise still
+	// complete into a session after the change.
+	if err := s.store.DeleteTOTPChallengesForAccount(ctx, accountID); err != nil {
+		return err
+	}
+
 	return nil
 }
 

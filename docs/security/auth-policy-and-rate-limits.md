@@ -106,7 +106,7 @@ Notes on the table:
 
 | Event | Sessions revoked | Code |
 | --- | --- | --- |
-| Change password | all except the caller's current session | `AuthService.ChangePassword` |
+| Change password | all except the caller's current session; pending reset tokens and TOTP challenges are deleted too | `AuthService.ChangePassword` |
 | Reset password (recovery code flow) | all; pending TOTP challenges and reset tokens are deleted too, and the password and recovery code rotate | `AuthService.ResetPassword` |
 | TOTP enrollment verified | all except the caller's current session | `TOTPService.CompleteEnrollment` |
 | TOTP disabled (needs password and current code) | all | `TOTPService.Disable` |
