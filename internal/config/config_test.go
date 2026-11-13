@@ -279,7 +279,9 @@ func TestParseTrustedProxyCIDRAcceptsBareIPv6Address(t *testing.T) {
 }
 
 func TestParseTrustedProxyCIDRRejectsOverBroadPrefixes(t *testing.T) {
-	for _, value := range []string{"0.0.0.0/0", "::/0", "128.0.0.0/1", "fc00::/7", "::ffff:0.0.0.0/96"} {
+	for _, value := range []string{
+		"0.0.0.0/0", "::/0", "128.0.0.0/1", "fc00::/7", "::ffff:0.0.0.0/96", "2000::/8", "2001::/16",
+	} {
 		if _, err := ParseTrustedProxyCIDR(value); err == nil {
 			t.Errorf("expected %q to be rejected as over-broad", value)
 		}
@@ -287,6 +289,22 @@ func TestParseTrustedProxyCIDRRejectsOverBroadPrefixes(t *testing.T) {
 	for _, value := range []string{"10.0.0.0/8", "fd00::/8", "172.30.99.10/32", "2001:db8::/32"} {
 		if _, err := ParseTrustedProxyCIDR(value); err != nil {
 			t.Errorf("expected %q to be accepted, got %v", value, err)
+		}
+	}
+}
+
+// Client addresses are unmapped before matching, so an IPv4-mapped entry must
+// come out as plain IPv4 or it would silently never match.
+func TestParseTrustedProxyCIDRUnmapsIPv4MappedEntries(t *testing.T) {
+	cases := map[string]string{
+		"::ffff:10.0.0.0/104": "10.0.0.0/8",
+		"::ffff:127.0.0.1":    "127.0.0.1/32",
+		"fe80::1%eth0":        "fe80::1/128",
+	}
+	for value, want := range cases {
+		prefix, err := ParseTrustedProxyCIDR(value)
+		if err != nil || prefix.String() != want {
+			t.Errorf("ParseTrustedProxyCIDR(%q) = %v, %v; want %s", value, prefix, err, want)
 		}
 	}
 }

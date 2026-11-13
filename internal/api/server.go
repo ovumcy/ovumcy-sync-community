@@ -1265,15 +1265,19 @@ func parseTrustedProxyCIDRs(values []string) []netip.Prefix {
 // rightmost non-trusted address is the real client and anything an untrusted
 // client prepends is ignored. Selecting the leftmost entry instead would let a
 // client mint an unbounded number of rate-limit buckets by spoofing it
-// (CWE-348). Empty or unparseable segments are skipped; callers must already
-// have confirmed the immediate peer (RemoteAddr) is a trusted proxy before
-// honoring the header.
+// (CWE-348). Empty segments are skipped; an unparseable one ends the walk
+// with no result, since a proxy that records a client as "unknown" vouches for
+// nothing to its left. Callers must already have confirmed the immediate peer
+// (RemoteAddr) is a trusted proxy before honoring the header.
 func forwardedClientIP(value string, isTrusted func(netip.Addr) bool) (netip.Addr, bool) {
 	parts := strings.Split(value, ",")
 	for i := len(parts) - 1; i >= 0; i-- {
+		if strings.TrimSpace(parts[i]) == "" {
+			continue
+		}
 		addr, ok := parseClientIP(parts[i])
 		if !ok {
-			continue
+			return netip.Addr{}, false
 		}
 		if isTrusted(addr) {
 			continue

@@ -7,8 +7,8 @@ import (
 )
 
 // Native Go fuzz targets for the untrusted client-IP parsing that feeds the
-// rate-limiter key. These functions read attacker-controlled RemoteAddr,
-// X-Forwarded-For, and X-Real-IP values, so they must never panic and must
+// rate-limiter key. These functions read attacker-controlled RemoteAddr and
+// X-Forwarded-For values, so they must never panic and must
 // produce a canonical, stable key. Each target asserts a behavioral oracle, not
 // merely "does not panic". Under `go test` the seed corpus runs as ordinary
 // regression tests; run e.g.
@@ -71,7 +71,7 @@ func FuzzForwardedClientIP(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, header string) {
 		// No trusted proxies are configured here, so the selector returns the
-		// rightmost parseable token; this target guards the parse/canonicalize
+		// rightmost non-empty token when it parses; this target guards the parse/canonicalize
 		// contract (never panic, canonical, one of the header's own tokens). The
 		// rightmost-untrusted selection policy is asserted deterministically at
 		// the server level, where the trusted-proxy set exists.

@@ -109,8 +109,11 @@ the strength of the phrase and the client KDF, which are client concerns and out
 
 - Mitigation: `X-Forwarded-For` is honoured only when the direct peer is inside
   `TRUSTED_PROXY_CIDRS`; the forwarded chain is walked right to left past trusted hops
-  (`forwardedClientIP`, `internal/api/server.go`). `X-Real-IP` is never read, and a prefix broader
-  than /8 is refused at startup. Default is no trusted proxy.
+  (`forwardedClientIP`, `internal/api/server.go`), stopping at an unparseable hop. `X-Real-IP` is
+  never read, and an over-broad prefix (IPv4 wider than /8, IPv6 wider than /32, unique-local wider
+  than /8) is refused at startup. Default is no trusted proxy.
+- Residual: a client inside a trusted range can still prepend its own `X-Forwarded-For` value and
+  choose its key, so trust only the proxy's address, not a network shared with clients.
 - Residual: a proxy in the trusted set can claim any client address, which defeats per-IP limiting;
   nothing else depends on the address, since the application does not log it. A compromised
   proxy sees all traffic, including credentials and bearer tokens, in the clear.
