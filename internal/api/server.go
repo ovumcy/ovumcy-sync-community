@@ -1083,7 +1083,13 @@ func (s *Server) withAuth(next func(http.ResponseWriter, *http.Request, models.A
 
 		account, err := s.auth.Authenticate(request.Context(), bearerTokenFromRequest(request))
 		if err != nil {
-			writeError(writer, http.StatusUnauthorized, "unauthorized")
+			if errors.Is(err, services.ErrUnauthorized) {
+				writeError(writer, http.StatusUnauthorized, "unauthorized")
+				return
+			}
+			// A store failure is not the caller's failed attempt.
+			s.sessionReadLimiter.Refund(key)
+			writeError(writer, http.StatusInternalServerError, "internal_error")
 			return
 		}
 		s.sessionReadLimiter.Refund(key)
