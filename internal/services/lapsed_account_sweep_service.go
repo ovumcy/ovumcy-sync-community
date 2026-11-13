@@ -45,7 +45,7 @@ type LapsedAccountSweepResult struct {
 // lapsedSweepStore is the persistence surface LapsedAccountSweepService
 // needs, satisfied by *db.Store. Consumer-side for the same reason as the
 // managed peer's guestGCStore seam: a test can wrap the real store to
-// stage the mint-races-sweep interleaving (clear the lapse marker after the
+// stage the reactivation-races-sweep interleaving (clear the lapse marker after the
 // candidate listing, before the delete) that cannot be produced from
 // outside a single Run call, while the delete still exercises the real
 // in-transaction re-check that refuses the no-longer-lapsed account.

@@ -526,6 +526,12 @@ func TestApplyEntitlementSignalOrdersAndRevokesInOneTransaction(t *testing.T) {
 	if err := store.ApplyEntitlementSignal(ctx, managedID, EntitlementSignal{Active: true, AsOf: lapseAsOf, ReceivedAt: now}); !errors.Is(err, ErrStaleEntitlementSignal) {
 		t.Fatalf("expected a tied reactivation to be stale, got %v", err)
 	}
+	if err := store.ApplyEntitlementSignal(ctx, managedID, EntitlementSignal{AsOf: lapseAsOf.Add(-time.Minute), ReceivedAt: now}); err != nil {
+		t.Fatalf("expected an older lapse on a lapsed account to be a no-op success, got %v", err)
+	}
+	if got, err := store.GetAccountLapsedAt(ctx, managedID); err != nil || got == nil || !got.Equal(now) {
+		t.Fatalf("expected lapsed_at unchanged by an older lapse, got %v err=%v", got, err)
+	}
 	if got, err := store.GetAccountLapsedAt(ctx, managedID); err != nil || got == nil {
 		t.Fatalf("expected the lapse to survive a stale reactivation, got %v err=%v", got, err)
 	}
