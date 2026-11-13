@@ -634,7 +634,14 @@ func (s *Server) handleTOTPChallenge(writer http.ResponseWriter, request *http.R
 }
 
 func mapTOTPError(writer http.ResponseWriter, err error) {
+	var locked *services.TOTPLockedError
 	switch {
+	case errors.As(err, &locked):
+		// Same 429 shape as allowUnderLimiter, with Retry-After set to the
+		// end of the account's failed-TOTP window.
+		seconds := max(int64(math.Ceil(locked.RetryAfter.Seconds())), 1)
+		writer.Header().Set("Retry-After", fmt.Sprint(seconds))
+		writeError(writer, http.StatusTooManyRequests, "rate_limited")
 	case errors.Is(err, services.ErrTOTPNotConfigured):
 		writeError(writer, http.StatusServiceUnavailable, "totp_not_configured")
 	case errors.Is(err, services.ErrTOTPAlreadyEnabled):

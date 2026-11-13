@@ -19,6 +19,28 @@ var (
 	ErrTOTPInvalidCode      = errors.New("totp_invalid_code")
 	ErrTOTPReplayed         = errors.New("totp_replayed")
 	ErrTOTPChallengeInvalid = errors.New("totp_challenge_invalid")
+	ErrTOTPLocked           = errors.New("totp_locked")
+)
+
+// TOTPLockedError reports a spent failed-TOTP window and when it ends.
+// errors.Is(err, ErrTOTPLocked) matches it.
+type TOTPLockedError struct {
+	RetryAfter time.Duration
+}
+
+func (e *TOTPLockedError) Error() string { return ErrTOTPLocked.Error() }
+
+func (e *TOTPLockedError) Unwrap() error { return ErrTOTPLocked }
+
+// TOTPFailureWindow and maxTOTPAccountFailedAttempts bound code guesses per
+// account across every challenge, so logging in again (which mints a fresh
+// challenge with a fresh per-challenge budget) cannot reset the ceiling.
+// 10 per 15 minutes holds a password-holding attacker to about 960 guesses
+// a day, ~0.3 % against the 3 codes the skew window accepts. Only a
+// successful verify clears the window.
+const (
+	TOTPFailureWindow            = 15 * time.Minute
+	maxTOTPAccountFailedAttempts = 10
 )
 
 // TOTPChallengeTTL is how long a login-second-factor challenge remains
@@ -306,7 +328,12 @@ func (s *TOTPService) Disable(
 		return fmt.Errorf("%w: %v", ErrTOTPSecretDecrypt, err)
 	}
 
-	step, ok := security.VerifyTOTPCode([]byte(rawSecret), code, s.now().UTC().Unix())
+	now := s.now().UTC()
+	if err := s.reserveCodeAttempt(ctx, accountID, now); err != nil {
+		return err
+	}
+
+	step, ok := security.VerifyTOTPCode([]byte(rawSecret), code, now.Unix())
 	if !ok {
 		return ErrTOTPInvalidCode
 	}
@@ -318,6 +345,7 @@ func (s *TOTPService) Disable(
 	if !claimed {
 		return ErrTOTPReplayed
 	}
+	s.clearCodeFailures(ctx, accountID)
 
 	// codecov:ignore:start -- both branches below need the account row or the
 	// accounts table to fail specifically for THIS write, after
@@ -439,6 +467,13 @@ func (s *TOTPService) VerifyChallenge(
 		return AuthResult{}, fmt.Errorf("%w: %v", ErrTOTPSecretDecrypt, err)
 	}
 
+	if err := s.reserveCodeAttempt(ctx, account.ID, now); err != nil {
+		if errors.Is(err, ErrTOTPLocked) {
+			s.observeChallengeCompletion("locked")
+		}
+		return AuthResult{}, err
+	}
+
 	step, ok := security.VerifyTOTPCode([]byte(rawSecret), code, now.Unix())
 	if !ok {
 		// Per-challenge attempt counter caps online brute force at
@@ -475,6 +510,7 @@ func (s *TOTPService) VerifyChallenge(
 		s.observeChallengeCompletion("replayed")
 		return AuthResult{}, ErrTOTPReplayed
 	}
+	s.clearCodeFailures(ctx, account.ID)
 
 	if err := s.store.DeleteTOTPChallengeByHash(ctx, security.HashToken(challengeID)); err != nil {
 		return AuthResult{}, err // codecov:ignore -- FindTOTPChallengeByHash above already touches "totp_challenges" as this function's first store call, so isolating a second, later totp_challenges failure here needs a fake driver.
@@ -482,6 +518,32 @@ func (s *TOTPService) VerifyChallenge(
 
 	s.observeChallengeCompletion("ok")
 	return s.auth.CreateSessionForAccount(ctx, account.ID)
+}
+
+// reserveCodeAttempt spends one slot of the account's failed-TOTP window
+// before a code is checked against an enrolled secret; a spent window
+// returns *TOTPLockedError.
+func (s *TOTPService) reserveCodeAttempt(ctx context.Context, accountID string, now time.Time) error {
+	reserved, windowEndsAt, err := s.store.ReserveTOTPAttempt(
+		ctx,
+		accountID,
+		now,
+		TOTPFailureWindow,
+		maxTOTPAccountFailedAttempts,
+	)
+	if err != nil {
+		return err
+	}
+	if !reserved {
+		return &TOTPLockedError{RetryAfter: windowEndsAt.Sub(now)}
+	}
+	return nil
+}
+
+// clearCodeFailures is best-effort: a failed delete leaves the account's
+// window counting a successful verify, which errs toward the stricter limit.
+func (s *TOTPService) clearCodeFailures(ctx context.Context, accountID string) {
+	_ = s.store.ResetTOTPFailures(ctx, accountID)
 }
 
 // aadForTOTPSecret returns the AEAD aad that binds an encrypted TOTP secret

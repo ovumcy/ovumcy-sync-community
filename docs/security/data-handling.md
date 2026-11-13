@@ -28,12 +28,13 @@ decrypted payloads.
 | `recovery_key_packages` | `account_id`, `algorithm`, `kdf`, `mnemonic_word_count`, `wrap_nonce_hex`, `wrapped_master_key_hex`, `phrase_fingerprint_hex`, `updated_at` | Ciphertext, credential | Wrapped master key; the phrase is not stored |
 | `password_reset_tokens` | `account_id`, `token_hash`, `created_at`, `expires_at`, `consumed_at` | Credential (hash) | One row per account; token valid for 30 minutes and single-use |
 | `totp_challenges` | `challenge_id_hash`, `account_id`, `created_at`, `expires_at`, `failed_attempts` | Credential (hash) | Valid for 5 minutes, locked after 5 failed attempts |
+| `totp_failure_windows` | `account_id`, `window_started_unix`, `failed_attempts` | Metadata | One row per account; cleared by a successful TOTP verify |
 
 ## Retention and deletion
 
 | Data | Leaves the database when |
 | --- | --- |
-| Everything for an account | The account is deleted: one transaction removes rows from `sessions`, `devices`, `encrypted_blobs`, `recovery_key_packages`, `password_reset_tokens` and `totp_challenges`, then the `accounts` row (`Store.DeleteAccount`, `internal/db/repositories.go`) |
+| Everything for an account | The account is deleted: one transaction removes rows from `sessions`, `devices`, `encrypted_blobs`, `recovery_key_packages`, `password_reset_tokens`, `totp_challenges` and `totp_failure_windows`, then the `accounts` row (`Store.DeleteAccount`, `internal/db/repositories.go`) |
 | A managed account on bridge request | `DELETE /managed/accounts/{account_id}` behind the managed-bridge token purges the account |
 | A single session | Logout, a password change (every other session), or a recovery-based reset |
 | Expired sessions, reset tokens, TOTP challenges | The expired-rows sweep removes rows past `expires_at`. Interval `EXPIRED_ROWS_SWEEP_INTERVAL` (default 24 h; the in-process sweep can be disabled), batch size `EXPIRED_ROWS_SWEEP_LIMIT` (0 uses the built-in default). Expiry is already enforced at use time, so an expired row is unusable before it is erased |
