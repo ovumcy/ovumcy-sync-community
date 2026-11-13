@@ -50,7 +50,8 @@ is the only place the layers are wired together.
   `TRUSTED_PROXY_CIDRS`; the rightmost non-trusted `X-Forwarded-For` entry wins, then `X-Real-IP`
   (`clientIPForRateLimit`, `forwardedClientIP` in `internal/api/server.go`).
 - **Server to SQLite.** One database file, one connection (`SetMaxOpenConns(1)`), WAL journal, foreign
-  keys on, 5 s busy timeout (`internal/db/sqlite.go`). Session and reset tokens, recovery codes and
+  keys on, 5 s busy timeout, all set in the connection string so every pooled connection carries
+  them (`internal/db/sqlite.go`). Session and reset tokens, recovery codes and
   passwords are stored hashed; TOTP secrets are AES-256-GCM encrypted under `FIELD_ENCRYPTION_KEY`.
   Blobs are stored as received.
 - **Managed bridge.** Three machine-to-machine routes under `/managed/` are disabled (503) unless

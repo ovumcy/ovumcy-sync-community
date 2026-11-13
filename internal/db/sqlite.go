@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -23,25 +24,41 @@ func Open(path string) (*Store, error) {
 		}
 	}
 
-	database, err := sql.Open("sqlite", path)
+	database, err := sql.Open("sqlite", sqliteDSN(path))
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite: %w", err) // codecov:ignore -- database/sql.Open validates only that the driver name is registered; it never dials the DSN (that happens lazily on first use, exercised by the "configure sqlite" PRAGMA Exec just below). "sqlite" is always registered via the blank modernc.org/sqlite import, so this can only fail on a broken build, not any runtime path input. Cannot occur in practice.
+		return nil, fmt.Errorf("open sqlite: %w", err) // codecov:ignore -- database/sql.Open validates only that the driver name is registered; it never dials the DSN (that happens lazily on first use, exercised by the "configure sqlite" Ping just below). "sqlite" is always registered via the blank modernc.org/sqlite import, so this can only fail on a broken build, not any runtime path input. Cannot occur in practice.
 	}
 
 	database.SetConnMaxLifetime(30 * time.Minute)
 	database.SetMaxIdleConns(1)
 	database.SetMaxOpenConns(1)
 
-	if _, err := database.Exec(`
-PRAGMA foreign_keys = ON;
-PRAGMA journal_mode = WAL;
-PRAGMA busy_timeout = 5000;
-`); err != nil {
+	// The driver runs the DSN pragmas when it dials a connection, so dialing
+	// one here surfaces a bad DSN at startup instead of on the first request.
+	if err := database.Ping(); err != nil {
 		_ = database.Close()
 		return nil, fmt.Errorf("configure sqlite: %w", err)
 	}
 
 	return &Store{db: database}, nil
+}
+
+// connectionPragmas run on every connection the pool dials. They live in the
+// DSN, not in a one-off Exec, because foreign_keys and busy_timeout are
+// per-connection settings and SetConnMaxLifetime replaces the connection such
+// an Exec configured: from then on writes would run with foreign keys off and
+// no busy wait.
+const connectionPragmas = "_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)"
+
+// sqliteDSN appends connectionPragmas to the configured path. modernc.org/sqlite
+// splits the DSN at the first '?' and opens everything before it as a plain
+// filename, so spaces, '%', '#' and Windows drive paths need no escaping; a
+// path that already carries a query keeps it and gains the pragmas after it.
+func sqliteDSN(path string) string {
+	if strings.Contains(path, "?") {
+		return path + "&" + connectionPragmas
+	}
+	return path + "?" + connectionPragmas
 }
 
 func (s *Store) Close() error {
