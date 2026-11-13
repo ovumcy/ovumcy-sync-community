@@ -104,6 +104,25 @@ func TestPutBlobParkedGenerationLockOutIsBounded(t *testing.T) {
 	}
 }
 
+// Pins the bound itself in wall-clock terms, so a change to blobGenerationSkew
+// in either direction fails here.
+func TestPutBlobGenerationCeilingIsFifteenMinutes(t *testing.T) {
+	sync, accountID, input := newBlobGenerationFixture(t)
+
+	base := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	sync.now = func() time.Time { return base }
+
+	input.Generation = base.Add(15*time.Minute).UnixMilli() + 1
+	if _, err := sync.PutBlob(context.Background(), accountID, input); !errors.Is(err, ErrInvalidBlob) {
+		t.Fatalf("1ms past now+15min must be rejected, got %v", err)
+	}
+
+	input.Generation = base.Add(15 * time.Minute).UnixMilli()
+	if _, err := sync.PutBlob(context.Background(), accountID, input); err != nil {
+		t.Fatalf("exactly now+15min must be accepted, got %v", err)
+	}
+}
+
 func TestPutBlobStillRejectsStaleGenerationWithinTheBound(t *testing.T) {
 	sync, accountID, input := newBlobGenerationFixture(t)
 
