@@ -43,7 +43,7 @@ type Config struct {
 	// entitlement-lapse marker (accounts.lapsed_at, set by the managed
 	// bridge's POST /managed/accounts/{account_id}/premium lapse signal) is
 	// recorded before the purge-lapsed-accounts CLI subcommand erases it. A
-	// session mint (resubscribe) clears the marker at any point before the
+	// reactivation signal (resubscribe) clears the marker at any point before the
 	// grace period elapses, so this is purely a data-minimization window, not
 	// a product feature deadline. One default for managed-cloud and
 	// self-hosted deployments, operator-tunable via

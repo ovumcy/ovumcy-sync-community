@@ -29,6 +29,14 @@ var ErrStaleGeneration = errors.New("stale_generation")
 // CountDevicesForAccount (TOCTOU).
 var ErrDeviceLimitReached = errors.New("device_limit_reached")
 
+// ErrAccountLapsed is returned by UpsertManagedAccount when the managed
+// account carries an entitlement-lapse marker: a mint never reverses a lapse.
+var ErrAccountLapsed = errors.New("account_lapsed")
+
+// ErrStaleEntitlementSignal is returned by ApplyEntitlementSignal when a
+// newer entitlement signal has already been applied to the account.
+var ErrStaleEntitlementSignal = errors.New("stale_entitlement_signal")
+
 func (s *Store) CreateAccount(ctx context.Context, account models.Account) (models.Account, error) {
 	_, err := s.db.ExecContext(
 		ctx,
@@ -51,16 +59,15 @@ func (s *Store) CreateAccount(ctx context.Context, account models.Account) (mode
 	return account, nil
 }
 
-// UpsertManagedAccount provisions or refreshes a mode=managed account. Every
-// call — including a plain session-mint refresh, not just first provisioning
-// — clears lapsed_at unconditionally: this is the "mint clears the marker"
-// half of the entitlement-lapse cleanup contract (see SetAccountLapsed and
-// LapsedAccountSweepService), so an account that resubscribes and mints a
-// new session is immediately safe from the purge sweep again, without
-// needing a separate call. The INSERT branch never needs to set lapsed_at
-// explicitly: the column defaults to NULL for a brand-new row.
+// UpsertManagedAccount provisions or refreshes a mode=managed account. It
+// never clears an entitlement lapse: on an existing account whose lapsed_at
+// is set the conflict update is skipped (premium_active stays off) and
+// ErrAccountLapsed is returned, so a delayed or retried mint can never
+// reverse a lapse. Only an ordered reactivation (ApplyEntitlementSignal with
+// Active) clears the marker; the next mint then restores premium_active.
+// The INSERT branch never sets lapsed_at: the column defaults to NULL.
 func (s *Store) UpsertManagedAccount(ctx context.Context, account models.Account) (models.Account, error) {
-	_, err := s.db.ExecContext(
+	result, err := s.db.ExecContext(
 		ctx,
 		`
 INSERT INTO accounts (id, login, password_hash, recovery_code_hash, mode, premium_active, created_at)
@@ -69,8 +76,8 @@ ON CONFLICT(id) DO UPDATE SET
   login = excluded.login,
   password_hash = excluded.password_hash,
   mode = excluded.mode,
-  premium_active = excluded.premium_active,
-  lapsed_at = NULL
+  premium_active = excluded.premium_active
+WHERE accounts.lapsed_at IS NULL
 `,
 		account.ID,
 		account.Login,
@@ -85,6 +92,14 @@ ON CONFLICT(id) DO UPDATE SET
 			return models.Account{}, ErrConflict
 		}
 		return models.Account{}, fmt.Errorf("upsert managed account: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return models.Account{}, fmt.Errorf("upsert managed account rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); needs a fake driver, the same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
+	}
+	if affected == 0 {
+		return models.Account{}, ErrAccountLapsed
 	}
 
 	return account, nil
@@ -289,9 +304,10 @@ const DefaultLapsedAccountSweepLimit = 500
 // already-stored lapsed_at is preserved (the COALESCE) rather than
 // overwritten. This is what makes a replayed lapse signal idempotent without
 // weakening the grace-period contract: repeating the signal can never push
-// the sweep's grace deadline further out, only a session mint
-// (UpsertManagedAccount) or an explicit active=true retraction
-// (ClearAccountLapse) resets the marker.
+// the sweep's grace deadline further out; only a reactivation
+// (ApplyEntitlementSignal with Active, or ClearAccountLapse) resets the
+// marker. The bridge path goes through ApplyEntitlementSignal, which orders
+// the signal and revokes sessions in the same transaction.
 //
 // Scoped to mode = 'managed' so the bridge credential can never mark a
 // self-hosted account lapsed even if the id collides — the same defense
@@ -322,15 +338,12 @@ func (s *Store) SetAccountLapsed(ctx context.Context, accountID string, lapsedAt
 }
 
 // ClearAccountLapse retracts a previously recorded lapse marker WITHOUT
-// touching premium_active — turning premium back on and issuing a session
-// both remain the mint path's job (UpsertManagedAccount, called from
-// CreateManagedSession), which already clears lapsed_at on every successful
-// mint. This method backs the explicit active=true retraction path
-// (ManagedBridgeService.SetAccountLapseSignal): a managed-side false
-// positive corrected before the account's next session mint. Scoped to
-// mode = 'managed' for the same reason as SetAccountLapsed. Clearing an
-// already-clear marker is a no-op success. Returns ErrNotFound when
-// accountID does not exist or is not a managed account.
+// touching premium_active or the signal ordering — the unordered primitive
+// behind ApplyEntitlementSignal's reactivation branch. Turning premium back
+// on and issuing a session remain the mint path's job (UpsertManagedAccount).
+// Scoped to mode = 'managed' for the same reason as SetAccountLapsed.
+// Clearing an already-clear marker is a no-op success. Returns ErrNotFound
+// when accountID does not exist or is not a managed account.
 func (s *Store) ClearAccountLapse(ctx context.Context, accountID string) error {
 	result, err := s.db.ExecContext(
 		ctx,
@@ -347,6 +360,104 @@ func (s *Store) ClearAccountLapse(ctx context.Context, accountID string) error {
 	}
 	if affected == 0 {
 		return ErrNotFound
+	}
+
+	return nil
+}
+
+// EntitlementSignal is one lapse (Active false) or reactivation (Active
+// true) report from the managed bridge. AsOf is the managed service's own
+// observation instant; the zero value means the caller supplied none, which
+// only a lapse may do. ReceivedAt is this server's clock: it becomes
+// lapsed_at (the purge grace clock) and orders a lapse that carries no AsOf.
+type EntitlementSignal struct {
+	Active     bool
+	AsOf       time.Time
+	ReceivedAt time.Time
+}
+
+// ApplyEntitlementSignal applies signal to the managed account accountID in
+// one transaction, ordered against every signal applied before it through
+// accounts.entitlement_signal_as_of:
+//
+//   - A reactivation is applied only when its AsOf is strictly newer than
+//     the stored point; it clears lapsed_at (premium_active returns with the
+//     next mint).
+//   - A lapse is applied unless its AsOf is strictly older than the stored
+//     point — ties go to the lapse, and a lapse without AsOf is never stale.
+//     It clears premium_active, records lapsed_at (preserving one already
+//     recorded, so replay never extends the grace period) and deletes every
+//     session the account holds.
+//
+// A refused signal returns ErrStaleEntitlementSignal and changes nothing.
+// The stored point only moves forward. Returns ErrNotFound when accountID
+// does not exist or is not a managed account.
+func (s *Store) ApplyEntitlementSignal(ctx context.Context, accountID string, signal EntitlementSignal) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin entitlement signal: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	var mode string
+	var stored sql.NullInt64
+	err = tx.QueryRowContext(
+		ctx,
+		`SELECT mode, entitlement_signal_as_of FROM accounts WHERE id = ?`,
+		accountID,
+	).Scan(&mode, &stored)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("read entitlement signal state: %w", err)
+	}
+	if mode != "managed" {
+		return ErrNotFound
+	}
+
+	orderAt := signal.ReceivedAt.UnixNano()
+	if !signal.AsOf.IsZero() {
+		orderAt = signal.AsOf.UnixNano()
+	}
+	if stored.Valid {
+		if signal.Active && orderAt <= stored.Int64 {
+			return ErrStaleEntitlementSignal
+		}
+		if !signal.Active && !signal.AsOf.IsZero() && orderAt < stored.Int64 {
+			return ErrStaleEntitlementSignal
+		}
+		orderAt = max(orderAt, stored.Int64)
+	}
+
+	if signal.Active {
+		if _, err := tx.ExecContext(
+			ctx,
+			`UPDATE accounts SET lapsed_at = NULL, entitlement_signal_as_of = ? WHERE id = ?`,
+			orderAt,
+			accountID,
+		); err != nil {
+			return fmt.Errorf("apply reactivation signal: %w", err)
+		}
+	} else {
+		if _, err := tx.ExecContext(
+			ctx,
+			`UPDATE accounts SET premium_active = 0, lapsed_at = COALESCE(lapsed_at, ?), entitlement_signal_as_of = ? WHERE id = ?`,
+			signal.ReceivedAt.UTC().Format(time.RFC3339Nano),
+			orderAt,
+			accountID,
+		); err != nil {
+			return fmt.Errorf("apply lapse signal: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE account_id = ?`, accountID); err != nil {
+			return fmt.Errorf("revoke lapsed account sessions: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit entitlement signal: %w", err) // codecov:ignore -- on this store's single-connection sqlite (WAL, busy_timeout) a COMMIT whose statements all succeeded has no deterministically injectable in-process failure; needs a fake driver.
 	}
 
 	return nil
@@ -425,9 +536,9 @@ func (s *Store) ListLapsedManagedAccountIDs(ctx context.Context, cutoff time.Tim
 // is still a managed account whose lapsed_at marker is set and strictly
 // older than cutoff at the moment the transaction runs. This is the
 // delete-time entitlement re-check the lapse-cleanup design requires: a
-// session mint between the sweep's candidate listing (
+// reactivation between the sweep's candidate listing (
 // ListLapsedManagedAccountIDs) and this call clears lapsed_at
-// (UpsertManagedAccount), which makes the final conditional DELETE affect
+// (ApplyEntitlementSignal), which makes the final conditional DELETE affect
 // zero rows, so the whole transaction rolls back — including the
 // unconditional child-table deletes above, which then never reach disk — and
 // the account (and its data) survives completely intact.

@@ -427,51 +427,133 @@ func TestClearAccountLapseRetractsMarkerWithoutTouchingPremiumActive(t *testing.
 	}
 }
 
-// TestUpsertManagedAccountClearsLapsedAtOnMint pins the "mint clears the
-// marker" half of the entitlement-lapse contract: a session-mint refresh
-// through UpsertManagedAccount (the same call CreateManagedSession makes on
-// every mint, not just first provisioning) must clear a previously recorded
-// lapsed_at and restore premium_active, so a resubscribed account is safe
-// from the purge sweep again without a separate call.
-func TestUpsertManagedAccountClearsLapsedAtOnMint(t *testing.T) {
+// TestUpsertManagedAccountRefusesLapsedAccount pins SYNC-9: a mint refresh
+// through UpsertManagedAccount must leave a recorded lapse in place, keep
+// premium_active off and report ErrAccountLapsed; after a reactivation
+// clears the marker the same mint restores premium_active.
+func TestUpsertManagedAccountRefusesLapsedAccount(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
 
-	const managedID = "managed-mint-clears-lapse"
+	const managedID = "managed-mint-after-lapse"
 	createLapseTestAccount(t, store, managedID, "managed")
 
-	if err := store.SetAccountLapsed(ctx, managedID, now.Add(-72*time.Hour)); err != nil {
+	lapsedAt := now.Add(-72 * time.Hour)
+	if err := store.SetAccountLapsed(ctx, managedID, lapsedAt); err != nil {
 		t.Fatalf("set account lapsed: %v", err)
 	}
-	if lapsedAt, err := store.GetAccountLapsedAt(ctx, managedID); err != nil || lapsedAt == nil {
-		t.Fatalf("expected lapsed_at set before mint, got %v err=%v", lapsedAt, err)
-	}
 
-	if _, err := store.UpsertManagedAccount(ctx, models.Account{
+	mint := models.Account{
 		ID:            managedID,
 		Login:         "managed:" + managedID,
 		PasswordHash:  "managed_service_only",
 		Mode:          "managed",
 		PremiumActive: true,
 		CreatedAt:     now,
-	}); err != nil {
-		t.Fatalf("upsert managed account (mint refresh): %v", err)
 	}
-
-	lapsedAt, err := store.GetAccountLapsedAt(ctx, managedID)
-	if err != nil {
-		t.Fatalf("get account lapsed at after mint: %v", err)
+	if _, err := store.UpsertManagedAccount(ctx, mint); !errors.Is(err, ErrAccountLapsed) {
+		t.Fatalf("expected ErrAccountLapsed for a mint after lapse, got %v", err)
 	}
-	if lapsedAt != nil {
-		t.Fatalf("expected mint to clear lapsed_at, got %v", lapsedAt)
+	if got, err := store.GetAccountLapsedAt(ctx, managedID); err != nil || got == nil || !got.Equal(lapsedAt) {
+		t.Fatalf("expected lapsed_at to stay %s after the refused mint, got %v err=%v", lapsedAt, got, err)
 	}
 	account, err := store.FindAccountByID(ctx, managedID)
+	if err != nil {
+		t.Fatalf("find managed account after refused mint: %v", err)
+	}
+	if account.PremiumActive {
+		t.Fatal("expected premium_active to stay false after a refused mint")
+	}
+
+	if err := store.ApplyEntitlementSignal(ctx, managedID, EntitlementSignal{Active: true, AsOf: now, ReceivedAt: now}); err != nil {
+		t.Fatalf("reactivate: %v", err)
+	}
+	if _, err := store.UpsertManagedAccount(ctx, mint); err != nil {
+		t.Fatalf("mint after reactivation: %v", err)
+	}
+	account, err = store.FindAccountByID(ctx, managedID)
 	if err != nil {
 		t.Fatalf("find managed account after mint: %v", err)
 	}
 	if !account.PremiumActive {
-		t.Fatal("expected premium_active restored true after mint")
+		t.Fatal("expected premium_active restored by the mint after reactivation")
+	}
+}
+
+// TestApplyEntitlementSignalOrdersAndRevokesInOneTransaction covers the
+// store contract: a lapse revokes the account's sessions (a bystander's
+// survive), a stale signal changes nothing, the ordering point only moves
+// forward, and non-managed or missing accounts report ErrNotFound.
+func TestApplyEntitlementSignalOrdersAndRevokesInOneTransaction(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	const managedID = "managed-signal-order"
+	const bystanderID = "managed-signal-bystander"
+	const selfHostedID = "self-hosted-signal"
+	createLapseTestAccount(t, store, managedID, "managed")
+	createLapseTestAccount(t, store, bystanderID, "managed")
+	createLapseTestAccount(t, store, selfHostedID, "self_hosted")
+	for _, id := range []string{managedID, bystanderID} {
+		if _, err := store.CreateSession(ctx, models.Session{
+			ID:         id + "-session",
+			AccountID:  id,
+			TokenHash:  id + "-token-hash",
+			CreatedAt:  now,
+			LastSeenAt: now,
+			ExpiresAt:  now.Add(24 * time.Hour),
+		}); err != nil {
+			t.Fatalf("create session for %s: %v", id, err)
+		}
+	}
+
+	lapseAsOf := now.Add(-time.Hour)
+	if err := store.ApplyEntitlementSignal(ctx, managedID, EntitlementSignal{AsOf: lapseAsOf, ReceivedAt: now}); err != nil {
+		t.Fatalf("apply lapse: %v", err)
+	}
+	if _, err := store.FindSessionByTokenHash(ctx, managedID+"-token-hash"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected the lapsed account's session deleted, got %v", err)
+	}
+	if _, err := store.FindSessionByTokenHash(ctx, bystanderID+"-token-hash"); err != nil {
+		t.Fatalf("expected the bystander's session to survive, got %v", err)
+	}
+	if got, err := store.GetAccountLapsedAt(ctx, managedID); err != nil || got == nil || !got.Equal(now) {
+		t.Fatalf("expected lapsed_at stamped with the server clock %s, got %v err=%v", now, got, err)
+	}
+
+	if err := store.ApplyEntitlementSignal(ctx, managedID, EntitlementSignal{Active: true, AsOf: lapseAsOf, ReceivedAt: now}); !errors.Is(err, ErrStaleEntitlementSignal) {
+		t.Fatalf("expected a tied reactivation to be stale, got %v", err)
+	}
+	if got, err := store.GetAccountLapsedAt(ctx, managedID); err != nil || got == nil {
+		t.Fatalf("expected the lapse to survive a stale reactivation, got %v err=%v", got, err)
+	}
+
+	if err := store.ApplyEntitlementSignal(ctx, managedID, EntitlementSignal{Active: true, AsOf: now, ReceivedAt: now}); err != nil {
+		t.Fatalf("apply reactivation: %v", err)
+	}
+	if got, err := store.GetAccountLapsedAt(ctx, managedID); err != nil || got != nil {
+		t.Fatalf("expected lapsed_at cleared by reactivation, got %v err=%v", got, err)
+	}
+
+	// A legacy lapse (no AsOf) stamped earlier than the stored point applies
+	// without moving the ordering point back, so the older reactivation that
+	// follows is still stale.
+	if err := store.ApplyEntitlementSignal(ctx, managedID, EntitlementSignal{ReceivedAt: lapseAsOf}); err != nil {
+		t.Fatalf("apply legacy lapse: %v", err)
+	}
+	if err := store.ApplyEntitlementSignal(ctx, managedID, EntitlementSignal{Active: true, AsOf: now.Add(-time.Minute), ReceivedAt: now}); !errors.Is(err, ErrStaleEntitlementSignal) {
+		t.Fatalf("expected a reactivation older than the stored point to be stale, got %v", err)
+	}
+
+	for _, id := range []string{selfHostedID, "missing-account"} {
+		if err := store.ApplyEntitlementSignal(ctx, id, EntitlementSignal{ReceivedAt: now}); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("expected ErrNotFound for %s, got %v", id, err)
+		}
+	}
+	if got, err := store.GetAccountLapsedAt(ctx, selfHostedID); err != nil || got != nil {
+		t.Fatalf("expected the self-hosted account untouched, got %v err=%v", got, err)
 	}
 }
 

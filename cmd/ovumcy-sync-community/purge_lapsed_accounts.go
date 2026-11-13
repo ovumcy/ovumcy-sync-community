@@ -19,7 +19,7 @@ import (
 // cfg.LapsedAccountGracePeriod, via the same whole-account transactional
 // purge DeleteAccount uses. See services.LapsedAccountSweepService and
 // db.Store.DeleteLapsedManagedAccount for the delete-time re-check that
-// makes this safe against a resubscribe (a session mint) racing the sweep.
+// makes this safe against a resubscribe (a reactivation signal) racing the sweep.
 //
 // It is the on-demand half of the purge. `serve` runs the same sweep on
 // LAPSED_ACCOUNT_SWEEP_INTERVAL (see runLapsedAccountSweepLoop), because

@@ -19,7 +19,7 @@ decrypted payloads.
 
 | Table | Columns | Class | Notes |
 | --- | --- | --- | --- |
-| `accounts` | `id`, `login`, `created_at`, `mode`, `premium_active`, `lapsed_at` | Identity, metadata | `login` is the only user-chosen identifier; `mode` is `self_hosted` or `managed`; `lapsed_at` is set only for managed accounts |
+| `accounts` | `id`, `login`, `created_at`, `mode`, `premium_active`, `lapsed_at`, `entitlement_signal_as_of` | Identity, metadata | `login` is the only user-chosen identifier; `mode` is `self_hosted` or `managed`; `lapsed_at` and `entitlement_signal_as_of` (the ordering point of the newest bridge lapse/reactivation signal) are set only for managed accounts |
 | `accounts` | `password_hash`, `recovery_code_hash` | Credential | bcrypt, cost 12; an empty recovery hash means no recovery code |
 | `accounts` | `totp_secret_encrypted`, `totp_enabled`, `totp_last_used_step` | Credential | Secret is AES-256-GCM under `FIELD_ENCRYPTION_KEY`, AAD bound to the account; the last used step blocks replay |
 | `sessions` | `id`, `account_id`, `token_hash`, `created_at`, `last_seen_at`, `expires_at`, `device_id` | Credential (hash), metadata | Token stored as SHA-256 only; `device_id` is the device the session first attached (NULL until then) |
@@ -38,7 +38,7 @@ decrypted payloads.
 | A managed account on bridge request | `DELETE /managed/accounts/{account_id}` behind the managed-bridge token purges the account |
 | A single session | Logout, a password change (every other session), or a recovery-based reset |
 | Expired sessions, reset tokens, TOTP challenges | The expired-rows sweep removes rows past `expires_at`. Interval `EXPIRED_ROWS_SWEEP_INTERVAL` (default 24 h; the in-process sweep can be disabled), batch size `EXPIRED_ROWS_SWEEP_LIMIT` (0 uses the built-in default). Expiry is already enforced at use time, so an expired row is unusable before it is erased |
-| A managed account whose entitlement lapsed | The lapse sweep deletes it once `lapsed_at` is older than `LAPSED_ACCOUNT_GRACE_PERIOD` (default 60 days). Interval `LAPSED_ACCOUNT_SWEEP_INTERVAL` (default 24 h), batch size `LAPSED_ACCOUNT_SWEEP_LIMIT`. Sync access is revoked immediately at lapse; only the data is kept for the grace period. A renewal clears `lapsed_at`. The same purge can be run by hand with the `purge-lapsed-accounts` command. Self-hosted accounts are never swept |
+| A managed account whose entitlement lapsed | The lapse sweep deletes it once `lapsed_at` is older than `LAPSED_ACCOUNT_GRACE_PERIOD` (default 60 days). Interval `LAPSED_ACCOUNT_SWEEP_INTERVAL` (default 24 h), batch size `LAPSED_ACCOUNT_SWEEP_LIMIT`. Sync access is revoked immediately at lapse; only the data is kept for the grace period. Only a reactivation signal newer than the lapse clears `lapsed_at`; a session mint never does. The same purge can be run by hand with the `purge-lapsed-accounts` command. Self-hosted accounts are never swept |
 | A device record | The user removes the device, or the account is deleted |
 
 The sweeps are enabled by default in the server process. Rows with no expiry (`devices`,

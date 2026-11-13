@@ -147,13 +147,13 @@ func (s *Server) routes() {
 	s.handleRoute("DELETE /managed/accounts/{account_id}", "managed_account_purge", s.withManagedBridge(s.handleManagedAccountPurge))
 	s.handleRoute("POST /managed/accounts/{account_id}/premium", "managed_account_premium", s.withManagedBridge(s.handleManagedAccountPremium))
 	s.handleRoute("GET /sync/capabilities", "sync_capabilities", s.withAuth(s.handleCapabilities))
-	s.handleRoute("POST /sync/devices", "sync_devices", s.withAuth(s.handleAttachDevice))
-	s.handleRoute("GET /sync/devices", "sync_devices_list", s.withAuth(s.handleListDevices))
-	s.handleRoute("DELETE /sync/devices/{device_id}", "sync_devices_remove", s.withAuth(s.handleRemoveDevice))
-	s.handleRoute("GET /sync/recovery-key", "sync_recovery_key_get", s.withAuth(s.handleGetRecoveryKey))
-	s.handleRoute("PUT /sync/recovery-key", "sync_recovery_key_put", s.withAuth(s.handlePutRecoveryKey))
-	s.handleRoute("GET /sync/blob", "sync_blob_get", s.withAuth(s.handleGetBlob))
-	s.handleRoute("PUT /sync/blob", "sync_blob_put", s.withAuth(s.handlePutBlob))
+	s.handleRoute("POST /sync/devices", "sync_devices", s.withAuth(s.requireSyncEnabled(s.handleAttachDevice)))
+	s.handleRoute("GET /sync/devices", "sync_devices_list", s.withAuth(s.requireSyncEnabled(s.handleListDevices)))
+	s.handleRoute("DELETE /sync/devices/{device_id}", "sync_devices_remove", s.withAuth(s.requireSyncEnabled(s.handleRemoveDevice)))
+	s.handleRoute("GET /sync/recovery-key", "sync_recovery_key_get", s.withAuth(s.requireSyncEnabled(s.handleGetRecoveryKey)))
+	s.handleRoute("PUT /sync/recovery-key", "sync_recovery_key_put", s.withAuth(s.requireSyncEnabled(s.handlePutRecoveryKey)))
+	s.handleRoute("GET /sync/blob", "sync_blob_get", s.withAuth(s.requireSyncEnabled(s.handleGetBlob)))
+	s.handleRoute("PUT /sync/blob", "sync_blob_put", s.withAuth(s.requireSyncEnabled(s.handlePutBlob)))
 }
 
 func (s *Server) handleRoute(pattern string, metricsRoute string, handler http.Handler) {
@@ -733,6 +733,8 @@ func (s *Server) handleManagedSession(writer http.ResponseWriter, request *http.
 		switch {
 		case errors.Is(err, services.ErrInvalidManagedAccount):
 			writeError(writer, http.StatusBadRequest, "invalid_managed_account")
+		case errors.Is(err, services.ErrManagedAccountLapsed):
+			writeError(writer, http.StatusConflict, "managed_account_lapsed")
 		default:
 			writeError(writer, http.StatusInternalServerError, "internal_error")
 		}
@@ -770,23 +772,28 @@ func (s *Server) handleManagedAccountPurge(writer http.ResponseWriter, request *
 // and SECURITY.md. It is gated by withManagedBridge — the same
 // MANAGED_BRIDGE_TOKEN bearer as
 // POST /managed/session and the account-purge endpoint — and relays the
-// path id and the request body's active flag to
+// path id and the request body's active flag and as-of instant to
 // ManagedBridgeService.SetAccountLapseSignal, which owns normalization, the
-// managed-mode guard, idempotency, and (for active=false) the immediate
-// session revocation. This is a lifecycle signal only: the request and
-// response never carry anything beyond the account id and the boolean flag,
-// so no health-adjacent content ever crosses the bridge.
+// managed-mode guard, signal ordering, idempotency, and (for active=false)
+// the immediate session revocation. This is a lifecycle signal only: the
+// request and response never carry anything beyond the account id, the
+// boolean flag and its timestamp, so no health-adjacent content ever crosses
+// the bridge.
 func (s *Server) handleManagedAccountPremium(writer http.ResponseWriter, request *http.Request) {
 	var payload managedAccountPremiumRequest
 	if !decodeJSON(writer, request, &payload, 4<<10) {
 		return
 	}
 
-	err := s.managedBridge.SetAccountLapseSignal(request.Context(), request.PathValue("account_id"), payload.Active)
+	err := s.managedBridge.SetAccountLapseSignal(request.Context(), request.PathValue("account_id"), payload.Active, payload.AsOf)
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrInvalidManagedAccount):
 			writeError(writer, http.StatusBadRequest, "invalid_managed_account")
+		case errors.Is(err, services.ErrInvalidEntitlementSignal):
+			writeError(writer, http.StatusBadRequest, "invalid_entitlement_signal")
+		case errors.Is(err, services.ErrStaleEntitlementSignal):
+			writeError(writer, http.StatusConflict, "stale_entitlement_signal")
 		default:
 			writeError(writer, http.StatusInternalServerError, "internal_error")
 		}
@@ -1065,6 +1072,25 @@ func (s *Server) withAuth(next func(http.ResponseWriter, *http.Request, models.A
 		account, err := s.auth.Authenticate(request.Context(), bearerTokenFromRequest(request))
 		if err != nil {
 			writeError(writer, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		next(writer, request, account)
+	}
+}
+
+// requireSyncEnabled gates the device, recovery-key and blob routes (inside
+// withAuth) on the account's own capability document: a session whose
+// account reports sync_enabled=false (a managed account without premium)
+// gets 403 sync_disabled. It backs the lapse revocation for a session minted
+// in a race with it. GET /sync/capabilities is not gated, so the client can
+// still read why.
+func (s *Server) requireSyncEnabled(
+	next func(http.ResponseWriter, *http.Request, models.Account),
+) func(http.ResponseWriter, *http.Request, models.Account) {
+	return func(writer http.ResponseWriter, request *http.Request, account models.Account) {
+		if !s.sync.CapabilitiesForAccount(account).SyncEnabled {
+			writeError(writer, http.StatusForbidden, "sync_disabled")
 			return
 		}
 
@@ -1418,11 +1444,13 @@ type managedSessionRequest struct {
 }
 
 // managedAccountPremiumRequest is the POST /managed/accounts/{account_id}
-// /premium body. Active false records an entitlement lapse; true retracts a
-// previously recorded one. An omitted field decodes to false, the sketch's
-// primary case (see handleManagedAccountPremium).
+// /premium body. Active false records an entitlement lapse; true reactivates
+// after one. An omitted active decodes to false. AsOf is the managed
+// service's observation instant (RFC 3339): required for active=true,
+// optional for a lapse; the zero value means omitted.
 type managedAccountPremiumRequest struct {
-	Active bool `json:"active"`
+	Active bool      `json:"active"`
+	AsOf   time.Time `json:"as_of"`
 }
 
 type deviceRequest struct {

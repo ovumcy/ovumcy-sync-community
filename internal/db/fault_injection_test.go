@@ -1102,6 +1102,12 @@ func TestLapseMarkerMethodsReturnErrorWhenAccountsTableIsDropped(t *testing.T) {
 	if _, err := store.ListLapsedManagedAccountIDs(ctx, time.Now().UTC(), 0); err == nil {
 		t.Fatal("expected error listing lapsed managed account ids after accounts table is dropped")
 	}
+
+	if err := store.ApplyEntitlementSignal(ctx, target.ID, EntitlementSignal{ReceivedAt: time.Now().UTC()}); err == nil {
+		t.Fatal("expected error applying an entitlement signal after accounts table is dropped")
+	} else if errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected a store-failure error, not ErrNotFound, got %v", err)
+	}
 }
 
 // TestListLapsedManagedAccountIDsSurfacesScanErrorOnNullAccountID exercises

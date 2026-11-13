@@ -34,13 +34,14 @@ type LapsedAccountSweepResult struct {
 // Deletion reuses db.Store.DeleteLapsedManagedAccount, which re-derives
 // eligibility (mode='managed' AND lapsed_at set AND older than the same
 // cutoff this Run call used) INSIDE its own delete transaction immediately
-// before committing — so a session mint that races the sweep and clears
-// lapsed_at (UpsertManagedAccount) always wins: the conditional DELETE
-// affects zero rows, the whole transaction (including the already-issued
-// child-table deletes) rolls back, and the account survives untouched. This
-// is a stronger re-check than a plain "re-read right before acting" would
-// give: there is no window between the re-check and the delete for a mint to
-// land in, because they are the same SQL statement.
+// before committing — so a reactivation that races the sweep and clears
+// lapsed_at (db.Store.ApplyEntitlementSignal) always wins: the conditional
+// DELETE affects zero rows, the whole transaction (including the
+// already-issued child-table deletes) rolls back, and the account survives
+// untouched. This is a stronger re-check than a plain "re-read right before
+// acting" would give: there is no window between the re-check and the
+// delete for a reactivation to land in, because they are the same SQL
+// statement.
 // lapsedSweepStore is the persistence surface LapsedAccountSweepService
 // needs, satisfied by *db.Store. Consumer-side for the same reason as the
 // managed peer's guestGCStore seam: a test can wrap the real store to
@@ -77,7 +78,7 @@ func NewLapsedAccountSweepService(store *db.Store, gracePeriod time.Duration) *L
 // both the candidate listing and every per-candidate delete-time re-check,
 // so a run that takes a while never spuriously excludes a candidate purely
 // because wall-clock time advanced during the run — only an intervening
-// session mint (which clears lapsed_at outright) can do that, which is the
+// reactivation (which clears lapsed_at outright) can do that, which is the
 // intended race protection, not an accident of a moving cutoff.
 //
 // When dryRun is true, candidates are counted into Examined but never
@@ -87,7 +88,7 @@ func NewLapsedAccountSweepService(store *db.Store, gracePeriod time.Duration) *L
 // Run aborts immediately and returns the error with an empty result. A
 // per-candidate delete that reports db.ErrNotFound is the benign, by-design
 // outcome the delete-time re-check exists to produce (the account vanished,
-// or a mint raced the sweep and made it ineligible again) — not a failure —
+// or a reactivation raced the sweep and made it ineligible again) — not a failure —
 // so it is skipped and the batch continues. A per-candidate delete that
 // fails for any other reason is collected via errors.Join and the batch
 // continues past it, mirroring PartnerGuestGCService.Run in ovumcy-managed:
