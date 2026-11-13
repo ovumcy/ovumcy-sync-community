@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ovumcy/ovumcy-sync-community/internal/db"
 	"github.com/ovumcy/ovumcy-sync-community/internal/security"
 )
 
@@ -245,6 +246,66 @@ func TestChangePasswordInvalidatesPendingResetToken(t *testing.T) {
 
 	if _, err := service.ResetPassword(ctx, forgot.ResetToken, "yet another password!"); err != ErrInvalidResetToken {
 		t.Fatalf("expected pending reset token to be invalidated after change-password, got %v", err)
+	}
+}
+
+// A TOTP login challenge minted under the old password must not complete into
+// a session once the password has changed.
+func TestChangePasswordInvalidatesPendingTOTPChallenge(t *testing.T) {
+	store := openTestStore(t)
+	authService := NewAuthService(store, 24*time.Hour)
+
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 1)
+	}
+	totpService := NewTOTPService(store, authService, key, "ovumcy-sync-community-test")
+	authService.AttachTOTPChallengeIssuer(totpService)
+
+	ctx := context.Background()
+	registered, err := authService.Register(ctx, "owner@example.com", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	start, err := totpService.StartEnrollment(ctx, registered.AccountID, "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("StartEnrollment: %v", err)
+	}
+	secret, err := security.DecodeTOTPSecretBase32(start.SecretBase32)
+	if err != nil {
+		t.Fatalf("decode secret: %v", err)
+	}
+	enrollStep := time.Now().UTC().Unix() / security.TOTPStepSeconds
+	if err := totpService.CompleteEnrollment(
+		ctx,
+		registered.AccountID,
+		security.HashToken(registered.SessionToken),
+		security.GenerateTOTPCode(secret, enrollStep),
+	); err != nil {
+		t.Fatalf("CompleteEnrollment: %v", err)
+	}
+
+	challengeID, _, err := totpService.IssueChallenge(ctx, registered.AccountID)
+	if err != nil {
+		t.Fatalf("IssueChallenge: %v", err)
+	}
+
+	if err := authService.ChangePassword(
+		ctx,
+		registered.AccountID,
+		security.HashToken(registered.SessionToken),
+		"correct horse battery staple",
+		"replacement password phrase",
+	); err != nil {
+		t.Fatalf("change password: %v", err)
+	}
+
+	if _, err := store.FindTOTPChallengeByHash(ctx, security.HashToken(challengeID)); !errors.Is(err, db.ErrNotFound) {
+		t.Fatalf("expected the pending challenge to be deleted, got %v", err)
+	}
+	if _, err := totpService.VerifyChallenge(ctx, challengeID, security.GenerateTOTPCode(secret, enrollStep+1)); !errors.Is(err, ErrTOTPChallengeInvalid) {
+		t.Fatalf("expected ErrTOTPChallengeInvalid after change-password, got %v", err)
 	}
 }
 

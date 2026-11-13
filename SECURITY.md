@@ -71,6 +71,14 @@ snapshot.
   accounts are timing-distinguishable from unknown logins. Legacy
   recovery-code hashes converge on the next rotation (password reset or
   explicit regeneration) instead. Accepted as bounded and converging.
+- **Registration reveals whether a login is taken.** A taken login answers
+  `400 registration_failed`, distinct from success. Logins are self-chosen and
+  the server has no out-of-band channel to confirm one, so registration must
+  refuse a taken login and say so; a fake success would hand out a session for
+  an account that was never created. `Register` hashes the password before the
+  insert, so a taken and a free login cost the same bcrypt work, and the route
+  is rate-limited per client IP. Login and forgot-password stay
+  enumeration-safe.
 - **`managed:` login namespace.** Public registration cannot claim the
   `managed:` prefix, while bridge-provisioned logins use it by design behind
   the `MANAGED_BRIDGE_TOKEN` gate.
@@ -142,6 +150,7 @@ on the account's next successful login.
 | Rejects a weak new password | `TestChangePasswordRejectsWeakNew` in [internal/services/auth_service_change_password_test.go](internal/services/auth_service_change_password_test.go); `TestChangePasswordEndpointRejectsWeakNew` in [internal/api/auth_change_password_test.go](internal/api/auth_change_password_test.go) |
 | On success, revokes every session except the caller's | `TestChangePasswordSuccessRevokesOtherSessions` in [internal/services/auth_service_change_password_test.go](internal/services/auth_service_change_password_test.go); `TestChangePasswordEndpointSucceedsAndRevokesOtherSessions` in [internal/api/auth_change_password_test.go](internal/api/auth_change_password_test.go) |
 | Deletes pending reset tokens so a previously issued reset token cannot be reused | `TestChangePasswordInvalidatesPendingResetToken` in [internal/services/auth_service_recovery_test.go](internal/services/auth_service_recovery_test.go) |
+| Deletes pending TOTP login challenges, so one minted under the old password cannot complete into a session | `TestChangePasswordInvalidatesPendingTOTPChallenge` in [internal/services/auth_service_recovery_test.go](internal/services/auth_service_recovery_test.go) |
 
 ### Recovery Codes and Password Reset
 

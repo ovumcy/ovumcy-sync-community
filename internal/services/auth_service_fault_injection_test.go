@@ -219,6 +219,28 @@ func TestChangePasswordStoreErrors(t *testing.T) {
 			t.Fatalf("expected the reset-token cleanup store error to surface, got %v", err)
 		}
 	})
+
+	t.Run("totp_challenges table dropped fails challenge cleanup", func(t *testing.T) {
+		store, dbPath := openFileBackedTestStore(t)
+		service := NewAuthService(store, 24*time.Hour)
+		ctx := context.Background()
+		const password = "correct horse battery staple"
+
+		result, err := service.Register(ctx, "owner@example.com", password)
+		if err != nil {
+			t.Fatalf("register: %v", err)
+		}
+
+		dropTable(t, dbPath, "totp_challenges")
+
+		err = service.ChangePassword(ctx, result.AccountID, "any-hash", password, "a brand new password")
+		if err == nil {
+			t.Fatal("expected ChangePassword to fail when the totp_challenges table is dropped")
+		}
+		if !strings.Contains(err.Error(), "delete totp challenges") {
+			t.Fatalf("expected the challenge cleanup store error to surface, got %v", err)
+		}
+	})
 }
 
 // TestForgotPasswordStoreErrors exercises ForgotPassword's two remaining
