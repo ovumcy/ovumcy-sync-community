@@ -49,6 +49,24 @@ func TestWithAuthRateLimitsFailedLookupsPerClientIP(t *testing.T) {
 	}
 }
 
+func TestWithAuthStoreFailureIsInternalErrorAndRefunded(t *testing.T) {
+	store := newTestStore(t, ":memory:")
+	handler := newTestServerWithOptions(t, serverTestOptions{authRateLimitCount: 1, store: store})
+	session := registerAccountFrom(t, handler, "owner@example.com", "198.51.100.9:1000")
+	if err := store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	// More store failures than the pre-auth budget: each is a 500, never a
+	// 429, because a store failure is not charged to the caller.
+	for i := 0; i <= sessionReadRateLimitCount(1); i++ {
+		response := sendRaw(handler, http.MethodGet, "/auth/session", "", session)
+		if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "internal_error") {
+			t.Fatalf("request %d: status %d body %s, want 500 internal_error", i+1, response.Code, response.Body.String())
+		}
+	}
+}
+
 func TestDecodeJSONRejectsTrailingValues(t *testing.T) {
 	handler := newTestServer(t)
 
