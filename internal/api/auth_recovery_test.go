@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -215,24 +216,41 @@ func TestResetPasswordEndpointRejectsWeakNew(t *testing.T) {
 	var forgot forgotPayload
 	decodeResponse(t, forgotResponse.Body.Bytes(), &forgot)
 
-	response := performJSONRequest(
+	// The over-long password is 37 Cyrillic runes = 74 bytes, past bcrypt's
+	// 72-byte ceiling; both rejections leave the token usable.
+	for _, rejected := range []string{"short", strings.Repeat("ж", 37)} {
+		response := performJSONRequest(
+			t,
+			handler,
+			http.MethodPost,
+			"/auth/reset-password",
+			map[string]string{
+				"reset_token":  forgot.ResetToken,
+				"new_password": rejected,
+			},
+			"",
+			http.StatusBadRequest,
+		)
+
+		var payload map[string]string
+		decodeResponse(t, response.Body.Bytes(), &payload)
+		if payload["error"] != "weak_new_password" {
+			t.Fatalf("unexpected error key: %#v", payload)
+		}
+	}
+
+	performJSONRequest(
 		t,
 		handler,
 		http.MethodPost,
 		"/auth/reset-password",
 		map[string]string{
 			"reset_token":  forgot.ResetToken,
-			"new_password": "short",
+			"new_password": "a brand new password",
 		},
 		"",
-		http.StatusBadRequest,
+		http.StatusOK,
 	)
-
-	var payload map[string]string
-	decodeResponse(t, response.Body.Bytes(), &payload)
-	if payload["error"] != "weak_new_password" {
-		t.Fatalf("unexpected error key: %#v", payload)
-	}
 }
 
 func TestRegenerateRecoveryCodeEndpointSucceeds(t *testing.T) {
