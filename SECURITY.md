@@ -73,11 +73,12 @@ snapshot.
   explicit regeneration) instead. Accepted as bounded and converging.
 - **Registration reveals whether a login is taken.** A taken login answers
   `400 registration_failed`, distinct from success. Logins are self-chosen and
-  the server has no out-of-band channel to confirm one, so registration must
+  registration has no channel to confirm one before answering, so it must
   refuse a taken login and say so; a fake success would hand out a session for
   an account that was never created. `Register` hashes the password before the
-  insert, so a taken and a free login cost the same bcrypt work, and the route
-  is rate-limited per client IP. Login and forgot-password stay
+  insert, so a taken and a free login cost the same bcrypt work. The route is
+  rate-limited per client IP only (there is no per-login bucket), and probing a
+  free login creates that account. Login and forgot-password stay
   enumeration-safe.
 - **`managed:` login namespace.** Public registration cannot claim the
   `managed:` prefix, while bridge-provisioned logins use it by design behind

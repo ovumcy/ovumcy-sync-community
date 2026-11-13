@@ -321,17 +321,19 @@ func (s *AuthService) ChangePassword(
 	}
 	// codecov:ignore:end
 
+	// A login challenge minted under the old password would otherwise still
+	// complete into a session after the change. Challenges go before sessions,
+	// as in ResetPassword, so a verify racing this call is more likely to land
+	// its session before the revoke below.
+	if err := s.store.DeleteTOTPChallengesForAccount(ctx, accountID); err != nil {
+		return err
+	}
+
 	if err := s.store.DeleteSessionsForAccountExcept(ctx, accountID, currentSessionTokenHash); err != nil {
 		return err
 	}
 
 	if err := s.store.DeletePasswordResetTokensForAccount(ctx, accountID); err != nil {
-		return err
-	}
-
-	// A login challenge minted under the old password would otherwise still
-	// complete into a session after the change.
-	if err := s.store.DeleteTOTPChallengesForAccount(ctx, accountID); err != nil {
 		return err
 	}
 

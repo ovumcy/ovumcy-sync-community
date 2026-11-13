@@ -180,7 +180,7 @@ See [docs/self-hosting.md](docs/self-hosting.md) for the reverse-proxy, TLS, 2FA
 
 ## Security
 
-Confidentiality of health data is a property of the client encryption — the server is deliberately blind to payload contents. On top of that, the server is built to be correct about authentication and storage and paranoid about the primitives it owns: bcrypt password/recovery-code hashing, hashed session tokens, AES-256-GCM field encryption for TOTP secrets, enumeration- and timing-safe auth, and per-account rate limiting.
+Confidentiality of health data is a property of the client encryption — the server is deliberately blind to payload contents. On top of that, the server is built to be correct about authentication and storage and paranoid about the primitives it owns: bcrypt password/recovery-code hashing, hashed session tokens, AES-256-GCM field encryption for TOTP secrets, enumeration- and timing-safe login and password reset, and per-account rate limiting.
 
 - Design, threat model, and the test-backed invariants: **[SECURITY.md](SECURITY.md)**.
 - How it is tested (mutation, fuzz, property, race, and supply-chain scanning): **[TESTING.md](TESTING.md)**.
