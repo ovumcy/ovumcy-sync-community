@@ -285,6 +285,10 @@ func (s *TOTPService) CompleteEnrollment(
 		return err
 	}
 
+	// A new secret is a fresh guessing space; a window spent against the
+	// previous one must not lock the owner out of the first login.
+	s.clearCodeFailures(ctx, accountID)
+
 	s.observeEnrollmentCompletion("ok")
 	return nil
 }
