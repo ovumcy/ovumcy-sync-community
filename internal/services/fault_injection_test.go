@@ -56,17 +56,13 @@ func dropTable(t *testing.T, dbPath, table string) {
 	}
 }
 
-// dropAccountsLapsedAtColumn removes accounts.lapsed_at out from under a
-// live store through a second connection, leaving the accounts table (and
-// every other column) otherwise intact. This isolates a store-failure in
-// exactly the lapse-marker methods (SetAccountLapsed, ClearAccountLapse,
-// etc.) that name lapsed_at directly, without disturbing FindAccountByID's
-// own column list (which never selects lapsed_at) or any other account
-// field — so the account-lookup half of a lapse-signal call still succeeds
-// and only the subsequent write fails. Mirrors internal/db's identically
-// -named test helper (duplicated per this repo's existing per-package
-// fault-injection-helper convention rather than shared across packages).
-func dropAccountsLapsedAtColumn(t *testing.T, dbPath string) {
+// failAccountsUpdates installs, through a second connection, a trigger that
+// aborts every UPDATE on accounts while reads keep working. It isolates the
+// write half of a lapse or reactivation signal: the account lookup and the
+// in-transaction state read still succeed and only the UPDATE fails. Mirrors
+// internal/db's identically-named helper (duplicated per this repo's
+// per-package fault-injection-helper convention).
+func failAccountsUpdates(t *testing.T, dbPath string) {
 	t.Helper()
 
 	raw, err := sql.Open("sqlite", dbPath)
@@ -80,7 +76,7 @@ func dropAccountsLapsedAtColumn(t *testing.T, dbPath string) {
 	if _, err := raw.Exec(`PRAGMA busy_timeout = 5000;`); err != nil {
 		t.Fatalf("configure raw sqlite: %v", err)
 	}
-	if _, err := raw.Exec(`ALTER TABLE accounts DROP COLUMN lapsed_at`); err != nil {
-		t.Fatalf("drop accounts.lapsed_at column: %v", err)
+	if _, err := raw.Exec(`CREATE TRIGGER fail_accounts_update BEFORE UPDATE ON accounts BEGIN SELECT RAISE(ABORT, 'injected accounts update failure'); END`); err != nil {
+		t.Fatalf("install accounts update trigger: %v", err)
 	}
 }
