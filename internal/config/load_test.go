@@ -32,6 +32,9 @@ var loadEnvVars = []string{
 // t.Setenv, so Load observes only the overrides a test explicitly sets
 // afterward. t.Setenv restores the prior value on test cleanup, so this is
 // safe to call from every subtest without cross-test leakage.
+// bridgeTokenFixture is exactly MinManagedBridgeTokenBytes long.
+const bridgeTokenFixture = "bridge-token-fixture-32-bytes-ok"
+
 func clearLoadEnv(t *testing.T) {
 	t.Helper()
 	for _, name := range loadEnvVars {
@@ -127,7 +130,7 @@ func TestLoadAppliesEveryEnvOverride(t *testing.T) {
 	t.Setenv("MAX_BLOB_BYTES", "1048576")
 	t.Setenv("AUTH_RATE_LIMIT_COUNT", "20")
 	t.Setenv("AUTH_RATE_LIMIT_WINDOW", "30s")
-	t.Setenv("MANAGED_BRIDGE_TOKEN", "bridge-token-fixture")
+	t.Setenv("MANAGED_BRIDGE_TOKEN", bridgeTokenFixture)
 	t.Setenv("METRICS_ENABLED", "true")
 	t.Setenv("METRICS_BEARER_TOKEN", "metrics-token-fixture")
 	t.Setenv("ALLOWED_ORIGINS", "https://a.example,https://b.example")
@@ -162,8 +165,8 @@ func TestLoadAppliesEveryEnvOverride(t *testing.T) {
 	if cfg.AuthRateLimitWindow != 30*time.Second {
 		t.Errorf("AuthRateLimitWindow = %s, want %s", cfg.AuthRateLimitWindow, 30*time.Second)
 	}
-	if cfg.ManagedBridgeToken != "bridge-token-fixture" {
-		t.Errorf("ManagedBridgeToken = %q, want %q", cfg.ManagedBridgeToken, "bridge-token-fixture")
+	if cfg.ManagedBridgeToken != bridgeTokenFixture {
+		t.Errorf("ManagedBridgeToken = %q, want %q", cfg.ManagedBridgeToken, bridgeTokenFixture)
 	}
 	if !cfg.MetricsEnabled {
 		t.Error("MetricsEnabled = false, want true")
@@ -258,6 +261,18 @@ func TestLoadSurfacesEveryValidationAndParseError(t *testing.T) {
 			envName: "FIELD_ENCRYPTION_KEY",
 			envValu: "not-hex-at-all-zz",
 			wantErr: "FIELD_ENCRYPTION_KEY",
+		},
+		{
+			name:    "managed bridge token below the floor fails validation",
+			envName: "MANAGED_BRIDGE_TOKEN",
+			envValu: strings.Repeat("b", MinManagedBridgeTokenBytes-1),
+			wantErr: "MANAGED_BRIDGE_TOKEN must be at least 32 bytes (got 31)",
+		},
+		{
+			name:    "managed bridge token padded to the floor with whitespace fails validation",
+			envName: "MANAGED_BRIDGE_TOKEN",
+			envValu: "  " + strings.Repeat("b", MinManagedBridgeTokenBytes-2),
+			wantErr: "MANAGED_BRIDGE_TOKEN",
 		},
 		{
 			name:    "empty bind addr fails validation",

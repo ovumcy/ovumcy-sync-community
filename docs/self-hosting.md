@@ -28,7 +28,7 @@ Core tracking in the Ovumcy app still remains local-first. This server is for op
 1. Run `ovumcy-sync-community` behind a reverse proxy such as Caddy, Nginx, or Traefik.
 2. Persist `/data` so SQLite survives container restarts.
 3. Expose the service only through HTTPS on the public internet.
-4. Keep `MANAGED_BRIDGE_TOKEN` empty unless you operate a separate trusted managed-auth service.
+4. Keep `MANAGED_BRIDGE_TOKEN` empty unless you operate a separate trusted managed-auth service. When set it must be at least 32 bytes (`openssl rand -hex 32`); a shorter token is a startup error.
 5. Set `TRUSTED_PROXY_CIDRS` to the reverse proxy's address so auth rate limiting keys on real client IPs. The proxy must send `X-Forwarded-For` (`X-Real-IP` is the fallback). Without it every client shares the proxy's single rate-limit bucket, so a handful of failed logins locks everyone out for the window. The bundled `docker-compose.caddy.yml` already does this.
 6. Keep `/metrics` internal or protect it with `METRICS_BEARER_TOKEN` if you enable metrics.
 
@@ -79,6 +79,7 @@ The repository also includes `docker-compose.caddy.yml` and `deploy/caddy/Caddyf
 Use it like this:
 
 ```bash
+export SYNC_SITE_ADDRESS=sync.example.com
 docker compose -f docker-compose.yml -f docker-compose.caddy.yml run --rm ovumcy-sync-community migrate
 docker compose -f docker-compose.yml -f docker-compose.caddy.yml up --build
 ```
@@ -86,8 +87,9 @@ docker compose -f docker-compose.yml -f docker-compose.caddy.yml up --build
 The example is intentionally conservative:
 
 - it reverse-proxies the sync service;
-- it blocks `/metrics` at the public edge by default;
-- it is still only a baseline and must be adapted to your real public hostname and TLS policy.
+- it refuses to start without `SYNC_SITE_ADDRESS`: set it to the public hostname, and Caddy obtains a certificate and serves HTTPS. There is no default, because a bare port such as `:80` would serve plain HTTP;
+- it blocks `/metrics` and `/managed/*` at the public edge. The managed bridge's one caller reaches the service over the private network, never through the public edge;
+- it is still only a baseline and must be adapted to your TLS policy.
 
 ## Optional Two-Factor Authentication
 

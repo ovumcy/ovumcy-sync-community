@@ -1,8 +1,8 @@
 # nginx reverse proxy
 
 A reference edge for `ovumcy-sync-community`: TLS termination, the real client address forwarded
-for rate limiting, a request size and timeout budget that fits blob uploads, and `/metrics` blocked
-publicly. [nginx.conf](nginx.conf) is a `conf.d` file; adapt `server_name` and the certificate paths.
+for rate limiting, a request size and timeout budget that fits blob uploads, and `/metrics` and
+`/managed/*` blocked publicly. [nginx.conf](nginx.conf) is a `conf.d` file; adapt `server_name` and the certificate paths.
 
 ## What it does and why
 
@@ -15,6 +15,8 @@ publicly. [nginx.conf](nginx.conf) is a `conf.d` file; adapt `server_name` and t
 - **Timeouts.** 30 s, above the app defaults `HTTP_READ_TIMEOUT=10s` and `HTTP_WRITE_TIMEOUT=15s`.
   If you raise the app values, raise these too.
 - **`/metrics`** returns `403` at the edge. Scrape it from inside the Docker network.
+- **`/managed/*`** returns `403` at the edge. The managed bridge's one caller reaches the app over
+  the private network, never through the public edge.
 
 ## App settings that must match
 

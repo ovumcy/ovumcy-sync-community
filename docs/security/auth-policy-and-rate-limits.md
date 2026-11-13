@@ -76,7 +76,8 @@ Notes on the table:
   monitors. A 429 would be reported as an outage and could get a healthy server restarted. Both are
   cheap.
 - `GET /metrics`: a scrape endpoint, off unless `METRICS_ENABLED`, gated by `METRICS_BEARER_TOKEN` when set.
-- `/managed/*`: unreachable without the operator-held `MANAGED_BRIDGE_TOKEN`, and its one caller is a
+- `/managed/*`: unreachable without the operator-held `MANAGED_BRIDGE_TOKEN` (at least 32 bytes,
+  enforced at startup), refused at the public edge by the bundled proxy examples, and its one caller is a
   first-party service that may reconcile in bursts. A per-IP ceiling would throttle the operator's own
   control plane without stopping anyone who lacks the token.
 

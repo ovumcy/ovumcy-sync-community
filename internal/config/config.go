@@ -10,6 +10,10 @@ import (
 	"time"
 )
 
+// MinManagedBridgeTokenBytes is the shortest MANAGED_BRIDGE_TOKEN accepted;
+// the bridge routes are unrate-limited, so the token alone must resist guessing.
+const MinManagedBridgeTokenBytes = 32
+
 type Config struct {
 	BindAddr            string
 	DBPath              string
@@ -231,6 +235,15 @@ func (c Config) Validate() error {
 	}
 	if c.AuthRateLimitWindow <= 0 {
 		return fmt.Errorf("AUTH_RATE_LIMIT_WINDOW must be positive")
+	}
+	// The server trims the bridge token and treats empty as "bridge disabled",
+	// so the floor applies to the trimmed value only when it is set.
+	if token := strings.TrimSpace(c.ManagedBridgeToken); token != "" && len(token) < MinManagedBridgeTokenBytes {
+		return fmt.Errorf(
+			"MANAGED_BRIDGE_TOKEN must be at least %d bytes (got %d); generate one with `openssl rand -hex 32`",
+			MinManagedBridgeTokenBytes,
+			len(token),
+		)
 	}
 	if strings.TrimSpace(c.MetricsBearerToken) != "" && !c.MetricsEnabled {
 		return fmt.Errorf("METRICS_BEARER_TOKEN requires METRICS_ENABLED=true")
