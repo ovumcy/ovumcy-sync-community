@@ -520,10 +520,6 @@ func (s *AuthService) RegenerateRecoveryCode(
 	}
 	// codecov:ignore:end
 
-	if err := s.store.DeletePasswordResetTokensForAccount(ctx, accountID); err != nil {
-		return "", err
-	}
-
 	return plainRecovery, nil
 }
 
