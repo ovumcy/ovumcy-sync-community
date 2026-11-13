@@ -37,7 +37,7 @@ func (e *TOTPLockedError) Unwrap() error { return ErrTOTPLocked }
 // challenge with a fresh per-challenge budget) cannot reset the ceiling.
 // 10 per 15 minutes holds a password-holding attacker to about 960 guesses
 // a day, ~0.3 % against the 3 codes the skew window accepts. Only a
-// successful verify clears the window.
+// successful verify or a completed enrollment (a new secret) clears it.
 const (
 	TOTPFailureWindow            = 15 * time.Minute
 	maxTOTPAccountFailedAttempts = 10
