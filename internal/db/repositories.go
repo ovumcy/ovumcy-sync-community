@@ -1040,11 +1040,36 @@ func (s *Store) ListDevicesForAccount(ctx context.Context, accountID string) ([]
 	return devices, nil
 }
 
-// DeleteDevice removes one device from the account. The DELETE is scoped by
-// both account_id and device_id, so a caller can only ever delete its own
-// devices (no IDOR). Returns ErrNotFound when the account has no such device.
+// BindSessionToDevice binds the session to deviceID if it is not bound yet;
+// a bound session keeps its first device. Scoped by account so a token hash
+// can never bind another account's session.
+func (s *Store) BindSessionToDevice(ctx context.Context, accountID string, tokenHash string, deviceID string) error {
+	if _, err := s.db.ExecContext(
+		ctx,
+		`UPDATE sessions SET device_id = ? WHERE account_id = ? AND token_hash = ? AND device_id IS NULL`,
+		deviceID,
+		accountID,
+		tokenHash,
+	); err != nil {
+		return fmt.Errorf("bind session to device: %w", err)
+	}
+	return nil
+}
+
+// DeleteDevice removes one device from the account together with every
+// session bound to it, in one transaction, so a removed device never leaves
+// a live session behind. Both DELETEs are scoped by account_id and device_id
+// (no IDOR). Returns ErrNotFound when the account has no such device.
 func (s *Store) DeleteDevice(ctx context.Context, accountID string, deviceID string) error {
-	result, err := s.db.ExecContext(
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin delete device: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	result, err := tx.ExecContext(
 		ctx,
 		`DELETE FROM devices WHERE account_id = ? AND device_id = ?`,
 		accountID,
@@ -1060,6 +1085,19 @@ func (s *Store) DeleteDevice(ctx context.Context, accountID string, deviceID str
 	}
 	if affected == 0 {
 		return ErrNotFound
+	}
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`DELETE FROM sessions WHERE account_id = ? AND device_id = ?`,
+		accountID,
+		deviceID,
+	); err != nil {
+		return fmt.Errorf("delete device sessions: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit delete device: %w", err) // codecov:ignore -- on this store's sqlite a COMMIT whose statements all succeeded has no deterministically injectable in-process failure; needs a fake driver, the same deviation documented for DeleteAccount's commit branch.
 	}
 
 	return nil

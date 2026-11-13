@@ -999,7 +999,7 @@ paths:
       tags: [sync]
       operationId: attachDevice
       summary: Register or refresh a device for this account
-      description: Upserts a device row scoped to the caller's account. Rejected once the account is at its configured device ceiling and the device is not already known.
+      description: Upserts a device row scoped to the caller's account and binds the calling session to it if the session is not bound yet (a bound session keeps its first device). Rejected once the account is at its configured device ceiling and the device is not already known.
       security:
         - sessionBearerAuth: []
       requestBody:
@@ -1065,7 +1065,7 @@ paths:
       tags: [sync]
       operationId: removeDevice
       summary: Remove one of the account's devices
-      description: Detaches a device from the caller's account, freeing a slot. The delete is scoped to the authenticated account in the query, so a caller can only ever remove its own devices; sessions are not device-bound and are unaffected.
+      description: Detaches a device from the caller's account, freeing a slot. The delete is scoped to the authenticated account in the query, so a caller can only ever remove its own devices. Every session bound to the device is revoked in the same transaction — removing the caller's own device ends the calling session too. Sessions never bound (no `POST /sync/devices` yet) are unaffected.
       security:
         - sessionBearerAuth: []
       parameters:

@@ -844,9 +844,10 @@ func (s *Server) handleAttachDevice(
 		return
 	}
 
-	device, err := s.sync.AttachDevice(
+	device, err := s.sync.AttachDeviceForSession(
 		request.Context(),
 		account.ID,
+		security.HashToken(bearerTokenFromRequest(request)),
 		payload.DeviceID,
 		payload.DeviceLabel,
 	)

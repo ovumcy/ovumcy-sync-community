@@ -22,7 +22,7 @@ decrypted payloads.
 | `accounts` | `id`, `login`, `created_at`, `mode`, `premium_active`, `lapsed_at` | Identity, metadata | `login` is the only user-chosen identifier; `mode` is `self_hosted` or `managed`; `lapsed_at` is set only for managed accounts |
 | `accounts` | `password_hash`, `recovery_code_hash` | Credential | bcrypt, cost 12; an empty recovery hash means no recovery code |
 | `accounts` | `totp_secret_encrypted`, `totp_enabled`, `totp_last_used_step` | Credential | Secret is AES-256-GCM under `FIELD_ENCRYPTION_KEY`, AAD bound to the account; the last used step blocks replay |
-| `sessions` | `id`, `account_id`, `token_hash`, `created_at`, `last_seen_at`, `expires_at` | Credential (hash), metadata | Token stored as SHA-256 only |
+| `sessions` | `id`, `account_id`, `token_hash`, `created_at`, `last_seen_at`, `expires_at`, `device_id` | Credential (hash), metadata | Token stored as SHA-256 only; `device_id` is the device the session first attached (NULL until then) |
 | `devices` | `account_id`, `device_id`, `device_label`, `created_at`, `last_seen_at` | Metadata | The label is client-supplied text; clients should not put personal data in it |
 | `encrypted_blobs` | `account_id`, `schema_version`, `generation`, `checksum_sha256`, `ciphertext`, `ciphertext_size`, `created_at`, `updated_at` | Ciphertext, metadata | One row per account; the checksum and size are visible to the operator |
 | `recovery_key_packages` | `account_id`, `algorithm`, `kdf`, `mnemonic_word_count`, `wrap_nonce_hex`, `wrapped_master_key_hex`, `phrase_fingerprint_hex`, `updated_at` | Ciphertext, credential | Wrapped master key; the phrase is not stored |

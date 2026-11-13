@@ -111,7 +111,7 @@ detected and refused (`internal/db/migrations_schema_ahead_test.go`).
 | Table | Introduced | Purpose |
 | --- | --- | --- |
 | `accounts` | 0001 | Account id, normalized login, password hash; later columns: `recovery_code_hash` (0004), `mode` and `premium_active` (0003), `totp_secret_encrypted`, `totp_enabled`, `totp_last_used_step` (0005), `lapsed_at` (0008) |
-| `sessions` | 0001 | Hashed session token, created / last seen / expiry times |
+| `sessions` | 0001 | Hashed session token, created / last seen / expiry times; `device_id` (bound device, nullable) added in 0010 |
 | `devices` | 0001 | Per-account device id and label |
 | `encrypted_blobs` | 0001 | One ciphertext blob per account: schema version, generation, SHA-256 checksum, size |
 | `recovery_key_packages` | 0002 | The client-wrapped recovery key package (opaque hex fields) |

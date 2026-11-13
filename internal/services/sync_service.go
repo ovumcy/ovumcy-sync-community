@@ -153,15 +153,36 @@ func (s *SyncService) AttachDevice(
 	return device, nil
 }
 
+// AttachDeviceForSession attaches the device and binds the calling session to
+// it, so removing the device later revokes that session. A session already
+// bound keeps its first device.
+func (s *SyncService) AttachDeviceForSession(
+	ctx context.Context,
+	accountID string,
+	sessionTokenHash string,
+	deviceID string,
+	deviceLabel string,
+) (models.Device, error) {
+	device, err := s.AttachDevice(ctx, accountID, deviceID, deviceLabel)
+	if err != nil {
+		return models.Device{}, err
+	}
+	if err := s.store.BindSessionToDevice(ctx, accountID, sessionTokenHash, device.DeviceID); err != nil {
+		return models.Device{}, err
+	}
+	return device, nil
+}
+
 // ListDevices returns every device attached to the account, account-scoped.
 func (s *SyncService) ListDevices(ctx context.Context, accountID string) ([]models.Device, error) {
 	return s.store.ListDevicesForAccount(ctx, accountID)
 }
 
-// RemoveDevice detaches one device from the account so its slot is freed. The
-// delete is account-scoped in the query (no IDOR), and removing a device does
-// not touch sessions — sessions are not device-bound. Returns ErrInvalidDevice
-// for an empty id and ErrDeviceNotFound when the account has no such device.
+// RemoveDevice detaches one device from the account so its slot is freed, and
+// revokes every session bound to it (the caller's own included, when it is
+// that device's session). The delete is account-scoped in the query (no IDOR).
+// Returns ErrInvalidDevice for an empty id and ErrDeviceNotFound when the
+// account has no such device.
 func (s *SyncService) RemoveDevice(ctx context.Context, accountID string, deviceID string) error {
 	deviceID = strings.TrimSpace(deviceID)
 	if deviceID == "" {
