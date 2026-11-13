@@ -298,10 +298,11 @@ jobs:
 
       - name: Caddy example refuses to start without a site address
         run: |
-          if docker compose -f docker-compose.yml -f docker-compose.caddy.yml config >/dev/null 2>&1; then
+          if err=$(docker compose -f docker-compose.yml -f docker-compose.caddy.yml config 2>&1 >/dev/null); then
             echo "docker-compose.caddy.yml accepted an unset SYNC_SITE_ADDRESS"
             exit 1
           fi
+          echo "$err" | grep -q 'SYNC_SITE_ADDRESS' || { echo "$err"; exit 1; }
 
       - name: Docker build
         run: docker build -t ovumcy-sync-community-ci:${{ github.sha }} .
