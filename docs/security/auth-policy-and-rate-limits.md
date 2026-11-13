@@ -85,7 +85,7 @@ Notes on the table:
 
 | Item | Value | Source |
 | --- | --- | --- |
-| Minimum password length | 12 Unicode runes after trimming whitespace (not bytes) | `HashPassword`, `internal/security/password.go` |
+| Password length | at least 12 Unicode runes after trimming whitespace; at most 72 UTF-8 bytes (bcrypt's input ceiling), rejected as weak before a reset token is consumed | `ValidatePassword`, `internal/security/password.go` |
 | Login | lowercased and trimmed, at least 3 characters, the `managed:` prefix is reserved and rejected | `NormalizeLogin`, `ValidateLogin` |
 | Password and recovery-code hashing | bcrypt, cost 12 (`PasswordHashCost`); older lower-cost hashes are re-hashed on the next successful login | `internal/security/password.go`, `AuthService.Login` |
 | Session lifetime | `SESSION_TTL`, default 720h; stored as a hash, never in plaintext | `internal/config/config.go`, `AuthService.createSession` |
