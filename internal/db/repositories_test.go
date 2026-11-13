@@ -536,6 +536,9 @@ func TestApplyEntitlementSignalOrdersAndRevokesInOneTransaction(t *testing.T) {
 	if got, err := store.GetAccountLapsedAt(ctx, managedID); err != nil || got != nil {
 		t.Fatalf("expected lapsed_at cleared by reactivation, got %v err=%v", got, err)
 	}
+	if err := store.ApplyEntitlementSignal(ctx, managedID, EntitlementSignal{Active: true, AsOf: now, ReceivedAt: now}); err != nil {
+		t.Fatalf("expected a retried reactivation to be a no-op success, got %v", err)
+	}
 
 	// A legacy lapse (no AsOf) stamped earlier than the stored point applies
 	// without moving the ordering point back, so the older reactivation that
@@ -545,6 +548,20 @@ func TestApplyEntitlementSignalOrdersAndRevokesInOneTransaction(t *testing.T) {
 	}
 	if err := store.ApplyEntitlementSignal(ctx, managedID, EntitlementSignal{Active: true, AsOf: now.Add(-time.Minute), ReceivedAt: now}); !errors.Is(err, ErrStaleEntitlementSignal) {
 		t.Fatalf("expected a reactivation older than the stored point to be stale, got %v", err)
+	}
+
+	// A lapse recorded before migration 0009 has no stored point; it is
+	// ordered by lapsed_at, so an older reactivation cannot undo it.
+	const legacyID = "managed-signal-legacy"
+	createLapseTestAccount(t, store, legacyID, "managed")
+	if err := store.SetAccountLapsed(ctx, legacyID, lapseAsOf); err != nil {
+		t.Fatalf("set legacy lapse: %v", err)
+	}
+	if err := store.ApplyEntitlementSignal(ctx, legacyID, EntitlementSignal{Active: true, AsOf: lapseAsOf.Add(-time.Second), ReceivedAt: now}); !errors.Is(err, ErrStaleEntitlementSignal) {
+		t.Fatalf("expected a reactivation older than a legacy lapse to be stale, got %v", err)
+	}
+	if err := store.ApplyEntitlementSignal(ctx, legacyID, EntitlementSignal{Active: true, AsOf: lapseAsOf.Add(time.Second), ReceivedAt: now}); err != nil {
+		t.Fatalf("expected a newer reactivation to clear a legacy lapse, got %v", err)
 	}
 
 	for _, id := range []string{selfHostedID, "missing-account"} {
