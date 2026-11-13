@@ -203,6 +203,32 @@ func TestRunPurgeLapsedAccountsRefusesPendingMigrations(t *testing.T) {
 	}
 }
 
+// A schema_migrations table without a version column makes the schema check
+// itself fail; the purge must surface that error and write nothing.
+func TestRunPurgeLapsedAccountsSurfacesSchemaCheckError(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "broken-migrations.sqlite")
+
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	if _, err := raw.Exec(`CREATE TABLE schema_migrations (applied_at TEXT NOT NULL)`); err != nil {
+		t.Fatalf("create broken schema_migrations: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw connection: %v", err)
+	}
+
+	var buf bytes.Buffer
+	err = runPurgeLapsedAccounts(testConfigForDBPath(dbPath), nil, &buf)
+	if err == nil || errors.Is(err, errSchemaNotCurrent) || !strings.Contains(err.Error(), "check schema") {
+		t.Fatalf("expected the schema check error, got %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("expected no output on a setup failure, got %q", buf.String())
+	}
+}
+
 func TestRunPurgeLapsedAccountsReportsZeroOnEmptyDatabase(t *testing.T) {
 	cfg := testConfigForDBPath(migratedDBPath(t, "empty.sqlite"))
 

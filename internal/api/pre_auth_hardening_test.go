@@ -24,13 +24,13 @@ func TestWithAuthRateLimitsFailedLookupsPerClientIP(t *testing.T) {
 	budget := sessionReadRateLimitCount(1)
 	session := registerAccountFrom(t, handler, "owner@example.com", "198.51.100.9:1000")
 
-	for i := 0; i < budget-1; i++ {
+	for i := range budget - 1 {
 		if got := sendRaw(handler, http.MethodGet, "/auth/session", "", "not-a-session").Code; got != http.StatusUnauthorized {
 			t.Fatalf("failed lookup %d: status %d, want 401", i+1, got)
 		}
 	}
 	// Valid sessions from the same address refund their slot.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if got := sendRaw(handler, http.MethodGet, "/auth/session", "", session).Code; got != http.StatusOK {
 			t.Fatalf("valid session %d: status %d, want 200", i+1, got)
 		}
