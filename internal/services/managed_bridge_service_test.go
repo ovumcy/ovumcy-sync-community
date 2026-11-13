@@ -596,9 +596,9 @@ func TestSetAccountLapseSignalSurfacesAccountLookupStoreError(t *testing.T) {
 	}
 }
 
-// TestSetAccountLapseSignalSurfacesWriteStoreErrors drops
-// accounts.lapsed_at out from under a live server for the lapse and the
-// reactivation writes, and drops the sessions table for the in-transaction
+// TestSetAccountLapseSignalSurfacesWriteStoreErrors makes accounts updates
+// fail under a live server for the lapse and the reactivation writes, and
+// drops the sessions table for the in-transaction
 // session revocation — three distinct store-error paths inside
 // ApplyEntitlementSignal, each isolated without disturbing the account
 // lookup that must succeed first.
@@ -614,7 +614,7 @@ func TestSetAccountLapseSignalSurfacesWriteStoreErrors(t *testing.T) {
 			t.Fatalf("create managed session: %v", err)
 		}
 
-		dropAccountsLapsedAtColumn(t, dbPath)
+		failAccountsUpdates(t, dbPath)
 
 		err := bridgeService.SetAccountLapseSignal(ctx, accountID, false, time.Time{})
 		if err == nil || errors.Is(err, ErrInvalidManagedAccount) {
@@ -631,7 +631,7 @@ func TestSetAccountLapseSignalSurfacesWriteStoreErrors(t *testing.T) {
 			t.Fatalf("create managed session: %v", err)
 		}
 
-		dropAccountsLapsedAtColumn(t, dbPath)
+		failAccountsUpdates(t, dbPath)
 
 		err := bridgeService.SetAccountLapseSignal(ctx, accountID, true, time.Now().UTC())
 		if err == nil || errors.Is(err, ErrInvalidManagedAccount) {

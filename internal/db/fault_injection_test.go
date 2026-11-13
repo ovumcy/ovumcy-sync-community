@@ -1078,6 +1078,62 @@ func TestLapseMarkerMethodsReturnErrorWhenAccountsTableIsDropped(t *testing.T) {
 	}
 }
 
+// failAccountsUpdates installs, through a second connection, a trigger that
+// aborts every UPDATE on accounts while reads keep working.
+func failAccountsUpdates(t *testing.T, dbPath string) {
+	t.Helper()
+
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw sqlite: %v", err)
+	}
+	defer func() {
+		_ = raw.Close()
+	}()
+
+	if _, err := raw.Exec(`PRAGMA busy_timeout = 5000;`); err != nil {
+		t.Fatalf("configure raw sqlite: %v", err)
+	}
+	if _, err := raw.Exec(`CREATE TRIGGER fail_accounts_update BEFORE UPDATE ON accounts BEGIN SELECT RAISE(ABORT, 'injected accounts update failure'); END`); err != nil {
+		t.Fatalf("install accounts update trigger: %v", err)
+	}
+}
+
+// TestApplyEntitlementSignalSurfacesStoreFailures covers the transaction's
+// begin, lapse-write and reactivation-write error branches; every failure
+// leaves the account's lapse state and sessions untouched.
+func TestApplyEntitlementSignalSurfacesStoreFailures(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	t.Run("begin", func(t *testing.T) {
+		store, _ := newFileBackedTestStore(t)
+		if err := store.Close(); err != nil {
+			t.Fatalf("close store: %v", err)
+		}
+		if err := store.ApplyEntitlementSignal(ctx, "managed-closed", EntitlementSignal{ReceivedAt: now}); err == nil || errors.Is(err, ErrNotFound) {
+			t.Fatalf("expected a begin error on a closed store, got %v", err)
+		}
+	})
+
+	for _, signal := range []EntitlementSignal{
+		{ReceivedAt: now},
+		{Active: true, AsOf: now, ReceivedAt: now},
+	} {
+		store, dbPath := newFileBackedTestStore(t)
+		const accountID = "managed-update-fails"
+		createLapseTestAccount(t, store, accountID, "managed")
+		failAccountsUpdates(t, dbPath)
+
+		if err := store.ApplyEntitlementSignal(ctx, accountID, signal); err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, ErrStaleEntitlementSignal) {
+			t.Fatalf("active=%v: expected an update failure, got %v", signal.Active, err)
+		}
+		if got, err := store.GetAccountLapsedAt(ctx, accountID); err != nil || got != nil {
+			t.Fatalf("active=%v: expected lapse state untouched, got %v err=%v", signal.Active, got, err)
+		}
+	}
+}
+
 // TestApplyEntitlementSignalSurfacesCorruptLegacyLapsedAt: a legacy lapse
 // (no stored ordering point) whose lapsed_at cannot be parsed fails the
 // signal instead of ordering it against nothing.
