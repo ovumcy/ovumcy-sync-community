@@ -472,7 +472,9 @@ func (s *AuthService) ResetPassword(
 // RegenerateRecoveryCode rotates the account-level recovery code. The owner
 // must re-confirm their current password; this guards against accidental or
 // hijacked rotations that would silently lock the legitimate owner out of the
-// recovery surface. Existing sessions and reset tokens are left untouched.
+// recovery surface. Pending reset tokens are deleted: one issued against the
+// old code would otherwise outlive the rotation for its whole TTL. Sessions
+// are left untouched.
 func (s *AuthService) RegenerateRecoveryCode(
 	ctx context.Context,
 	accountID string,
@@ -510,6 +512,10 @@ func (s *AuthService) RegenerateRecoveryCode(
 		return "", err
 	}
 	// codecov:ignore:end
+
+	if err := s.store.DeletePasswordResetTokensForAccount(ctx, accountID); err != nil {
+		return "", err
+	}
 
 	return plainRecovery, nil
 }

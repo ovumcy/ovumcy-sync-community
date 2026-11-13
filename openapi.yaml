@@ -358,7 +358,7 @@ paths:
       tags: [auth]
       operationId: regenerateRecoveryCode
       summary: Rotate the account recovery code
-      description: Requires the current password. Existing sessions and reset tokens are left untouched.
+      description: Requires the current password. Pending password-reset tokens are deleted; existing sessions are left untouched.
       security:
         - sessionBearerAuth: []
       requestBody:

@@ -115,7 +115,8 @@ Notes on the table:
 | Account delete | everything for the account (cascade) | `AuthService.DeleteAccount` |
 
 Recovery-code regeneration and TOTP enroll-start leave sessions untouched; the revocation for enrollment
-happens at verify.
+happens at verify. Regeneration does delete pending reset tokens, so a token issued against the old code
+cannot outlive the rotation.
 
 ## Enumeration and timing safety
 

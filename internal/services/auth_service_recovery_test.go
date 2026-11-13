@@ -274,6 +274,35 @@ func TestRegenerateRecoveryCodeRotatesCode(t *testing.T) {
 	}
 }
 
+// TestRegenerateRecoveryCodeInvalidatesPendingResetToken: a reset token
+// issued against the old code must die with the rotation, while sessions
+// survive it.
+func TestRegenerateRecoveryCodeInvalidatesPendingResetToken(t *testing.T) {
+	store := openTestStore(t)
+	service := NewAuthService(store, 24*time.Hour)
+
+	ctx := context.Background()
+	registerResult, err := service.Register(ctx, "owner@example.com", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	forgot, err := service.ForgotPassword(ctx, "owner@example.com", registerResult.RecoveryCode)
+	if err != nil {
+		t.Fatalf("forgot password: %v", err)
+	}
+
+	if _, err := service.RegenerateRecoveryCode(ctx, registerResult.AccountID, "correct horse battery staple"); err != nil {
+		t.Fatalf("regenerate: %v", err)
+	}
+
+	if _, err := service.ResetPassword(ctx, forgot.ResetToken, "attacker chosen password"); err != ErrInvalidResetToken {
+		t.Fatalf("expected the pre-rotation reset token to be invalid, got %v", err)
+	}
+	if _, err := service.Authenticate(ctx, registerResult.SessionToken); err != nil {
+		t.Fatalf("expected the session to survive regeneration, got %v", err)
+	}
+}
+
 func TestRegenerateRecoveryCodeRejectsWrongPassword(t *testing.T) {
 	store := openTestStore(t)
 	service := NewAuthService(store, 24*time.Hour)

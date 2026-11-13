@@ -419,6 +419,23 @@ func TestRegenerateRecoveryCodeStoreErrors(t *testing.T) {
 			t.Fatalf("expected a store-failure error, not ErrUnauthorized, got %v", err)
 		}
 	})
+
+	t.Run("reset tokens table dropped fails token cleanup", func(t *testing.T) {
+		store, dbPath := openFileBackedTestStore(t)
+		service := NewAuthService(store, 24*time.Hour)
+		ctx := context.Background()
+		const password = "correct horse battery staple"
+
+		registered, err := service.Register(ctx, "owner@example.com", password)
+		if err != nil {
+			t.Fatalf("register: %v", err)
+		}
+		dropTable(t, dbPath, "password_reset_tokens")
+
+		if _, err := service.RegenerateRecoveryCode(ctx, registered.AccountID, password); err == nil {
+			t.Fatal("expected the reset-token cleanup failure to surface")
+		}
+	})
 }
 
 // TestRevokeSessionSurfacesStoreError exercises RevokeSession's generic
