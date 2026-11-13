@@ -453,7 +453,7 @@ func TestPasswordResetTokenLifecycleAndAccountScopedDelete(t *testing.T) {
 		TokenHash: "target-reset-token-hash",
 		CreatedAt: now,
 		ExpiresAt: now.Add(30 * time.Minute),
-	}); err != nil {
+	}, target.RecoveryCodeHash); err != nil {
 		t.Fatalf("upsert target reset token: %v", err)
 	}
 	if err := store.UpsertPasswordResetToken(ctx, models.PasswordResetToken{
@@ -461,7 +461,7 @@ func TestPasswordResetTokenLifecycleAndAccountScopedDelete(t *testing.T) {
 		TokenHash: "bystander-reset-token-hash",
 		CreatedAt: now,
 		ExpiresAt: now.Add(30 * time.Minute),
-	}); err != nil {
+	}, bystander.RecoveryCodeHash); err != nil {
 		t.Fatalf("upsert bystander reset token: %v", err)
 	}
 
@@ -481,7 +481,7 @@ func TestPasswordResetTokenLifecycleAndAccountScopedDelete(t *testing.T) {
 		TokenHash: "target-expired-token-hash",
 		CreatedAt: now.Add(-time.Hour),
 		ExpiresAt: now.Add(-time.Minute),
-	}); err != nil {
+	}, target.RecoveryCodeHash); err != nil {
 		t.Fatalf("upsert expired reset token: %v", err)
 	}
 	if _, err := store.ConsumePasswordResetToken(ctx, "target-expired-token-hash", now); !errors.Is(err, ErrNotFound) {
@@ -514,7 +514,7 @@ func TestPasswordResetTokenMethodsReturnErrorWhenTableIsDropped(t *testing.T) {
 		TokenHash: "target-reset-token-hash",
 		CreatedAt: time.Now().UTC(),
 		ExpiresAt: time.Now().UTC().Add(30 * time.Minute),
-	}); err != nil {
+	}, target.RecoveryCodeHash); err != nil {
 		t.Fatalf("upsert reset token: %v", err)
 	}
 
@@ -535,8 +535,40 @@ func TestPasswordResetTokenMethodsReturnErrorWhenTableIsDropped(t *testing.T) {
 		TokenHash: "another-reset-token-hash",
 		CreatedAt: time.Now().UTC(),
 		ExpiresAt: time.Now().UTC().Add(30 * time.Minute),
-	}); err == nil {
+	}, target.RecoveryCodeHash); err == nil {
 		t.Fatal("expected error upserting a reset token after password_reset_tokens table is dropped")
+	}
+}
+
+// A recovery-code rotation that lands between ForgotPassword's compare and its
+// token write must leave no token behind: the write is conditional on the hash
+// the code was verified against.
+func TestUpsertPasswordResetTokenRequiresVerifiedRecoveryHash(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	target := seedFaultInjectionAccount(t, store, "account-target")
+
+	if err := store.UpdateAccountRecoveryCodeHash(ctx, target.ID, "rotated-recovery-hash"); err != nil {
+		t.Fatalf("rotate recovery hash: %v", err)
+	}
+
+	token := models.PasswordResetToken{
+		AccountID: target.ID,
+		TokenHash: "stale-reset-token-hash",
+		CreatedAt: now,
+		ExpiresAt: now.Add(30 * time.Minute),
+	}
+	if err := store.UpsertPasswordResetToken(ctx, token, target.RecoveryCodeHash); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for a superseded recovery hash, got %v", err)
+	}
+	if _, err := store.ConsumePasswordResetToken(ctx, "stale-reset-token-hash", now); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected no token stored under a superseded recovery hash, got %v", err)
+	}
+
+	token.AccountID = "missing-account"
+	if err := store.UpsertPasswordResetToken(ctx, token, ""); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for an unknown account, got %v", err)
 	}
 }
 

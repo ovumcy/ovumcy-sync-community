@@ -792,28 +792,43 @@ func (s *Store) DeleteTOTPChallengesForAccount(
 	return nil
 }
 
+// UpsertPasswordResetToken stores the token only while the account's recovery
+// code hash still equals verifiedRecoveryCodeHash, the one the caller checked
+// the code against, and returns ErrNotFound otherwise. A rotation that lands
+// between that check and this write therefore cannot leave a token issued
+// against the old code behind.
 func (s *Store) UpsertPasswordResetToken(
 	ctx context.Context,
 	resetToken models.PasswordResetToken,
+	verifiedRecoveryCodeHash string,
 ) error {
-	_, err := s.db.ExecContext(
+	result, err := s.db.ExecContext(
 		ctx,
 		`
 INSERT INTO password_reset_tokens (account_id, token_hash, created_at, expires_at, consumed_at)
-VALUES (?, ?, ?, ?, NULL)
+SELECT id, ?, ?, ?, NULL FROM accounts WHERE id = ? AND recovery_code_hash = ?
 ON CONFLICT(account_id) DO UPDATE SET
   token_hash = excluded.token_hash,
   created_at = excluded.created_at,
   expires_at = excluded.expires_at,
   consumed_at = NULL
 `,
-		resetToken.AccountID,
 		resetToken.TokenHash,
 		resetToken.CreatedAt.UTC().Format(time.RFC3339Nano),
 		resetToken.ExpiresAt.UTC().Format(time.RFC3339Nano),
+		resetToken.AccountID,
+		verifiedRecoveryCodeHash,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert password reset token: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("upsert password reset token rows affected: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); needs a fake driver, the same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
+	}
+	if affected == 0 {
+		return ErrNotFound
 	}
 
 	return nil

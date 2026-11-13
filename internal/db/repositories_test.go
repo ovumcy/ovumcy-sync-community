@@ -225,7 +225,7 @@ func TestDeleteAccountErasesEveryChildRowAndIsIdempotent(t *testing.T) {
 			TokenHash: accountID + "-reset-token-hash",
 			CreatedAt: now,
 			ExpiresAt: now.Add(30 * time.Minute),
-		}); err != nil {
+		}, "recovery-hash"); err != nil {
 			t.Fatalf("create password reset token for %s: %v", accountID, err)
 		}
 
