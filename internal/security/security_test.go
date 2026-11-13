@@ -71,16 +71,22 @@ func TestHashPasswordCountsRunesNotBytes(t *testing.T) {
 	}
 }
 
-// TestHashPasswordRejectsPasswordOverBcryptByteLimit exercises HashPassword's
-// generic (non-ErrWeakPassword) error branch. HashPassword only enforces a
-// 12-rune *minimum*; it has no maximum, so a long-but-otherwise-valid
-// password can still exceed bcrypt's own hard 72-byte ceiling
-// (bcrypt.ErrPasswordTooLong). A 100-byte ASCII password clears the rune
-// minimum by a wide margin while tripping that ceiling.
+// TestHashPasswordRejectsPasswordOverBcryptByteLimit pins the byte ceiling as
+// a weak-password rejection, never bcrypt's raw ErrPasswordTooLong. 37
+// Cyrillic runes are 74 UTF-8 bytes: well past the rune minimum, just past
+// the byte maximum.
 func TestHashPasswordRejectsPasswordOverBcryptByteLimit(t *testing.T) {
-	longPassword := strings.Repeat("a", 100)
-	if _, err := HashPassword(longPassword); !errors.Is(err, bcrypt.ErrPasswordTooLong) {
-		t.Fatalf("expected bcrypt.ErrPasswordTooLong for a 100-byte password, got %v", err)
+	for name, password := range map[string]string{
+		"ascii 73 bytes":    strings.Repeat("a", MaxPasswordBytes+1),
+		"cyrillic 37 runes": strings.Repeat("ж", 37),
+	} {
+		if _, err := HashPassword(password); !errors.Is(err, ErrWeakPassword) {
+			t.Fatalf("%s: expected ErrWeakPassword, got %v", name, err)
+		}
+	}
+
+	if _, err := HashPassword(strings.Repeat("ж", 36)); err != nil {
+		t.Fatalf("expected a 72-byte password to hash, got %v", err)
 	}
 }
 

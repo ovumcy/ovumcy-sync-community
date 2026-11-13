@@ -109,7 +109,7 @@ func (s *AuthService) Register(ctx context.Context, login string, password strin
 		if errors.Is(err, security.ErrWeakPassword) {
 			return AuthResult{}, ErrInvalidRegistrationInput
 		}
-		return AuthResult{}, err
+		return AuthResult{}, err // codecov:ignore -- HashPassword fails only with ErrWeakPassword on input it validated (see its own codecov:ignore on the bcrypt error).
 	}
 
 	recoveryCode, recoveryCodeHash, err := security.NewRecoveryCode()
@@ -302,7 +302,7 @@ func (s *AuthService) ChangePassword(
 		if errors.Is(err, security.ErrWeakPassword) {
 			return ErrWeakNewPassword
 		}
-		return err
+		return err // codecov:ignore -- HashPassword fails only with ErrWeakPassword on input it validated (see its own codecov:ignore on the bcrypt error).
 	}
 
 	// codecov:ignore:start -- both branches below need the account row or the
@@ -404,6 +404,12 @@ func (s *AuthService) ResetPassword(
 		return PasswordResetResult{}, ErrInvalidResetToken
 	}
 
+	// Validate before consuming: a rejected password must leave the
+	// single-use token usable for a corrected retry.
+	if err := security.ValidatePassword(newPassword); err != nil {
+		return PasswordResetResult{}, ErrWeakNewPassword
+	}
+
 	tokenRecord, err := s.store.ConsumePasswordResetToken(ctx, security.HashToken(resetToken), s.now().UTC())
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
@@ -414,10 +420,7 @@ func (s *AuthService) ResetPassword(
 
 	newPasswordHash, err := security.HashPassword(newPassword)
 	if err != nil {
-		if errors.Is(err, security.ErrWeakPassword) {
-			return PasswordResetResult{}, ErrWeakNewPassword
-		}
-		return PasswordResetResult{}, err
+		return PasswordResetResult{}, err // codecov:ignore -- newPassword already passed ValidatePassword above, and HashPassword cannot fail on validated input (see its own codecov:ignore on the bcrypt error).
 	}
 
 	plainRecovery, recoveryHash, err := security.NewRecoveryCode()

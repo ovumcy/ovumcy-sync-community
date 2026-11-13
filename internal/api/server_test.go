@@ -905,6 +905,7 @@ func TestServerRegisterRejectsInvalidRegistrationInput(t *testing.T) {
 		password string
 	}{
 		{name: "weak password", login: "owner@example.com", password: "short"},
+		{name: "password over bcrypt byte limit", login: "owner@example.com", password: strings.Repeat("ж", 37)},
 		{name: "login too short", login: "ab", password: "correct horse battery staple"},
 		{name: "reserved managed namespace", login: "managed:squatter1234", password: "correct horse battery staple"},
 	} {

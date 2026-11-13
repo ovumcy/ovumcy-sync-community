@@ -331,7 +331,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/PasswordResetResult"
         "400":
-          description: New password fails the strength check.
+          description: New password fails the strength check; the reset token is not consumed and stays usable.
           content:
             application/json:
               schema:
@@ -1359,7 +1359,7 @@ components:
         password:
           type: string
           format: password
-          description: Minimum 12 characters (after trimming) on registration; hashed with bcrypt.
+          description: On registration, minimum 12 characters (after trimming) and at most 72 UTF-8 bytes (bcrypt's input ceiling); hashed with bcrypt.
       required: [login, password]
       additionalProperties: false
 
@@ -1372,7 +1372,7 @@ components:
         new_password:
           type: string
           format: password
-          description: Must differ from current_password and satisfy the same minimum-length policy as registration.
+          description: Must differ from current_password and satisfy the same length policy as registration.
       required: [current_password, new_password]
       additionalProperties: false
 

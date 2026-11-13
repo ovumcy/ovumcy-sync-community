@@ -19,25 +19,6 @@ import (
 	"github.com/ovumcy/ovumcy-sync-community/internal/security"
 )
 
-// TestRegisterRejectsPasswordOverBcryptByteLimit exercises Register's
-// HashPassword generic (non-ErrWeakPassword) branch: Register only enforces
-// HashPassword's own 12-rune minimum, so a long-but-otherwise-valid password
-// can still trip bcrypt's own 72-byte ceiling — the same edge case
-// TestHashPasswordRejectsPasswordOverBcryptByteLimit exercises directly in
-// internal/security, reached here through the service.
-func TestRegisterRejectsPasswordOverBcryptByteLimit(t *testing.T) {
-	store := openTestStore(t)
-	service := NewAuthService(store, 24*time.Hour)
-
-	_, err := service.Register(context.Background(), "owner@example.com", strings.Repeat("a", 100))
-	if err == nil {
-		t.Fatal("expected Register to fail for a 100-byte password")
-	}
-	if errors.Is(err, ErrInvalidRegistrationInput) {
-		t.Fatalf("expected the raw bcrypt error (not the weak-password mapping), got %v", err)
-	}
-}
-
 // TestRegisterSurfacesCreateSessionStoreError exercises createSession's
 // store.CreateSession generic-error branch AND Register's own wrapper around
 // it in one shot: CreateAccount (the earlier call, on "accounts") succeeds
@@ -195,23 +176,6 @@ func TestChangePasswordStoreErrors(t *testing.T) {
 		}
 	})
 
-	t.Run("new password over the bcrypt byte limit", func(t *testing.T) {
-		store := openTestStore(t)
-		service := NewAuthService(store, 24*time.Hour)
-		ctx := context.Background()
-		const password = "correct horse battery staple"
-
-		result, err := service.Register(ctx, "owner@example.com", password)
-		if err != nil {
-			t.Fatalf("register: %v", err)
-		}
-
-		err = service.ChangePassword(ctx, result.AccountID, "any-hash", password, strings.Repeat("b", 100))
-		if err == nil || errors.Is(err, ErrWeakNewPassword) {
-			t.Fatalf("expected the raw bcrypt error, not ErrWeakNewPassword, got %v", err)
-		}
-	})
-
 	t.Run("sessions table dropped fails session revocation", func(t *testing.T) {
 		store, dbPath := openFileBackedTestStore(t)
 		service := NewAuthService(store, 24*time.Hour)
@@ -322,30 +286,6 @@ func TestResetPasswordSurfacesConsumeTokenStoreError(t *testing.T) {
 	_, err := service.ResetPassword(context.Background(), "any-reset-token", "a brand new password")
 	if err == nil || errors.Is(err, ErrInvalidResetToken) {
 		t.Fatalf("expected a store-failure error, not ErrInvalidResetToken, got %v", err)
-	}
-}
-
-// TestResetPasswordRejectsPasswordOverBcryptByteLimit exercises
-// ResetPassword's HashPassword generic (non-ErrWeakPassword) branch, mirroring
-// TestChangePasswordStoreErrors' identical edge case for the password-change
-// path.
-func TestResetPasswordRejectsPasswordOverBcryptByteLimit(t *testing.T) {
-	store := openTestStore(t)
-	service := NewAuthService(store, 24*time.Hour)
-	ctx := context.Background()
-
-	registered, err := service.Register(ctx, "owner@example.com", "correct horse battery staple")
-	if err != nil {
-		t.Fatalf("register: %v", err)
-	}
-	forgot, err := service.ForgotPassword(ctx, "owner@example.com", registered.RecoveryCode)
-	if err != nil {
-		t.Fatalf("forgot password: %v", err)
-	}
-
-	_, err = service.ResetPassword(ctx, forgot.ResetToken, strings.Repeat("c", 100))
-	if err == nil || errors.Is(err, ErrWeakNewPassword) {
-		t.Fatalf("expected the raw bcrypt error, not ErrWeakNewPassword, got %v", err)
 	}
 }
 

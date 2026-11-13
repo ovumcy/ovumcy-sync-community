@@ -48,18 +48,34 @@ func ValidateLogin(login string) bool {
 	return true
 }
 
-// HashPassword enforces the minimum-strength rule (at least 12 Unicode runes
-// after trimming whitespace, not bytes) before returning the bcrypt hash.
-// Rune-counting matches ovumcy-managed's HashPassword exactly, so the same
-// password is never accepted by one backend and rejected by the other.
+// MaxPasswordBytes is bcrypt's hard input ceiling: GenerateFromPassword
+// refuses anything longer with ErrPasswordTooLong. Checking it up front turns
+// an over-long password into the ordinary weak-password rejection instead of
+// a 500, and lets ResetPassword refuse it before spending the reset token.
+const MaxPasswordBytes = 72
+
+// ValidatePassword enforces the strength rule: at least 12 Unicode runes after
+// trimming whitespace (runes, not bytes, matching ovumcy-managed's
+// HashPassword so the same password is never accepted by one backend and
+// rejected by the other) and at most MaxPasswordBytes bytes untrimmed — the
+// bytes bcrypt actually hashes.
+func ValidatePassword(password string) error {
+	if utf8.RuneCountInString(strings.TrimSpace(password)) < 12 || len(password) > MaxPasswordBytes {
+		return ErrWeakPassword
+	}
+	return nil
+}
+
+// HashPassword validates password (ValidatePassword) before returning its
+// bcrypt hash.
 func HashPassword(password string) (string, error) {
-	if utf8.RuneCountInString(strings.TrimSpace(password)) < 12 {
-		return "", ErrWeakPassword
+	if err := ValidatePassword(password); err != nil {
+		return "", err
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), PasswordHashCost)
 	if err != nil {
-		return "", err
+		return "", err // codecov:ignore -- ValidatePassword above rejects input over bcrypt's 72-byte ceiling and PasswordHashCost is a fixed valid cost; bcrypt cannot fail on validated input.
 	}
 
 	return string(hash), nil
