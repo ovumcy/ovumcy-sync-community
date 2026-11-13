@@ -115,7 +115,7 @@ go run ./cmd/ovumcy-sync-community serve
 | `METRICS_BEARER_TOKEN` | _(unset)_ | Bearer token for `/metrics` (requires `METRICS_ENABLED=true`) |
 | `MANAGED_BRIDGE_TOKEN` | _(unset)_ | Enables the managed-bridge endpoints (leave unset for community use) |
 | `ALLOWED_ORIGINS` | _(empty)_ | Explicit CORS allowlist for browser clients |
-| `TRUSTED_PROXY_CIDRS` | _(unset)_ | Reverse-proxy CIDRs whose forwarded client IP is trusted for rate limiting |
+| `TRUSTED_PROXY_CIDRS` | _(unset)_ | Reverse-proxy CIDRs whose forwarded client IP is trusted for rate limiting; a range wider than an IPv4 /8, an IPv6 /32 or a unique-local IPv6 /8 fails startup |
 | `FIELD_ENCRYPTION_KEY` | _(unset)_ | Hex key (≥32 bytes / 64 hex chars) that enables the optional TOTP surface |
 | `TOTP_ISSUER` | `ovumcy-sync-community` | Issuer label embedded in `otpauth://` provisioning URIs |
 | `LAPSED_ACCOUNT_GRACE_PERIOD` | `1440h` (60d) | Retention window for a managed account after the bridge signals an entitlement lapse, before it is erased |
