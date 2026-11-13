@@ -758,7 +758,10 @@ paths:
         (503) whenever that token is not configured on this server. Provisions
         or reuses a `mode=managed` account for the given opaque
         `account_id` and returns a session for it, without any login/password
-        exchange.
+        exchange. A mint never reverses an entitlement lapse: a lapsed
+        account answers 409 until a reactivation signal
+        (`POST /managed/accounts/{account_id}/premium` with `active: true`)
+        clears the lapse; the next mint then restores `premium_active`.
       security:
         - managedBridgeAuth: []
       requestBody:
@@ -783,6 +786,15 @@ paths:
               examples:
                 invalidManagedAccount:
                   value: { error: invalid_managed_account }
+        "409":
+          description: The account's entitlement lapse is recorded; no session is issued and premium stays off.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                managedAccountLapsed:
+                  value: { error: managed_account_lapsed }
         "401":
           description: Missing/invalid MANAGED_BRIDGE_TOKEN bearer credential.
           content:
@@ -887,7 +899,9 @@ paths:
         `POST /managed/session` and the account-purge endpoint; the route is
         disabled (503) whenever that token is not configured on this server.
         A lifecycle signal only — the request and response never carry
-        anything beyond the account id and the boolean flag.
+        anything beyond the account id, the boolean flag and its `as_of`
+        timestamp. This server stores the state the managed service reports;
+        it never decides entitlement itself.
 
         `active: false` records the lapse (`lapsed_at`), clears
         `premium_active`, and immediately revokes every still-valid session
@@ -897,17 +911,25 @@ paths:
         server's configured `LAPSED_ACCOUNT_GRACE_PERIOD` (default 60 days),
         by the separate `purge-lapsed-accounts` operator subcommand.
 
-        `active: true` retracts a previously recorded lapse marker WITHOUT
-        touching `premium_active` or any session — reactivating premium and
-        issuing a session both remain `POST /managed/session`'s job, which
-        already clears the marker on every successful mint. A resubscribed
-        account therefore never needs this call: the next session mint alone
-        is sufficient.
+        `active: true` is the only way back from a lapse: it clears the
+        marker WITHOUT touching `premium_active` or any session, and the next
+        `POST /managed/session` restores premium and issues the session. A
+        mint alone never clears a lapse.
 
-        Idempotent: replaying the same `active` value again is a no-op that
-        still reports success. Replaying `active: false` never pushes the
-        recorded `lapsed_at` forward, so a duplicated or retried signal can
-        never extend the retention window past the configured grace period.
+        Signals are ordered by `as_of`, the managed service's observation
+        instant (RFC 3339). It is required for `active: true` and optional
+        for `active: false`. A reactivation is applied only when its `as_of`
+        is strictly newer than the last applied signal; a lapse is applied
+        unless its `as_of` is strictly older (ties go to the lapse, and a
+        lapse without `as_of` is never stale). A refused signal answers 409
+        and changes nothing, so a delayed or retried reactivation can never
+        undo a newer lapse. An `as_of` more than 5 minutes ahead of this
+        server's clock is refused with 400.
+
+        Idempotent: replaying an identical lapse is a no-op that still
+        reports success and never pushes the recorded `lapsed_at` forward,
+        so a duplicated or retried signal can never extend the retention
+        window past the configured grace period.
 
         Only `mode=managed` accounts can be affected: a self-hosted account
         whose id collides is refused with `invalid_managed_account` and left
@@ -945,7 +967,7 @@ paths:
                   summary: active=true
                   value: { status: lapse_cleared }
         "400":
-          description: account_id fails the managed-account id pattern, or names an existing non-managed account.
+          description: "account_id fails the managed-account id pattern or names an existing non-managed account, or the signal is invalid (`active: true` without `as_of`, or an `as_of` before the Unix epoch or more than 5 minutes ahead of this server's clock)."
           content:
             application/json:
               schema:
@@ -953,6 +975,8 @@ paths:
               examples:
                 invalidManagedAccount:
                   value: { error: invalid_managed_account }
+                invalidEntitlementSignal:
+                  value: { error: invalid_entitlement_signal }
         "401":
           description: Missing/invalid MANAGED_BRIDGE_TOKEN bearer credential.
           content:
@@ -962,6 +986,15 @@ paths:
               examples:
                 unauthorized:
                   value: { error: unauthorized }
+        "409":
+          description: A newer lapse or reactivation has already been applied; this signal changed nothing.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                staleEntitlementSignal:
+                  value: { error: stale_entitlement_signal }
         "500":
           $ref: "#/components/responses/InternalError"
         "503":
@@ -1026,6 +1059,8 @@ paths:
                   value: { error: invalid_device }
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/SyncDisabled"
         "409":
           description: Account is already at its configured device ceiling and this device is not already registered.
           content:
@@ -1055,6 +1090,8 @@ paths:
                 $ref: "#/components/schemas/DeviceListResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/SyncDisabled"
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
@@ -1096,6 +1133,8 @@ paths:
                   value: { error: invalid_device }
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/SyncDisabled"
         "404":
           description: The account has no device with that id.
           content:
@@ -1130,6 +1169,8 @@ paths:
                 $ref: "#/components/schemas/RecoveryKeyPackageResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/SyncDisabled"
         "404":
           description: No recovery-key package has been stored for this account yet.
           content:
@@ -1178,6 +1219,8 @@ paths:
                   value: { error: invalid_recovery_package }
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/SyncDisabled"
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
@@ -1203,6 +1246,8 @@ paths:
                 $ref: "#/components/schemas/BlobResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/SyncDisabled"
         "404":
           description: No blob has been stored for this account yet.
           content:
@@ -1255,6 +1300,8 @@ paths:
                   value: { error: invalid_ciphertext }
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/SyncDisabled"
         "409":
           description: generation is not strictly greater than the currently stored generation (a concurrent writer already advanced it).
           content:
@@ -1309,6 +1356,15 @@ components:
           examples:
             unauthorized:
               value: { error: unauthorized }
+    SyncDisabled:
+      description: The session's account reports `sync_enabled=false` (a managed account without premium); device, recovery-key and blob routes are refused. `GET /sync/capabilities` still answers.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            syncDisabled:
+              value: { error: sync_disabled }
     RateLimited:
       description: "Per-route auth rate limit exceeded (per-IP, per-account, and/or per-login-identifier depending on the route). Response includes a `Retry-After: 60` header."
       headers:
@@ -1561,7 +1617,11 @@ components:
       properties:
         active:
           type: boolean
-          description: 'false records an entitlement lapse (clears premium_active, revokes sessions); true retracts a previously recorded lapse without touching premium_active or sessions. Omitted decodes to false.'
+          description: 'false records an entitlement lapse (clears premium_active, revokes sessions); true reactivates after one (clears the marker without touching premium_active or sessions). Omitted decodes to false.'
+        as_of:
+          type: string
+          format: date-time
+          description: The managed service's observation instant, used to order signals. Required when active is true; optional for a lapse.
       additionalProperties: false
 
     CapabilityDocument:

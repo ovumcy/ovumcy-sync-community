@@ -1,8 +1,10 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"testing"
+	"time"
 )
 
 func TestServerRejectsManagedAccountPremiumWhenDisabled(t *testing.T) {
@@ -161,7 +163,7 @@ func TestServerManagedAccountPremiumClearsMarker(t *testing.T) {
 		handler,
 		http.MethodPost,
 		"/managed/accounts/"+accountID+"/premium",
-		map[string]any{"active": true},
+		map[string]any{"active": true, "as_of": asOfAfterNow()},
 		"test-managed-bridge-token",
 		http.StatusOK,
 	)
@@ -189,10 +191,137 @@ func TestServerManagedAccountPremiumUnknownAccountIsIdempotentSuccess(t *testing
 		handler,
 		http.MethodPost,
 		"/managed/accounts/neverexisted1234/premium",
-		map[string]any{"active": true},
+		map[string]any{"active": true, "as_of": asOfAfterNow()},
 		"test-managed-bridge-token",
 		http.StatusOK,
 	)
+}
+
+// asOfAfterNow is a reactivation as-of strictly newer than a lapse the
+// server just stamped with its own clock, and inside the skew bound.
+func asOfAfterNow() string {
+	return time.Now().UTC().Add(time.Second).Format(time.RFC3339Nano)
+}
+
+func TestServerManagedAccountPremiumRejectsInvalidSignal(t *testing.T) {
+	handler := newTestServer(t)
+
+	const accountID = "managedacct1234"
+	provisionManagedAccountWithData(t, handler, accountID)
+
+	for _, body := range []map[string]any{
+		{"active": true},
+		{"active": false, "as_of": time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano)},
+	} {
+		response := performJSONRequest(
+			t,
+			handler,
+			http.MethodPost,
+			"/managed/accounts/"+accountID+"/premium",
+			body,
+			"test-managed-bridge-token",
+			http.StatusBadRequest,
+		)
+		var payload map[string]string
+		decodeResponse(t, response.Body.Bytes(), &payload)
+		if payload["error"] != "invalid_entitlement_signal" {
+			t.Fatalf("unexpected payload for %#v: %#v", body, payload)
+		}
+	}
+}
+
+// TestServerManagedAccountPremiumRejectsStaleReactivation: a reactivation
+// observed before the applied lapse is refused with 409 and the account
+// stays unable to mint.
+func TestServerManagedAccountPremiumRejectsStaleReactivation(t *testing.T) {
+	handler := newTestServer(t)
+
+	const accountID = "managedacct1234"
+	provisionManagedAccountWithData(t, handler, accountID)
+
+	lapseAsOf := time.Now().UTC().Add(-time.Minute)
+	performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/managed/accounts/"+accountID+"/premium",
+		map[string]any{"active": false, "as_of": lapseAsOf.Format(time.RFC3339Nano)},
+		"test-managed-bridge-token",
+		http.StatusOK,
+	)
+
+	response := performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/managed/accounts/"+accountID+"/premium",
+		map[string]any{"active": true, "as_of": lapseAsOf.Add(-time.Second).Format(time.RFC3339Nano)},
+		"test-managed-bridge-token",
+		http.StatusConflict,
+	)
+	var payload map[string]string
+	decodeResponse(t, response.Body.Bytes(), &payload)
+	if payload["error"] != "stale_entitlement_signal" {
+		t.Fatalf("unexpected stale payload: %#v", payload)
+	}
+
+	performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/managed/session",
+		map[string]string{"account_id": accountID},
+		"test-managed-bridge-token",
+		http.StatusConflict,
+	)
+}
+
+// TestServerSyncRoutesEnforceSyncDisabled: a session that outlived its
+// account's premium (a mint racing a lapse) is refused on every data route
+// with 403 sync_disabled, while capabilities still report why.
+func TestServerSyncRoutesEnforceSyncDisabled(t *testing.T) {
+	store, _ := newFileBackedTestStore(t)
+	handler := newTestServerWithOptions(t, serverTestOptions{store: store})
+
+	const accountID = "managedacct1234"
+	sessionToken := provisionManagedAccountWithData(t, handler, accountID)
+
+	// The unordered store primitive clears premium without revoking
+	// sessions — the state a mint racing a lapse leaves behind.
+	if err := store.SetAccountLapsed(context.Background(), accountID, time.Now().UTC()); err != nil {
+		t.Fatalf("set account lapsed: %v", err)
+	}
+
+	routes := []struct {
+		method string
+		path   string
+		body   any
+	}{
+		{http.MethodPost, "/sync/devices", map[string]string{"device_id": "device-2bbbb", "device_label": "Pixel 8"}},
+		{http.MethodGet, "/sync/devices", nil},
+		{http.MethodDelete, "/sync/devices/device-1aaaa", nil},
+		{http.MethodGet, "/sync/recovery-key", nil},
+		{http.MethodPut, "/sync/recovery-key", map[string]any{}},
+		{http.MethodGet, "/sync/blob", nil},
+		{http.MethodPut, "/sync/blob", map[string]any{}},
+	}
+	for _, route := range routes {
+		response := performJSONRequest(t, handler, route.method, route.path, route.body, sessionToken, http.StatusForbidden)
+		var payload map[string]string
+		decodeResponse(t, response.Body.Bytes(), &payload)
+		if payload["error"] != "sync_disabled" {
+			t.Fatalf("%s %s: unexpected payload %#v", route.method, route.path, payload)
+		}
+	}
+
+	capabilitiesResponse := performJSONRequest(t, handler, http.MethodGet, "/sync/capabilities", nil, sessionToken, http.StatusOK)
+	var capabilities struct {
+		SyncEnabled bool `json:"sync_enabled"`
+	}
+	decodeResponse(t, capabilitiesResponse.Body.Bytes(), &capabilities)
+	if capabilities.SyncEnabled {
+		t.Fatal("expected capabilities to report sync_enabled=false")
+	}
 }
 
 func TestServerManagedAccountPremiumRefusesSelfHostedAccount(t *testing.T) {
@@ -256,11 +385,11 @@ func TestServerManagedAccountPremiumReturnsInternalErrorOnStoreFailure(t *testin
 	}
 }
 
-// TestServerManagedAccountPremiumMintAfterLapseReenablesSync is the
-// resubscribe path exercised end to end over HTTP: after a lapse signal
-// revokes sync, a fresh POST /managed/session mint clears the marker and
-// restores capabilities without any separate call.
-func TestServerManagedAccountPremiumMintAfterLapseReenablesSync(t *testing.T) {
+// TestServerManagedAccountPremiumReactivationThenMintReenablesSync is the
+// resubscribe path end to end over HTTP: after a lapse, a mint alone is
+// refused (409 managed_account_lapsed — a delayed mint must never reverse
+// a lapse); an ordered reactivation followed by a mint restores sync.
+func TestServerManagedAccountPremiumReactivationThenMintReenablesSync(t *testing.T) {
 	handler := newTestServer(t)
 
 	const accountID = "managedacct1234"
@@ -272,6 +401,31 @@ func TestServerManagedAccountPremiumMintAfterLapseReenablesSync(t *testing.T) {
 		http.MethodPost,
 		"/managed/accounts/"+accountID+"/premium",
 		map[string]any{"active": false},
+		"test-managed-bridge-token",
+		http.StatusOK,
+	)
+
+	refused := performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/managed/session",
+		map[string]string{"account_id": accountID},
+		"test-managed-bridge-token",
+		http.StatusConflict,
+	)
+	var refusedPayload map[string]string
+	decodeResponse(t, refused.Body.Bytes(), &refusedPayload)
+	if refusedPayload["error"] != "managed_account_lapsed" {
+		t.Fatalf("unexpected refused-mint payload: %#v", refusedPayload)
+	}
+
+	performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/managed/accounts/"+accountID+"/premium",
+		map[string]any{"active": true, "as_of": asOfAfterNow()},
 		"test-managed-bridge-token",
 		http.StatusOK,
 	)
