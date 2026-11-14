@@ -709,12 +709,21 @@ func (s *Server) handleLogout(writer http.ResponseWriter, request *http.Request)
 // The service call is idempotent, so a retried request (e.g. a client that
 // did not see the first 200 due to a dropped connection) still reports
 // success instead of surfacing an error for an account that is already gone.
+//
+// A managed account has no password to re-check, so a session alone would be
+// enough to erase it; its deletion goes only through the bridge purge
+// (DELETE /managed/accounts/{account_id}) that ovumcy-managed drives after
+// its own re-authentication.
 func (s *Server) handleDeleteAccount(
 	writer http.ResponseWriter,
 	request *http.Request,
 	account models.Account,
 ) {
 	if !s.allowAuthRequestForAccount(writer, request, account.ID) {
+		return
+	}
+	if account.Mode == "managed" {
+		writeError(writer, http.StatusForbidden, "managed_account_delete_via_bridge")
 		return
 	}
 

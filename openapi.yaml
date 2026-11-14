@@ -765,7 +765,9 @@ paths:
         tokens, and pending TOTP challenges. The account is derived only from
         the authenticated session — there is no field to name a different
         account. Requires the current password, so a stolen session alone
-        cannot erase the account; managed accounts (no password) are exempt.
+        cannot erase the account. A managed account has no password, so a
+        managed session is refused with `403 managed_account_delete_via_bridge`;
+        it is erased only through `DELETE /managed/accounts/{account_id}`.
         Idempotent: a retry after a successful delete still reports success.
       security:
         - sessionBearerAuth: []
@@ -805,6 +807,15 @@ paths:
                   value: { error: unauthorized }
                 invalidCurrentPassword:
                   value: { error: invalid_current_password }
+        "403":
+          description: The session belongs to a managed account, which is erased only through the managed-bridge purge.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                managedAccountDeleteViaBridge:
+                  value: { error: managed_account_delete_via_bridge }
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
