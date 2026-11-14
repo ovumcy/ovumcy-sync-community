@@ -259,13 +259,25 @@ func (s *Store) ResetAccountCredentials(
 	return accountID, nil
 }
 
+// CredentialSnapshot is the credential state a step-up verified. A write
+// guarded by it lands only while the account still holds exactly this state,
+// so a password change, reset or TOTP transition that commits during the
+// step-up's bcrypt makes the write refuse instead of overwriting it.
+type CredentialSnapshot struct {
+	PasswordHash     string
+	RecoveryCodeHash string
+	TOTPEnabled      bool
+}
+
 // UpdateAccountRecoveryCodeHash rotates the recovery code hash and deletes the
 // account's pending reset tokens in one transaction: a token issued against
 // the old code must not outlive the rotation, and a failed cleanup must not
-// leave the hash rotated with the new code never handed out.
+// leave the hash rotated with the new code never handed out. The rotation
+// lands only while the account still matches verified; otherwise ErrNotFound.
 func (s *Store) UpdateAccountRecoveryCodeHash(
 	ctx context.Context,
 	accountID string,
+	verified CredentialSnapshot,
 	recoveryCodeHash string,
 ) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -278,9 +290,13 @@ func (s *Store) UpdateAccountRecoveryCodeHash(
 
 	result, err := tx.ExecContext(
 		ctx,
-		`UPDATE accounts SET recovery_code_hash = ? WHERE id = ?`,
+		`UPDATE accounts SET recovery_code_hash = ?
+		 WHERE id = ? AND password_hash = ? AND recovery_code_hash = ? AND totp_enabled = ?`,
 		recoveryCodeHash,
 		accountID,
+		verified.PasswordHash,
+		verified.RecoveryCodeHash,
+		boolToInt(verified.TOTPEnabled),
 	)
 	if err != nil {
 		return fmt.Errorf("update account recovery code: %w", err)
@@ -306,6 +322,64 @@ func (s *Store) UpdateAccountRecoveryCodeHash(
 		return fmt.Errorf("commit update account recovery code: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteAccount's COMMIT branch in fault_injection_test.go.
 	}
 
+	return nil
+}
+
+// ChangeAccountPassword sets the new password hash while the stored hash still
+// equals verifiedHash, then deletes the account's TOTP challenges, every
+// session except keepTokenHash, and pending reset tokens — all in one
+// transaction, so a failure leaves the old password and its sessions intact
+// rather than a new password beside surviving sessions. ErrNotFound when the
+// account is gone or its hash moved on.
+func (s *Store) ChangeAccountPassword(
+	ctx context.Context,
+	accountID string,
+	verifiedHash string,
+	newHash string,
+	keepTokenHash string,
+) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin change account password: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	result, err := tx.ExecContext(
+		ctx,
+		`UPDATE accounts SET password_hash = ? WHERE id = ? AND password_hash = ?`,
+		newHash,
+		accountID,
+		verifiedHash,
+	)
+	if err != nil {
+		return fmt.Errorf("change account password: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("change account password rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); needs a fake driver, the same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+
+	for _, cleanup := range []struct {
+		query string
+		args  []any
+	}{
+		{`DELETE FROM totp_challenges WHERE account_id = ?`, []any{accountID}},
+		{`DELETE FROM sessions WHERE account_id = ? AND token_hash != ?`, []any{accountID, keepTokenHash}},
+		{`DELETE FROM password_reset_tokens WHERE account_id = ?`, []any{accountID}},
+	} {
+		if _, err := tx.ExecContext(ctx, cleanup.query, cleanup.args...); err != nil {
+			return fmt.Errorf("clean up on password change: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit change account password: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteAccount's COMMIT branch in fault_injection_test.go.
+	}
 	return nil
 }
 
