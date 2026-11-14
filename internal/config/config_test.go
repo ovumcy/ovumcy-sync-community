@@ -280,16 +280,52 @@ func TestParseTrustedProxyCIDRAcceptsBareIPv6Address(t *testing.T) {
 
 func TestParseTrustedProxyCIDRRejectsOverBroadPrefixes(t *testing.T) {
 	for _, value := range []string{
-		"0.0.0.0/0", "::/0", "128.0.0.0/1", "fc00::/7", "::ffff:0.0.0.0/96", "2000::/8", "2001::/16",
+		"0.0.0.0/0", "::/0", "128.0.0.0/1", "fc00::/6", "::ffff:0.0.0.0/96", "2000::/8", "2001::/16",
+		// A public IPv4 /8 lets a whole allocation pick its own rate-limit key.
+		"8.0.0.0/8", "11.0.0.0/8", "104.0.0.0/11",
+		// Starts inside a private range but masks to a public one.
+		"172.16.0.0/8", "192.168.0.0/8", "100.64.0.0/8",
 	} {
 		if _, err := ParseTrustedProxyCIDR(value); err == nil {
 			t.Errorf("expected %q to be rejected as over-broad", value)
 		}
 	}
-	for _, value := range []string{"10.0.0.0/8", "fd00::/8", "172.30.99.10/32", "2001:db8::/32"} {
+	for _, value := range []string{
+		"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "100.64.0.0/10", "169.254.0.0/16",
+		"fc00::/7", "fd00::/8", "fe80::/10", "172.30.99.10/32", "2001:db8::/32",
+		// Cloudflare's widest published edge range.
+		"104.16.0.0/13", "203.0.0.0/12",
+	} {
 		if _, err := ParseTrustedProxyCIDR(value); err != nil {
 			t.Errorf("expected %q to be accepted, got %v", value, err)
 		}
+	}
+}
+
+func TestValidateRejectsShortMetricsBearerToken(t *testing.T) {
+	cfg := Config{
+		BindAddr:                 ":8080",
+		DBPath:                   "./data.sqlite",
+		SessionTTL:               time.Hour,
+		MaxDevices:               1,
+		MaxBlobBytes:             1,
+		AuthRateLimitCount:       1,
+		AuthRateLimitWindow:      time.Minute,
+		MetricsEnabled:           true,
+		MetricsBearerToken:       strings.Repeat("m", MinMetricsBearerTokenBytes-1),
+		LapsedAccountGracePeriod: MinLapsedAccountGracePeriod,
+	}
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "METRICS_BEARER_TOKEN must be at least") {
+		t.Fatalf("expected a short metrics token to be rejected, got %v", err)
+	}
+	if strings.Contains(err.Error(), cfg.MetricsBearerToken) {
+		t.Fatal("the validation error must not echo the token")
+	}
+
+	cfg.MetricsBearerToken = strings.Repeat("m", MinMetricsBearerTokenBytes)
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected a %d-byte metrics token and a %s grace period to pass, got %v", MinMetricsBearerTokenBytes, MinLapsedAccountGracePeriod, err)
 	}
 }
 

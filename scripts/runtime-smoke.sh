@@ -22,7 +22,7 @@ VOLUME_NAME="${CONTAINER_NAME}-data-$(date +%s)"
 LOGIN="selftest-$(date +%s)@example.com"
 PASSWORD="correct horse battery staple"
 METRICS_ENABLED="${METRICS_ENABLED:-true}"
-METRICS_BEARER_TOKEN="${METRICS_BEARER_TOKEN:-runtime-smoke-metrics-token}"
+METRICS_BEARER_TOKEN="${METRICS_BEARER_TOKEN:-runtime-smoke-metrics-token-32-bytes}"
 # Field-encryption key gates the TOTP 2FA surface. Set it so the smoke exercises
 # /auth/totp/* instead of the key-absent 503 path; this also guards against the
 # "2FA silently unavailable because the key never reached the container" deploy

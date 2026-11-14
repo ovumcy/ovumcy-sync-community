@@ -31,6 +31,9 @@ var loadEnvVars = []string{
 // bridgeTokenFixture is exactly MinManagedBridgeTokenBytes long.
 const bridgeTokenFixture = "bridge-token-fixture-32-bytes-ok"
 
+// metricsTokenFixture is exactly MinMetricsBearerTokenBytes long.
+const metricsTokenFixture = "metrics-token-fixture-32-bytesok"
+
 // clearLoadEnv resets every Load-relevant environment variable to empty via
 // t.Setenv, so Load observes only the overrides a test explicitly sets
 // afterward. t.Setenv restores the prior value on test cleanup, so this is
@@ -132,7 +135,7 @@ func TestLoadAppliesEveryEnvOverride(t *testing.T) {
 	t.Setenv("AUTH_RATE_LIMIT_WINDOW", "30s")
 	t.Setenv("MANAGED_BRIDGE_TOKEN", bridgeTokenFixture)
 	t.Setenv("METRICS_ENABLED", "true")
-	t.Setenv("METRICS_BEARER_TOKEN", "metrics-token-fixture")
+	t.Setenv("METRICS_BEARER_TOKEN", metricsTokenFixture)
 	t.Setenv("ALLOWED_ORIGINS", "https://a.example,https://b.example")
 	t.Setenv("TRUSTED_PROXY_CIDRS", "10.0.0.0/24,127.0.0.1")
 	t.Setenv("FIELD_ENCRYPTION_KEY", fakeHexKey)
@@ -171,8 +174,8 @@ func TestLoadAppliesEveryEnvOverride(t *testing.T) {
 	if !cfg.MetricsEnabled {
 		t.Error("MetricsEnabled = false, want true")
 	}
-	if cfg.MetricsBearerToken != "metrics-token-fixture" {
-		t.Errorf("MetricsBearerToken = %q, want %q", cfg.MetricsBearerToken, "metrics-token-fixture")
+	if cfg.MetricsBearerToken != metricsTokenFixture {
+		t.Errorf("MetricsBearerToken = %q, want %q", cfg.MetricsBearerToken, metricsTokenFixture)
 	}
 	if len(cfg.AllowedOrigins) != 2 || cfg.AllowedOrigins[0] != "https://a.example" || cfg.AllowedOrigins[1] != "https://b.example" {
 		t.Errorf("AllowedOrigins = %#v, want [https://a.example https://b.example]", cfg.AllowedOrigins)
@@ -295,7 +298,7 @@ func TestLoadSurfacesEveryValidationAndParseError(t *testing.T) {
 		{
 			name:    "metrics bearer token without metrics enabled fails validation",
 			envName: "METRICS_BEARER_TOKEN",
-			envValu: "metrics-token-fixture",
+			envValu: metricsTokenFixture,
 			wantErr: "METRICS_BEARER_TOKEN",
 		},
 		{
@@ -309,6 +312,12 @@ func TestLoadSurfacesEveryValidationAndParseError(t *testing.T) {
 			envName: "LAPSED_ACCOUNT_GRACE_PERIOD",
 			envValu: "0h",
 			wantErr: "LAPSED_ACCOUNT_GRACE_PERIOD",
+		},
+		{
+			name:    "lapsed account grace period typed as minutes fails validation",
+			envName: "LAPSED_ACCOUNT_GRACE_PERIOD",
+			envValu: "60m",
+			wantErr: "LAPSED_ACCOUNT_GRACE_PERIOD must be at least 24h0m0s",
 		},
 	}
 

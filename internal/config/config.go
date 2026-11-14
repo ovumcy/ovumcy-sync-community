@@ -14,6 +14,16 @@ import (
 // the bridge routes are unrate-limited, so the token alone must resist guessing.
 const MinManagedBridgeTokenBytes = 32
 
+// MinMetricsBearerTokenBytes is the shortest METRICS_BEARER_TOKEN accepted, for
+// the same reason: /metrics is deliberately unrate-limited.
+const MinMetricsBearerTokenBytes = 32
+
+// MinLapsedAccountGracePeriod is the shortest LAPSED_ACCOUNT_GRACE_PERIOD
+// accepted. The window is a retention promise to a lapsed subscriber, and Go
+// durations have no day unit, so "60m" or "60s" typed for "60 days" would erase
+// the account within one sweep of the lapse signal.
+const MinLapsedAccountGracePeriod = 24 * time.Hour
+
 type Config struct {
 	BindAddr            string
 	DBPath              string
@@ -250,6 +260,13 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.MetricsBearerToken) != "" && !c.MetricsEnabled {
 		return fmt.Errorf("METRICS_BEARER_TOKEN requires METRICS_ENABLED=true")
 	}
+	if token := strings.TrimSpace(c.MetricsBearerToken); token != "" && len(token) < MinMetricsBearerTokenBytes {
+		return fmt.Errorf(
+			"METRICS_BEARER_TOKEN must be at least %d bytes (got %d); generate one with `openssl rand -hex 32`",
+			MinMetricsBearerTokenBytes,
+			len(token),
+		)
+	}
 	for _, value := range c.TrustedProxyCIDRs {
 		if _, err := ParseTrustedProxyCIDR(value); err != nil {
 			return fmt.Errorf("TRUSTED_PROXY_CIDRS entry %q is invalid: %w", value, err)
@@ -260,8 +277,8 @@ func (c Config) Validate() error {
 	if c.MetricsEnabled && strings.TrimSpace(c.MetricsBearerToken) == "" {
 		return fmt.Errorf("METRICS_ENABLED=true requires METRICS_BEARER_TOKEN")
 	}
-	if c.LapsedAccountGracePeriod <= 0 {
-		return fmt.Errorf("LAPSED_ACCOUNT_GRACE_PERIOD must be positive")
+	if c.LapsedAccountGracePeriod < MinLapsedAccountGracePeriod {
+		return fmt.Errorf("LAPSED_ACCOUNT_GRACE_PERIOD must be at least %s", MinLapsedAccountGracePeriod)
 	}
 
 	return nil
@@ -374,26 +391,45 @@ func csvListFromEnv(name string) []string {
 	return result
 }
 
-// Shortest prefix lengths TRUSTED_PROXY_CIDRS accepts. Trusting a wider range
-// lets a large share of the internet choose its own rate-limit key, and no
-// proxy deployment needs it: 10.0.0.0/8 is the widest private IPv4 range, a
-// unique-local IPv6 range (inside fc00::/7) may be as wide as fd00::/8, and any
-// other IPv6 range must be /32 or narrower.
+// Shortest prefix lengths TRUSTED_PROXY_CIDRS accepts outside the
+// non-public ranges below. Trusting a wider range lets a large share of the
+// internet choose its own rate-limit key, and no proxy deployment needs it: a
+// public IPv4 range must be /12 or narrower (the widest range a CDN edge such
+// as Cloudflare publishes is a /13), and a public IPv6 range /32 or narrower.
 const (
-	minTrustedProxyIPv4PrefixBits        = 8
-	minTrustedProxyIPv6PrefixBits        = 32
-	minTrustedProxyUniqueLocalPrefixBits = 8
+	minTrustedProxyIPv4PrefixBits = 12
+	minTrustedProxyIPv6PrefixBits = 32
 )
 
-var (
-	uniqueLocalIPv6         = netip.MustParsePrefix("fc00::/7")
-	errTrustedProxyTooBroad = fmt.Errorf(
-		"prefix is too broad; list the proxy's own address or network (at most an IPv4 /%d, an IPv6 /%d, or a unique-local IPv6 /%d)",
-		minTrustedProxyIPv4PrefixBits,
-		minTrustedProxyIPv6PrefixBits,
-		minTrustedProxyUniqueLocalPrefixBits,
-	)
+// nonPublicProxyRanges may be trusted up to their own full width — private
+// (RFC 1918, unique-local), loopback, CGNAT (RFC 6598) and link-local — because
+// no internet client can source traffic from them. An entry must lie wholly
+// inside one: 172.16.0.0/8 starts in a private range but masks to 172.0.0.0/8.
+var nonPublicProxyRanges = []netip.Prefix{
+	netip.MustParsePrefix("10.0.0.0/8"),
+	netip.MustParsePrefix("172.16.0.0/12"),
+	netip.MustParsePrefix("192.168.0.0/16"),
+	netip.MustParsePrefix("127.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("169.254.0.0/16"),
+	netip.MustParsePrefix("fc00::/7"),
+	netip.MustParsePrefix("fe80::/10"),
+}
+
+var errTrustedProxyTooBroad = fmt.Errorf(
+	"prefix is too broad; list the proxy's own address or network (a public range may be at most an IPv4 /%d or an IPv6 /%d; a private, loopback, CGNAT or link-local range no wider than the range itself)",
+	minTrustedProxyIPv4PrefixBits,
+	minTrustedProxyIPv6PrefixBits,
 )
+
+func withinNonPublicRange(prefix netip.Prefix) bool {
+	for _, allowed := range nonPublicProxyRanges {
+		if prefix.Bits() >= allowed.Bits() && allowed.Contains(prefix.Addr()) {
+			return true
+		}
+	}
+	return false
+}
 
 // ParseTrustedProxyCIDR parses one TRUSTED_PROXY_CIDRS entry: either a CIDR
 // ("10.0.0.0/24") or a bare address ("127.0.0.1"), normalized to a masked,
@@ -427,17 +463,15 @@ func ParseTrustedProxyCIDR(value string) (netip.Prefix, error) {
 		addr, bits = addr.Unmap(), bits-96
 	}
 	addr = addr.WithZone("")
+	prefix := netip.PrefixFrom(addr, bits).Masked()
 
 	minBits := minTrustedProxyIPv4PrefixBits
 	if addr.Is6() {
 		minBits = minTrustedProxyIPv6PrefixBits
-		if uniqueLocalIPv6.Contains(addr) {
-			minBits = minTrustedProxyUniqueLocalPrefixBits
-		}
 	}
-	if bits < minBits {
+	if bits < minBits && !withinNonPublicRange(prefix) {
 		return netip.Prefix{}, errTrustedProxyTooBroad
 	}
 
-	return netip.PrefixFrom(addr, bits).Masked(), nil
+	return prefix, nil
 }

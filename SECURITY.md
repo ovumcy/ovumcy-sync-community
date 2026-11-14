@@ -86,7 +86,7 @@ snapshot.
 - **Entitlement-lapse grace-period retention window.** After the managed
   bridge signals a lapse, this server keeps the account's `encrypted_blobs`,
   `recovery_key_packages`, `devices`, and shadow `accounts` row for
-  `LAPSED_ACCOUNT_GRACE_PERIOD` (default 60 days, operator-tunable) before
+  `LAPSED_ACCOUNT_GRACE_PERIOD` (default 60 days, operator-tunable, at least 24h) before
   the in-process sweep (`LAPSED_ACCOUNT_SWEEP_INTERVAL`, default daily) or a
   manual `purge-lapsed-accounts` run erases them. This is a deliberate data-minimization
   trade-off, not a plaintext-exposure risk — the retained blobs are the same
@@ -243,7 +243,7 @@ on the account's next successful login.
 | The forwarded client IP is the rightmost address not in `TRUSTED_PROXY_CIDRS`, so a client cannot spoof its rate-limit bucket by prepending `X-Forwarded-For` entries | `TestServerAuthRateLimitResistsForwardedSpoofingBehindTrustedProxy` in [internal/api/server_test.go](internal/api/server_test.go) |
 | `X-Real-IP` is never read, even from a trusted proxy whose forwarded chain is all trusted hops; every `X-Forwarded-For` header line is considered | `TestClientIPIgnoresXRealIPFromTrustedProxy`, `TestClientIPConsidersEveryForwardedForHeaderLine` in [internal/api/client_ip_test.go](internal/api/client_ip_test.go) |
 | An IPv6 client is keyed by its /64, so one subscriber's prefix cannot mint a bucket per address | `TestClientIPKeysIPv6ByNetwork64` in [internal/api/client_ip_test.go](internal/api/client_ip_test.go) |
-| `TRUSTED_PROXY_CIDRS` refuses an over-broad prefix at startup — IPv4 wider than /8, IPv6 wider than /32 (unique-local wider than /8), so `0.0.0.0/0` and `::/0` fail — and unmaps IPv4-mapped entries so they match unmapped peers | `TestParseTrustedProxyCIDRRejectsOverBroadPrefixes`, `TestParseTrustedProxyCIDRUnmapsIPv4MappedEntries`, `TestLoadRejectsOverBroadTrustedProxyCIDR` in [internal/config/config_test.go](internal/config/config_test.go) |
+| `TRUSTED_PROXY_CIDRS` refuses an over-broad prefix at startup — a public IPv4 range wider than /12 or IPv6 wider than /32; a private, loopback, CGNAT or link-local range may be as wide as that range but must lie inside it, so `0.0.0.0/0`, `::/0`, `8.0.0.0/8` and `172.16.0.0/8` fail — and unmaps IPv4-mapped entries so they match unmapped peers | `TestParseTrustedProxyCIDRRejectsOverBroadPrefixes`, `TestParseTrustedProxyCIDRUnmapsIPv4MappedEntries`, `TestLoadRejectsOverBroadTrustedProxyCIDR` in [internal/config/config_test.go](internal/config/config_test.go) |
 | An unparseable `X-Forwarded-For` hop (a proxy's `unknown`) ends the walk, so the client's own entries left of it never become the key | `TestClientIPStopsAtUnparseableForwardedHop` in [internal/api/client_ip_test.go](internal/api/client_ip_test.go) |
 | `X-Forwarded-For` from an untrusted peer is ignored; the raw peer address is the key | `TestServerIgnoresForwardedClientFromUntrustedRemoteAddr` in [internal/api/server_test.go](internal/api/server_test.go) |
 | The resolved client IP is canonical — IPv4-unmapped and zone-stripped — so one address cannot occupy several rate-limit buckets | `FuzzParseClientIP`, `FuzzForwardedClientIP` in [internal/api/client_ip_fuzz_test.go](internal/api/client_ip_fuzz_test.go) |
@@ -315,6 +315,7 @@ on the account's next successful login.
 | --- | --- |
 | `/metrics` is absent when disabled and requires the bearer token when configured | `TestServerMetricsEndpointReturnsNotFoundWhenDisabled`, `TestServerMetricsEndpointRequiresBearerTokenWhenConfigured`, `TestServerMetricsEndpointReturnsPrometheusPayload` in [internal/api/server_test.go](internal/api/server_test.go) |
 | Startup refuses `METRICS_ENABLED=true` without `METRICS_BEARER_TOKEN`, so `/metrics` is never served unauthenticated | `TestLoadRejectsMetricsWithoutBearerToken` in [internal/config/load_test.go](internal/config/load_test.go) |
+| Startup refuses a `METRICS_BEARER_TOKEN` shorter than 32 bytes, since `/metrics` is not rate-limited, without echoing the token | `TestValidateRejectsShortMetricsBearerToken` in [internal/config/config_test.go](internal/config/config_test.go) |
 | An invalid `FIELD_ENCRYPTION_KEY` is reported without quoting any character of it | `TestFieldEncryptionKeyFromEnvRejectsInvalidHexCharacters` in [internal/config/load_test.go](internal/config/load_test.go) |
 | Every session-authenticated route passes a per-client-IP bucket before the session lookup; a valid session refunds its slot, so only failed lookups stay charged | `TestWithAuthRateLimitsFailedLookupsPerClientIP` in [internal/api/pre_auth_hardening_test.go](internal/api/pre_auth_hardening_test.go) |
 | `POST /auth/totp/challenge` is rate-limited before it reports `totp_not_configured`, so configuration cannot be probed unmetered | `TestTOTPChallengeIsRateLimitedBeforeConfigurationCheck` in [internal/api/pre_auth_hardening_test.go](internal/api/pre_auth_hardening_test.go) |
