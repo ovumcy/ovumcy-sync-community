@@ -827,11 +827,11 @@ func (s *Store) CreateSession(ctx context.Context, session models.Session) (mode
 	return session, nil
 }
 
-// CreateSessionForVerifiedPassword inserts the session only while the
-// account's password hash still equals verifiedHash. A password change or
-// reset that commits first makes it insert nothing (ErrNotFound); one that
-// commits after deletes the session with the rest. Either way no session
-// minted from the old password survives the change.
+// CreateSessionForVerifiedPassword inserts a password-only session only while
+// the account's password hash still equals verifiedHash and TOTP is still
+// off. A password change, reset or TOTP enrollment that commits first makes
+// it insert nothing (ErrNotFound); one that commits after deletes the session
+// with the rest. Either way no session minted from the old state survives.
 func (s *Store) CreateSessionForVerifiedPassword(
 	ctx context.Context,
 	session models.Session,
@@ -840,7 +840,7 @@ func (s *Store) CreateSessionForVerifiedPassword(
 	result, err := s.db.ExecContext(
 		ctx,
 		`INSERT INTO sessions (id, account_id, token_hash, created_at, last_seen_at, expires_at)
-		 SELECT ?, id, ?, ?, ?, ? FROM accounts WHERE id = ? AND password_hash = ?`,
+		 SELECT ?, id, ?, ?, ?, ? FROM accounts WHERE id = ? AND password_hash = ? AND totp_enabled = 0`,
 		session.ID,
 		session.TokenHash,
 		session.CreatedAt.UTC().Format(time.RFC3339Nano),
@@ -857,7 +857,7 @@ func (s *Store) CreateSessionForVerifiedPassword(
 
 // CreateTOTPChallengeForVerifiedPassword is the challenge counterpart of
 // CreateSessionForVerifiedPassword: the login challenge is inserted only
-// while the password hash still equals verifiedHash.
+// while the password hash still equals verifiedHash and TOTP is still on.
 func (s *Store) CreateTOTPChallengeForVerifiedPassword(
 	ctx context.Context,
 	challenge models.TOTPChallenge,
@@ -866,7 +866,7 @@ func (s *Store) CreateTOTPChallengeForVerifiedPassword(
 	result, err := s.db.ExecContext(
 		ctx,
 		`INSERT INTO totp_challenges (challenge_id_hash, account_id, created_at, expires_at)
-		 SELECT ?, id, ?, ? FROM accounts WHERE id = ? AND password_hash = ?`,
+		 SELECT ?, id, ?, ? FROM accounts WHERE id = ? AND password_hash = ? AND totp_enabled = 1`,
 		challenge.ChallengeIDHash,
 		challenge.CreatedAt.UTC().Format(time.RFC3339Nano),
 		challenge.ExpiresAt.UTC().Format(time.RFC3339Nano),
