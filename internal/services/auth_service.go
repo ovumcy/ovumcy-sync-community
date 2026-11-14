@@ -82,7 +82,7 @@ type ForgotPasswordResult struct {
 
 func NewAuthService(store *db.Store, sessionTTL time.Duration) *AuthService {
 	return &AuthService{
-		store:      store,
+		store:        store,
 		sessionTTL:   sessionTTL,
 		now:          time.Now,
 		hashPassword: security.HashPassword,
