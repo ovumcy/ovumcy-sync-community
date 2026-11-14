@@ -165,7 +165,7 @@ func TestAccountFieldUpdatesReturnErrorWhenAccountsTableIsDropped(t *testing.T) 
 }
 
 // TestTOTPAccountFieldMethodsHappyPathAndNotFound covers
-// UpdateTOTPSecretAndEnabled, SetTOTPEnabled, and ClaimTOTPStep, all
+// UpdateTOTPSecretAndEnabled, EnableTOTPAndRotateRecoveryCode, and ClaimTOTPStep, all
 // previously at 0%. ClaimTOTPStep's CAS semantics (only a strictly greater
 // step is claimed) are asserted directly at the repository level, matching
 // the no-replay invariant documented on the method.
@@ -214,20 +214,30 @@ func TestTOTPAccountFieldMethodsHappyPathAndNotFound(t *testing.T) {
 		t.Fatal("expected a lower step claim to be rejected")
 	}
 
-	if err := store.SetTOTPEnabled(ctx, target.ID, true); err != nil {
-		t.Fatalf("set totp enabled: %v", err)
+	if err := store.EnableTOTPAndRotateRecoveryCode(ctx, target.ID, "rotated-recovery-hash"); err != nil {
+		t.Fatalf("enable totp: %v", err)
 	}
 	afterEnable, err := store.FindAccountByID(ctx, target.ID)
 	if err != nil {
 		t.Fatalf("find account after totp enable: %v", err)
 	}
 	if !afterEnable.TOTPEnabled {
-		t.Fatal("expected totp_enabled to be true after SetTOTPEnabled")
+		t.Fatal("expected totp_enabled to be true after EnableTOTPAndRotateRecoveryCode")
 	}
-	// SetTOTPEnabled must not disturb the step already claimed above (the
+	if afterEnable.RecoveryCodeHash != "rotated-recovery-hash" {
+		t.Fatalf("expected the recovery code hash to rotate, got %q", afterEnable.RecoveryCodeHash)
+	}
+	// The enable must not disturb the step already claimed above (the
 	// enrollment code must stay unreplayable across the enable transition).
 	if afterEnable.TOTPLastUsedStep != 100 {
-		t.Fatalf("expected claimed step to survive SetTOTPEnabled, got %d", afterEnable.TOTPLastUsedStep)
+		t.Fatalf("expected claimed step to survive the enable, got %d", afterEnable.TOTPLastUsedStep)
+	}
+	// A second enable loses the totp_enabled = 0 guard and leaves the hash alone.
+	if err := store.EnableTOTPAndRotateRecoveryCode(ctx, target.ID, "second-hash"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected ErrConflict for an already-enabled account, got %v", err)
+	}
+	if again, err := store.FindAccountByID(ctx, target.ID); err != nil || again.RecoveryCodeHash != "rotated-recovery-hash" {
+		t.Fatalf("expected the losing enable to leave the hash untouched, got %q err=%v", again.RecoveryCodeHash, err)
 	}
 
 	untouchedBystander, err := store.FindAccountByID(ctx, bystander.ID)
@@ -241,7 +251,7 @@ func TestTOTPAccountFieldMethodsHappyPathAndNotFound(t *testing.T) {
 	if err := store.UpdateTOTPSecretAndEnabled(ctx, "missing-account", "secret", false); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for missing account totp secret update, got %v", err)
 	}
-	if err := store.SetTOTPEnabled(ctx, "missing-account", true); !errors.Is(err, ErrNotFound) {
+	if err := store.EnableTOTPAndRotateRecoveryCode(ctx, "missing-account", "hash"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for missing account totp enable, got %v", err)
 	}
 	if claimed, err := store.ClaimTOTPStep(ctx, "missing-account", 1); err != nil || claimed {
@@ -251,7 +261,7 @@ func TestTOTPAccountFieldMethodsHappyPathAndNotFound(t *testing.T) {
 
 // TestTOTPAccountFieldMethodsReturnErrorWhenAccountsTableIsDropped exercises
 // the generic ExecContext-error branch of UpdateTOTPSecretAndEnabled,
-// SetTOTPEnabled, and ClaimTOTPStep.
+// EnableTOTPAndRotateRecoveryCode, and ClaimTOTPStep.
 func TestTOTPAccountFieldMethodsReturnErrorWhenAccountsTableIsDropped(t *testing.T) {
 	store, dbPath := newFileBackedTestStore(t)
 	ctx := context.Background()
@@ -262,7 +272,7 @@ func TestTOTPAccountFieldMethodsReturnErrorWhenAccountsTableIsDropped(t *testing
 	if err := store.UpdateTOTPSecretAndEnabled(ctx, target.ID, "secret", true); err == nil {
 		t.Fatal("expected error updating totp secret after accounts table is dropped")
 	}
-	if err := store.SetTOTPEnabled(ctx, target.ID, true); err == nil {
+	if err := store.EnableTOTPAndRotateRecoveryCode(ctx, target.ID, "hash"); err == nil {
 		t.Fatal("expected error enabling totp after accounts table is dropped")
 	}
 	if _, err := store.ClaimTOTPStep(ctx, target.ID, 1); err == nil {

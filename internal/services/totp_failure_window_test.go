@@ -174,7 +174,7 @@ func TestCompletedEnrollmentClearsASpentWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode secret: %v", err)
 	}
-	if err := totp.CompleteEnrollment(ctx, registered.AccountID, security.HashToken(registered.SessionToken),
+	if _, err := totp.CompleteEnrollment(ctx, registered.AccountID, security.HashToken(registered.SessionToken),
 		security.GenerateTOTPCode(secret, now.Unix()/security.TOTPStepSeconds)); err != nil {
 		t.Fatalf("CompleteEnrollment: %v", err)
 	}

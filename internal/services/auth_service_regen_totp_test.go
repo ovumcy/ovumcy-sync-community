@@ -47,12 +47,13 @@ func newRegenTOTPFixture(t *testing.T) regenTOTPFixture {
 		t.Fatalf("decode secret: %v", err)
 	}
 	enrollStep := time.Now().UTC().Unix() / security.TOTPStepSeconds
-	if err := totpService.CompleteEnrollment(
+	enrolledRecovery, err := totpService.CompleteEnrollment(
 		ctx,
 		registered.AccountID,
 		security.HashToken(registered.SessionToken),
 		security.GenerateTOTPCode(secret, enrollStep),
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("CompleteEnrollment: %v", err)
 	}
 
@@ -64,7 +65,7 @@ func newRegenTOTPFixture(t *testing.T) regenTOTPFixture {
 		auth:         authService,
 		totp:         totpService,
 		accountID:    registered.AccountID,
-		recovery:     registered.RecoveryCode,
+		recovery:     enrolledRecovery,
 		secret:       secret,
 		enrollStep:   enrollStep,
 		recoveryHash: account.RecoveryCodeHash,

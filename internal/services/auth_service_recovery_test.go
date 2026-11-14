@@ -277,7 +277,7 @@ func TestChangePasswordInvalidatesPendingTOTPChallenge(t *testing.T) {
 		t.Fatalf("decode secret: %v", err)
 	}
 	enrollStep := time.Now().UTC().Unix() / security.TOTPStepSeconds
-	if err := totpService.CompleteEnrollment(
+	if _, err := totpService.CompleteEnrollment(
 		ctx,
 		registered.AccountID,
 		security.HashToken(registered.SessionToken),
@@ -407,12 +407,13 @@ func TestResetPasswordClearsTOTPAndPendingChallenges(t *testing.T) {
 		t.Fatalf("decode secret: %v", err)
 	}
 	enrollStep := time.Now().UTC().Unix() / security.TOTPStepSeconds
-	if err := totpService.CompleteEnrollment(
+	enrolledRecovery, err := totpService.CompleteEnrollment(
 		ctx,
 		registered.AccountID,
 		security.HashToken(registered.SessionToken),
 		security.GenerateTOTPCode(secret, enrollStep),
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("CompleteEnrollment: %v", err)
 	}
 
@@ -421,8 +422,8 @@ func TestResetPasswordClearsTOTPAndPendingChallenges(t *testing.T) {
 		t.Fatalf("IssueChallenge: %v", err)
 	}
 
-	// Use the recovery code to reset.
-	forgot, err := authService.ForgotPassword(ctx, "owner@example.com", registered.RecoveryCode)
+	// Use the recovery code issued at enrollment to reset.
+	forgot, err := authService.ForgotPassword(ctx, "owner@example.com", enrolledRecovery)
 	if err != nil {
 		t.Fatalf("ForgotPassword: %v", err)
 	}

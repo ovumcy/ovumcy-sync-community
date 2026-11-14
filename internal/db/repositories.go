@@ -843,7 +843,7 @@ func (s *Store) TouchSession(ctx context.Context, sessionID string, lastSeenAt t
 // safe — either the secret is brand new (any leftover step from a prior secret
 // must not reject the new secret's first verify) or the secret is gone (no
 // code can verify against it). The enable transition does NOT go through here;
-// it uses SetTOTPEnabled, which preserves the step claimed by the verifying
+// it uses EnableTOTPAndRotateRecoveryCode, which preserves the step claimed by the verifying
 // code so that same code cannot be replayed inside its skew window.
 func (s *Store) UpdateTOTPSecretAndEnabled(
 	ctx context.Context,
@@ -873,35 +873,73 @@ func (s *Store) UpdateTOTPSecretAndEnabled(
 	return nil
 }
 
-// SetTOTPEnabled flips only the totp_enabled flag, leaving both
-// totp_secret_encrypted and totp_last_used_step untouched. It is the enable
-// transition at the end of CompleteEnrollment: the verifying code has already
-// been consumed via ClaimTOTPStep, so the claimed step MUST survive this write
-// or the just-used enrollment code would be replayable against the login
-// challenge and disable paths within its ±1-step skew window (RFC 6238 §5.2).
-// Keeping the secret column out of the statement also avoids a redundant
-// re-write of the ciphertext the caller already holds.
-func (s *Store) SetTOTPEnabled(
+// EnableTOTPAndRotateRecoveryCode is the enable transition at the end of
+// CompleteEnrollment. In one transaction it flips totp_enabled on, replaces
+// the recovery code hash, and deletes the account's pending reset tokens: a
+// recovery code (or a reset token issued against it) from before enrollment
+// would otherwise let a password holder clear TOTP through forgot/reset.
+//
+// totp_secret_encrypted and totp_last_used_step stay untouched: the verifying
+// code has already been consumed via ClaimTOTPStep, so the claimed step MUST
+// survive this write or the just-used enrollment code would be replayable
+// against the login challenge and disable paths within its ±1-step skew
+// window (RFC 6238 §5.2).
+//
+// The update is guarded on totp_enabled = 0 so two concurrent enrollments
+// cannot both rotate and each hand out a code: the loser gets ErrConflict
+// (ErrNotFound when the account is gone).
+func (s *Store) EnableTOTPAndRotateRecoveryCode(
 	ctx context.Context,
 	accountID string,
-	enabled bool,
+	recoveryCodeHash string,
 ) error {
-	result, err := s.db.ExecContext(
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin enable totp: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	result, err := tx.ExecContext(
 		ctx,
-		`UPDATE accounts SET totp_enabled = ? WHERE id = ?`,
-		boolToInt(enabled),
+		`UPDATE accounts SET totp_enabled = 1, recovery_code_hash = ? WHERE id = ? AND totp_enabled = 0`,
+		recoveryCodeHash,
 		accountID,
 	)
 	if err != nil {
-		return fmt.Errorf("set totp enabled: %w", err)
+		return fmt.Errorf("enable totp: %w", err)
 	}
 
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("set totp enabled rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); needs a fake driver, the same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
+		return fmt.Errorf("enable totp rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); needs a fake driver, the same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
 	}
 	if affected == 0 {
-		return ErrNotFound
+		var exists int
+		if err := tx.QueryRowContext(
+			ctx,
+			`SELECT COUNT(1) FROM accounts WHERE id = ?`,
+			accountID,
+		).Scan(&exists); err != nil {
+			return fmt.Errorf("enable totp lookup: %w", err) // codecov:ignore -- the UPDATE above on the same table inside this transaction already succeeded, so a failure isolated to this SELECT needs a fake driver (same same-table-multi-step limitation as the RowsAffected/COMMIT deviations in fault_injection_test.go).
+		}
+		if exists == 0 {
+			return ErrNotFound
+		}
+		return ErrConflict
+	}
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`DELETE FROM password_reset_tokens WHERE account_id = ?`,
+		accountID,
+	); err != nil {
+		return fmt.Errorf("delete reset tokens on totp enable: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit enable totp: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteAccount's COMMIT branch in fault_injection_test.go.
 	}
 
 	return nil

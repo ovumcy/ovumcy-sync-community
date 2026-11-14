@@ -107,9 +107,9 @@ func TestTOTPEnrollVerifyDisableEndToEnd(t *testing.T) {
 		http.StatusUnauthorized,
 	)
 
-	// 4) Verify with the right code succeeds.
+	// 4) Verify with the right code succeeds and hands out a rotated recovery code.
 	goodCode := security.GenerateTOTPCode(secret, time.Now().Unix()/security.TOTPStepSeconds)
-	performJSONRequest(
+	verifyResp := performJSONRequest(
 		t,
 		handler,
 		http.MethodPost,
@@ -118,6 +118,17 @@ func TestTOTPEnrollVerifyDisableEndToEnd(t *testing.T) {
 		token,
 		http.StatusOK,
 	)
+	var verifyBody struct {
+		Status       string `json:"status"`
+		RecoveryCode string `json:"recovery_code"`
+	}
+	decodeResponse(t, verifyResp.Body.Bytes(), &verifyBody)
+	if verifyBody.Status != "totp_enabled" || verifyBody.RecoveryCode == "" {
+		t.Fatalf("expected status totp_enabled with a recovery code, got %#v", verifyBody)
+	}
+	if verifyResp.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("expected Cache-Control: no-store on a response carrying a recovery code, got %q", verifyResp.Header().Get("Cache-Control"))
+	}
 
 	// 5) Login now returns a TOTP challenge, not a session.
 	loginResp := performJSONRequest(

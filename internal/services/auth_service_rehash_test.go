@@ -104,7 +104,7 @@ func TestLoginRehashesLegacyHashOnTOTPChallengePath(t *testing.T) {
 		t.Fatalf("decode secret: %v", err)
 	}
 	enrollStep := time.Now().UTC().Unix() / security.TOTPStepSeconds
-	if err := totpService.CompleteEnrollment(
+	if _, err := totpService.CompleteEnrollment(
 		ctx,
 		registered.AccountID,
 		security.HashToken(registered.SessionToken),

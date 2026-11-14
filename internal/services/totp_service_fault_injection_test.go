@@ -58,7 +58,7 @@ func TestTOTPServiceRejectsWhenNotConfigured(t *testing.T) {
 	if _, err := unconfigured.StartEnrollment(ctx, "any-account", "any-password"); err != ErrTOTPNotConfigured {
 		t.Fatalf("StartEnrollment: expected ErrTOTPNotConfigured, got %v", err)
 	}
-	if err := unconfigured.CompleteEnrollment(ctx, "any-account", "any-hash", "123456"); err != ErrTOTPNotConfigured {
+	if _, err := unconfigured.CompleteEnrollment(ctx, "any-account", "any-hash", "123456"); err != ErrTOTPNotConfigured {
 		t.Fatalf("CompleteEnrollment: expected ErrTOTPNotConfigured, got %v", err)
 	}
 	if err := unconfigured.Disable(ctx, "any-account", "any-password", "123456"); err != ErrTOTPNotConfigured {
@@ -82,7 +82,7 @@ func TestTOTPServiceMethodsSurfaceGenericErrorWhenAccountsTableIsDropped(t *test
 	if _, err := totp.StartEnrollment(ctx, "account-target", "any-password"); err == nil || errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("StartEnrollment: expected a store-failure error, not ErrUnauthorized, got %v", err)
 	}
-	if err := totp.CompleteEnrollment(ctx, "account-target", "any-hash", "123456"); err == nil || errors.Is(err, ErrUnauthorized) {
+	if _, err := totp.CompleteEnrollment(ctx, "account-target", "any-hash", "123456"); err == nil || errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("CompleteEnrollment: expected a store-failure error, not ErrUnauthorized, got %v", err)
 	}
 	if err := totp.Disable(ctx, "account-target", "any-password", "123456"); err == nil || errors.Is(err, ErrUnauthorized) {
@@ -121,12 +121,12 @@ func TestCompleteEnrollmentRejectsUnknownAccountAndAlreadyEnabled(t *testing.T) 
 	auth, totp, now := fixedTOTPClock(t)
 	ctx := context.Background()
 
-	if err := totp.CompleteEnrollment(ctx, "missing-account", "any-hash", "123456"); err != ErrUnauthorized {
+	if _, err := totp.CompleteEnrollment(ctx, "missing-account", "any-hash", "123456"); err != ErrUnauthorized {
 		t.Fatalf("expected ErrUnauthorized for an unknown account, got %v", err)
 	}
 
 	accountID, sessionToken, _, enrollCode := enrollTOTP(t, auth, totp, now)
-	if err := totp.CompleteEnrollment(ctx, accountID, security.HashToken(sessionToken), enrollCode); err != ErrTOTPAlreadyEnabled {
+	if _, err := totp.CompleteEnrollment(ctx, accountID, security.HashToken(sessionToken), enrollCode); err != ErrTOTPAlreadyEnabled {
 		t.Fatalf("expected ErrTOTPAlreadyEnabled once enrollment already completed once, got %v", err)
 	}
 }
@@ -183,7 +183,7 @@ func TestCompleteEnrollmentRejectsPreClaimedStepAsReplay(t *testing.T) {
 		t.Fatalf("pre-claim step: claimed=%v err=%v", claimed, err)
 	}
 
-	err = totp.CompleteEnrollment(ctx, registered.AccountID, security.HashToken(registered.SessionToken), code)
+	_, err = totp.CompleteEnrollment(ctx, registered.AccountID, security.HashToken(registered.SessionToken), code)
 	if err != ErrTOTPReplayed {
 		t.Fatalf("expected ErrTOTPReplayed for a pre-claimed step, got %v", err)
 	}
@@ -226,7 +226,7 @@ func TestCompleteEnrollmentSurfacesSessionRevocationStoreError(t *testing.T) {
 
 	step := now.UTC().Unix() / security.TOTPStepSeconds
 	code := security.GenerateTOTPCode(secret, step)
-	err = totp.CompleteEnrollment(ctx, registered.AccountID, security.HashToken(registered.SessionToken), code)
+	_, err = totp.CompleteEnrollment(ctx, registered.AccountID, security.HashToken(registered.SessionToken), code)
 	if err == nil {
 		t.Fatal("expected CompleteEnrollment to fail when the sessions table is dropped")
 	}
@@ -355,13 +355,6 @@ func TestDisableSurfacesDecryptFieldError(t *testing.T) {
 	if err := totp.store.UpdateTOTPSecretAndEnabled(ctx, accountID, "not valid base64!!", true); err != nil {
 		t.Fatalf("corrupt totp secret: %v", err)
 	}
-	// SetTOTPEnabled alone would reset nothing else; re-affirm enabled=true
-	// (UpdateTOTPSecretAndEnabled above already set it, this just documents
-	// the precondition Disable requires).
-	if err := totp.store.SetTOTPEnabled(ctx, accountID, true); err != nil {
-		t.Fatalf("re-affirm totp enabled: %v", err)
-	}
-
 	err := totp.Disable(ctx, accountID, password, "000000")
 	if !errors.Is(err, ErrTOTPSecretDecrypt) {
 		t.Fatalf("expected ErrTOTPSecretDecrypt for a corrupted secret, got %v", err)
