@@ -195,7 +195,13 @@ func TestTOTPAccountFieldMethodsHappyPathAndNotFound(t *testing.T) {
 		t.Fatalf("expected pending totp secret with enabled=false, got %#v", afterSecret)
 	}
 
-	claimed, err := store.ClaimTOTPStep(ctx, target.ID, 100)
+	// A code verified against a secret that is no longer the stored one (a
+	// disable or re-enroll landed meanwhile) must not claim its step.
+	if moved, err := store.ClaimTOTPStep(ctx, target.ID, "superseded-secret", 100); err != nil || moved {
+		t.Fatalf("expected a claim against a moved secret refused, got claimed=%v err=%v", moved, err)
+	}
+
+	claimed, err := store.ClaimTOTPStep(ctx, target.ID, "encrypted-secret-placeholder", 100)
 	if err != nil {
 		t.Fatalf("claim totp step: %v", err)
 	}
@@ -205,7 +211,7 @@ func TestTOTPAccountFieldMethodsHappyPathAndNotFound(t *testing.T) {
 
 	// Replay of the same step must be rejected (CAS requires strictly
 	// greater), pinning the no-replay invariant at the repository layer.
-	replayed, err := store.ClaimTOTPStep(ctx, target.ID, 100)
+	replayed, err := store.ClaimTOTPStep(ctx, target.ID, "encrypted-secret-placeholder", 100)
 	if err != nil {
 		t.Fatalf("replay claim totp step: %v", err)
 	}
@@ -214,7 +220,7 @@ func TestTOTPAccountFieldMethodsHappyPathAndNotFound(t *testing.T) {
 	}
 
 	// A lower step (clock skew / stale challenge) is also rejected.
-	stale, err := store.ClaimTOTPStep(ctx, target.ID, 99)
+	stale, err := store.ClaimTOTPStep(ctx, target.ID, "encrypted-secret-placeholder", 99)
 	if err != nil {
 		t.Fatalf("stale claim totp step: %v", err)
 	}
@@ -271,7 +277,7 @@ func TestTOTPAccountFieldMethodsHappyPathAndNotFound(t *testing.T) {
 	if err := store.EnableTOTPAndRotateRecoveryCode(ctx, "missing-account", "secret", "hash", ""); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for missing account totp enable, got %v", err)
 	}
-	if claimed, err := store.ClaimTOTPStep(ctx, "missing-account", 1); err != nil || claimed {
+	if claimed, err := store.ClaimTOTPStep(ctx, "missing-account", "secret", 1); err != nil || claimed {
 		t.Fatalf("expected claim on missing account to report claimed=false, err=nil, got claimed=%v err=%v", claimed, err)
 	}
 }
@@ -292,7 +298,7 @@ func TestTOTPAccountFieldMethodsReturnErrorWhenAccountsTableIsDropped(t *testing
 	if err := store.EnableTOTPAndRotateRecoveryCode(ctx, target.ID, "secret", "hash", ""); err == nil {
 		t.Fatal("expected error enabling totp after accounts table is dropped")
 	}
-	if _, err := store.ClaimTOTPStep(ctx, target.ID, 1); err == nil {
+	if _, err := store.ClaimTOTPStep(ctx, target.ID, "secret", 1); err == nil {
 		t.Fatal("expected error claiming totp step after accounts table is dropped")
 	}
 }
