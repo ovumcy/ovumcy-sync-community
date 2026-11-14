@@ -149,6 +149,38 @@ func (s *Store) UpdateAccountPasswordHash(ctx context.Context, accountID string,
 	return nil
 }
 
+// UpgradeAccountPasswordHash replaces the password hash only while it still
+// equals verifiedHash, so a cost upgrade computed from a stale read can never
+// overwrite a password changed in the meantime. ErrNotFound covers both a
+// missing account and a hash that moved on.
+func (s *Store) UpgradeAccountPasswordHash(
+	ctx context.Context,
+	accountID string,
+	verifiedHash string,
+	upgradedHash string,
+) error {
+	result, err := s.db.ExecContext(
+		ctx,
+		`UPDATE accounts SET password_hash = ? WHERE id = ? AND password_hash = ?`,
+		upgradedHash,
+		accountID,
+		verifiedHash,
+	)
+	if err != nil {
+		return fmt.Errorf("upgrade account password hash: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("upgrade account password hash rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); needs a fake driver, the same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+
+	return nil
+}
+
 func (s *Store) UpdateAccountPasswordAndRecoveryHash(
 	ctx context.Context,
 	accountID string,

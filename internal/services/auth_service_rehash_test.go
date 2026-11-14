@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -173,5 +174,55 @@ func TestLoginSucceedsWhenRehashCannotProduceNewHash(t *testing.T) {
 	}
 	if account.PasswordHash != legacyHash {
 		t.Fatal("stored hash must remain unchanged when the rehash is skipped")
+	}
+}
+
+// TestLoginRehashDoesNotRollBackAConcurrentPasswordChange lands a password
+// change inside the re-hash window (between the login's verify and its
+// upgrade write). The change must win: the stored hash stays the new
+// password's, the old password stops working, and the login itself still
+// succeeds because it verified before the change.
+func TestLoginRehashDoesNotRollBackAConcurrentPasswordChange(t *testing.T) {
+	store := openTestStore(t)
+	service := NewAuthService(store, 24*time.Hour)
+	ctx := context.Background()
+
+	const oldPassword = "correct horse battery staple"
+	const newPassword = "a freshly changed passphrase"
+	registerResult, err := service.Register(ctx, "racer@example.com", oldPassword)
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	seedLegacyPasswordHash(t, store, registerResult.AccountID, oldPassword)
+
+	changedHash, err := security.HashPassword(newPassword)
+	if err != nil {
+		t.Fatalf("hash new password: %v", err)
+	}
+	service.hashPassword = func(password string) (string, error) {
+		if err := store.UpdateAccountPasswordHash(ctx, registerResult.AccountID, changedHash); err != nil {
+			t.Fatalf("concurrent password change: %v", err)
+		}
+		return security.HashPassword(password)
+	}
+
+	if _, err := service.Login(ctx, "racer@example.com", oldPassword); err != nil {
+		t.Fatalf("login that verified before the change must still succeed: %v", err)
+	}
+
+	account, err := store.FindAccountByLogin(ctx, "racer@example.com")
+	if err != nil {
+		t.Fatalf("reload account: %v", err)
+	}
+	if account.PasswordHash != changedHash {
+		t.Fatal("the re-hash overwrote a concurrent password change")
+	}
+
+	service.hashPassword = security.HashPassword
+	if _, err := service.Login(ctx, "racer@example.com", oldPassword); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("expected the old password to be rejected after the change, got %v", err)
+	}
+	if _, err := service.Login(ctx, "racer@example.com", newPassword); err != nil {
+		t.Fatalf("new password must log in: %v", err)
 	}
 }
