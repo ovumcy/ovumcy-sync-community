@@ -157,11 +157,10 @@ func TestAuthenticateAccountLookupEdgeCases(t *testing.T) {
 	})
 }
 
-// TestChangePasswordStoreErrors exercises ChangePassword's remaining
-// store-error branches: FindAccountByID's generic error (its first store
-// call, isolated with a closed store), the too-long-new-password edge of
-// HashPassword's generic branch, and the two account-scoped cleanup deletes
-// (different tables, isolated with their own dropped table each).
+// TestChangePasswordStoreErrors exercises ChangePassword's store-error
+// branches: FindAccountByID's generic error (a closed store) and a failure in
+// each table the change transaction touches, which must leave the account
+// exactly as it was.
 func TestChangePasswordStoreErrors(t *testing.T) {
 	t.Run("closed store fails the account lookup", func(t *testing.T) {
 		store := openTestStore(t)
@@ -176,11 +175,14 @@ func TestChangePasswordStoreErrors(t *testing.T) {
 		}
 	})
 
-	// The change and its cleanup share one transaction: a failed cleanup
-	// statement rolls the new hash back, so the old password keeps working
-	// and no half-applied change is left behind.
-	for _, table := range []string{"sessions", "password_reset_tokens", "totp_challenges"} {
-		t.Run(table+" table dropped rolls the change back", func(t *testing.T) {
+	// The change and its cleanup share one transaction: a failure anywhere in
+	// it leaves the old password working and the other sessions alive.
+	for _, tc := range []struct{ table, wantErr string }{
+		{"sessions", "change account password"},
+		{"password_reset_tokens", "clean up on password change"},
+		{"totp_challenges", "clean up on password change"},
+	} {
+		t.Run(tc.table+" table dropped changes nothing", func(t *testing.T) {
 			store, dbPath := openFileBackedTestStore(t)
 			service := NewAuthService(store, 24*time.Hour)
 			ctx := context.Background()
@@ -190,25 +192,63 @@ func TestChangePasswordStoreErrors(t *testing.T) {
 			if err != nil {
 				t.Fatalf("register: %v", err)
 			}
-			before, err := store.FindAccountByID(ctx, result.AccountID)
+			other, err := service.Login(ctx, "owner@example.com", password)
 			if err != nil {
-				t.Fatalf("load account: %v", err)
+				t.Fatalf("login: %v", err)
 			}
 
-			dropTable(t, dbPath, table)
+			dropTable(t, dbPath, tc.table)
 
-			err = service.ChangePassword(ctx, result.AccountID, "any-hash", password, "a brand new password")
-			if err == nil || !strings.Contains(err.Error(), "clean up on password change") {
-				t.Fatalf("expected the cleanup store error to surface, got %v", err)
+			err = service.ChangePassword(ctx, result.AccountID, security.HashToken(result.SessionToken), password, "a brand new password")
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected %q to surface, got %v", tc.wantErr, err)
 			}
-			after, err := store.FindAccountByID(ctx, result.AccountID)
-			if err != nil {
-				t.Fatalf("reload account: %v", err)
+			if err := service.ConfirmCurrentPassword(ctx, result.AccountID, password); err != nil {
+				t.Fatalf("expected the old password to keep working: %v", err)
 			}
-			if after.PasswordHash != before.PasswordHash {
-				t.Fatal("expected the password hash rolled back after the failed cleanup")
+			if tc.table != "sessions" {
+				if _, err := store.FindSessionByTokenHash(ctx, security.HashToken(other.SessionToken)); err != nil {
+					t.Fatalf("expected the other session kept after the rollback: %v", err)
+				}
 			}
 		})
+	}
+}
+
+// TestChangePasswordRefusesAfterTheCallersSessionWasRevoked revokes the
+// caller's session during ChangePassword's hash step (what a TOTP enrollment
+// elsewhere does): the change must not land and must not delete the owner's
+// other sessions.
+func TestChangePasswordRefusesAfterTheCallersSessionWasRevoked(t *testing.T) {
+	store := openTestStore(t)
+	service := NewAuthService(store, 24*time.Hour)
+	ctx := context.Background()
+	const password = "correct horse battery staple"
+
+	attacker, err := service.Register(ctx, "owner@example.com", password)
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	owner, err := service.Login(ctx, "owner@example.com", password)
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	service.hashPassword = func(p string) (string, error) {
+		if err := store.DeleteSessionByTokenHash(ctx, security.HashToken(attacker.SessionToken)); err != nil {
+			t.Fatalf("revoke the caller's session: %v", err)
+		}
+		return security.HashPassword(p)
+	}
+
+	err = service.ChangePassword(ctx, attacker.AccountID, security.HashToken(attacker.SessionToken), password, "a brand new password")
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("expected ErrUnauthorized for a revoked caller session, got %v", err)
+	}
+	if err := service.ConfirmCurrentPassword(ctx, attacker.AccountID, password); err != nil {
+		t.Fatalf("expected the password unchanged: %v", err)
+	}
+	if _, err := store.FindSessionByTokenHash(ctx, security.HashToken(owner.SessionToken)); err != nil {
+		t.Fatalf("expected the owner's session kept: %v", err)
 	}
 }
 

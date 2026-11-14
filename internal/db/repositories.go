@@ -259,25 +259,13 @@ func (s *Store) ResetAccountCredentials(
 	return accountID, nil
 }
 
-// CredentialSnapshot is the credential state a step-up verified. A write
-// guarded by it lands only while the account still holds exactly this state,
-// so a password change, reset or TOTP transition that commits during the
-// step-up's bcrypt makes the write refuse instead of overwriting it.
-type CredentialSnapshot struct {
-	PasswordHash     string
-	RecoveryCodeHash string
-	TOTPEnabled      bool
-}
-
 // UpdateAccountRecoveryCodeHash rotates the recovery code hash and deletes the
 // account's pending reset tokens in one transaction: a token issued against
 // the old code must not outlive the rotation, and a failed cleanup must not
-// leave the hash rotated with the new code never handed out. The rotation
-// lands only while the account still matches verified; otherwise ErrNotFound.
+// leave the hash rotated with the new code never handed out.
 func (s *Store) UpdateAccountRecoveryCodeHash(
 	ctx context.Context,
 	accountID string,
-	verified CredentialSnapshot,
 	recoveryCodeHash string,
 ) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -290,13 +278,9 @@ func (s *Store) UpdateAccountRecoveryCodeHash(
 
 	result, err := tx.ExecContext(
 		ctx,
-		`UPDATE accounts SET recovery_code_hash = ?
-		 WHERE id = ? AND password_hash = ? AND recovery_code_hash = ? AND totp_enabled = ?`,
+		`UPDATE accounts SET recovery_code_hash = ? WHERE id = ?`,
 		recoveryCodeHash,
 		accountID,
-		verified.PasswordHash,
-		verified.RecoveryCodeHash,
-		boolToInt(verified.TOTPEnabled),
 	)
 	if err != nil {
 		return fmt.Errorf("update account recovery code: %w", err)
@@ -329,8 +313,11 @@ func (s *Store) UpdateAccountRecoveryCodeHash(
 // equals verifiedHash, then deletes the account's TOTP challenges, every
 // session except keepTokenHash, and pending reset tokens — all in one
 // transaction, so a failure leaves the old password and its sessions intact
-// rather than a new password beside surviving sessions. ErrNotFound when the
-// account is gone or its hash moved on.
+// rather than a new password beside surviving sessions. The write also needs
+// the caller's session (keepTokenHash) to still exist: a session revoked
+// during the step-up — by a TOTP enrollment, say — must not set a password
+// and then delete the owner's sessions. ErrNotFound when the account or the
+// caller's session is gone; ErrConflict when the hash moved on.
 func (s *Store) ChangeAccountPassword(
 	ctx context.Context,
 	accountID string,
@@ -348,10 +335,13 @@ func (s *Store) ChangeAccountPassword(
 
 	result, err := tx.ExecContext(
 		ctx,
-		`UPDATE accounts SET password_hash = ? WHERE id = ? AND password_hash = ?`,
+		`UPDATE accounts SET password_hash = ?
+		 WHERE id = ? AND password_hash = ?
+		   AND EXISTS (SELECT 1 FROM sessions WHERE account_id = accounts.id AND token_hash = ?)`,
 		newHash,
 		accountID,
 		verifiedHash,
+		keepTokenHash,
 	)
 	if err != nil {
 		return fmt.Errorf("change account password: %w", err)
@@ -361,7 +351,19 @@ func (s *Store) ChangeAccountPassword(
 		return fmt.Errorf("change account password rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); needs a fake driver, the same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
 	}
 	if affected == 0 {
-		return ErrNotFound
+		var one int
+		if err := tx.QueryRowContext(
+			ctx,
+			`SELECT 1 FROM sessions WHERE account_id = ? AND token_hash = ?`,
+			accountID,
+			keepTokenHash,
+		).Scan(&one); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("change account password session lookup: %w", err) // codecov:ignore -- the UPDATE above on these tables inside this transaction already succeeded, so a failure isolated to this SELECT needs a fake driver (same same-table-multi-step limitation as the RowsAffected/COMMIT deviations in fault_injection_test.go).
+		}
+		return ErrConflict
 	}
 
 	for _, cleanup := range []struct {
