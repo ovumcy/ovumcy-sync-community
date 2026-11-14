@@ -97,10 +97,15 @@ func TestAccountFieldUpdatesHappyPathAndNotFound(t *testing.T) {
 		t.Fatalf("expected bystander password hash untouched, got %#v", untouched)
 	}
 
-	if err := store.UpdateAccountRecoveryCodeHash(ctx, target.ID, "stale-recovery-hash", "rotated-recovery-hash-2"); !errors.Is(err, ErrConflict) {
-		t.Fatalf("expected ErrConflict when the stored hash moved, got %v", err)
+	if err := store.UpdateAccountRecoveryCodeHash(ctx, target.ID, "stale-recovery-hash", "rotated-hash", "rotated-recovery-hash-2"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected ErrConflict when the stored recovery hash moved, got %v", err)
 	}
-	if err := store.UpdateAccountRecoveryCodeHash(ctx, target.ID, target.RecoveryCodeHash, "rotated-recovery-hash-2"); err != nil {
+	// The password was rotated above: a regeneration verified against the
+	// old one must not land.
+	if err := store.UpdateAccountRecoveryCodeHash(ctx, target.ID, target.RecoveryCodeHash, target.PasswordHash, "rotated-recovery-hash-2"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected ErrConflict when the stored password hash moved, got %v", err)
+	}
+	if err := store.UpdateAccountRecoveryCodeHash(ctx, target.ID, target.RecoveryCodeHash, "rotated-hash", "rotated-recovery-hash-2"); err != nil {
 		t.Fatalf("update account recovery code hash: %v", err)
 	}
 	updated, err = store.FindAccountByID(ctx, target.ID)
@@ -114,7 +119,7 @@ func TestAccountFieldUpdatesHappyPathAndNotFound(t *testing.T) {
 	if err := store.UpdateAccountPasswordHash(ctx, "missing-account", "any-hash"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for missing account password update, got %v", err)
 	}
-	if err := store.UpdateAccountRecoveryCodeHash(ctx, "missing-account", "", "any-recovery-hash"); !errors.Is(err, ErrNotFound) {
+	if err := store.UpdateAccountRecoveryCodeHash(ctx, "missing-account", "", "", "any-recovery-hash"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for missing account recovery update, got %v", err)
 	}
 }
@@ -160,7 +165,7 @@ func TestAccountFieldUpdatesReturnErrorWhenAccountsTableIsDropped(t *testing.T) 
 		t.Fatalf("expected a store-failure error, not ErrNotFound, got %v", err)
 	}
 
-	if err := store.UpdateAccountRecoveryCodeHash(ctx, target.ID, target.RecoveryCodeHash, "any-recovery-hash"); err == nil {
+	if err := store.UpdateAccountRecoveryCodeHash(ctx, target.ID, target.RecoveryCodeHash, target.PasswordHash, "any-recovery-hash"); err == nil {
 		t.Fatal("expected error updating recovery hash after accounts table is dropped")
 	} else if errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected a store-failure error, not ErrNotFound, got %v", err)
@@ -550,7 +555,7 @@ func TestUpsertPasswordResetTokenRequiresVerifiedRecoveryHash(t *testing.T) {
 	now := time.Now().UTC()
 	target := seedFaultInjectionAccount(t, store, "account-target")
 
-	if err := store.UpdateAccountRecoveryCodeHash(ctx, target.ID, target.RecoveryCodeHash, "rotated-recovery-hash"); err != nil {
+	if err := store.UpdateAccountRecoveryCodeHash(ctx, target.ID, target.RecoveryCodeHash, target.PasswordHash, "rotated-recovery-hash"); err != nil {
 		t.Fatalf("rotate recovery hash: %v", err)
 	}
 
@@ -1311,7 +1316,7 @@ func TestUpdateAccountRecoveryCodeHashFailsAtBeginTransactionOnClosedStore(t *te
 		t.Fatalf("close store: %v", err)
 	}
 
-	err := store.UpdateAccountRecoveryCodeHash(context.Background(), "account-target", "", "any-recovery-hash")
+	err := store.UpdateAccountRecoveryCodeHash(context.Background(), "account-target", "", "", "any-recovery-hash")
 	if err == nil || !strings.Contains(err.Error(), "begin update account recovery code") {
 		t.Fatalf("expected the begin-transaction error to surface, got %v", err)
 	}

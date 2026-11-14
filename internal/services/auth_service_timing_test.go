@@ -105,7 +105,7 @@ func TestForgotPasswordEqualizesTimingWhenRecoveryCodeUnset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("find account: %v", err)
 	}
-	if err := store.UpdateAccountRecoveryCodeHash(ctx, registerResult.AccountID, registered.RecoveryCodeHash, ""); err != nil {
+	if err := store.UpdateAccountRecoveryCodeHash(ctx, registerResult.AccountID, registered.RecoveryCodeHash, registered.PasswordHash, ""); err != nil {
 		t.Fatalf("clear recovery code hash: %v", err)
 	}
 

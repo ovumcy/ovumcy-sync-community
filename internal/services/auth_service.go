@@ -504,12 +504,12 @@ func (s *AuthService) RegenerateRecoveryCode(
 	// limitation as the RowsAffected/COMMIT deviations in
 	// internal/db/fault_injection_test.go).
 	//
-	// ErrConflict: the code was rotated since the read above (a TOTP enable,
-	// a reset, or a concurrent regeneration). An enable or reset from another
-	// session has revoked this one; a concurrent regeneration has not, and
-	// gets the same 401 — rare, and never an overwrite of a code this request
-	// never saw.
-	if err := s.store.UpdateAccountRecoveryCodeHash(ctx, accountID, account.RecoveryCodeHash, recoveryHash); err != nil {
+	// ErrConflict: the code or the password changed since the read above (a
+	// TOTP enable, a reset, a password change, or a concurrent regeneration).
+	// The first three from another session have revoked this one; a
+	// concurrent regeneration has not, and gets the same 401 — rare, and never
+	// a code landed on credentials that are no longer current.
+	if err := s.store.UpdateAccountRecoveryCodeHash(ctx, accountID, account.RecoveryCodeHash, account.PasswordHash, recoveryHash); err != nil {
 		if errors.Is(err, db.ErrNotFound) || errors.Is(err, db.ErrConflict) {
 			return "", ErrUnauthorized
 		}
