@@ -188,7 +188,8 @@ func TestCompleteEnrollmentSurfacesReservationStoreError(t *testing.T) {
 }
 
 // A StartEnrollment that lands between the code check and the enable swaps in
-// a secret nobody verified; the enable refuses it instead of turning it on.
+// a secret nobody verified; the step claim, bound to the verified secret,
+// refuses it before the enable could turn it on.
 func TestCompleteEnrollmentRefusesASecretReplacedMidVerify(t *testing.T) {
 	auth, totp, now := fixedTOTPClock(t)
 	ctx := context.Background()
@@ -206,8 +207,8 @@ func TestCompleteEnrollmentRefusesASecretReplacedMidVerify(t *testing.T) {
 	}
 
 	code := security.GenerateTOTPCode(secret, now.Unix()/security.TOTPStepSeconds)
-	if _, err := totp.CompleteEnrollment(ctx, accountID, security.HashToken(sessionToken), code); !errors.Is(err, ErrTOTPInvalidCode) {
-		t.Fatalf("expected ErrTOTPInvalidCode for a replaced pending secret, got %v", err)
+	if _, err := totp.CompleteEnrollment(ctx, accountID, security.HashToken(sessionToken), code); !errors.Is(err, ErrTOTPReplayed) {
+		t.Fatalf("expected ErrTOTPReplayed for a replaced pending secret, got %v", err)
 	}
 	account, err := totp.store.FindAccountByID(ctx, accountID)
 	if err != nil {

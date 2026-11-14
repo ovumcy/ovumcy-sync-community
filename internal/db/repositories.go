@@ -1181,20 +1181,27 @@ func (s *Store) EnableTOTPAndRotateRecoveryCode(
 }
 
 // ClaimTOTPStep atomically advances totp_last_used_step to step iff it is
-// strictly greater than the persisted value. Returns true when the row was
-// updated (the step is now consumed by this caller) and false when the step
-// was already at or beyond `step` — a replay or concurrent loser.
+// strictly greater than the persisted value and the stored TOTP secret is
+// still verifiedSecretEncrypted, the ciphertext the caller checked the code
+// against. Returns true when the row was updated (the step is now consumed by
+// this caller) and false for a replay, a concurrent loser, or a secret that
+// moved on — a disable resets the step to 0 and a re-enroll swaps the secret,
+// so a code verified against the old secret must not claim against the new
+// state.
 func (s *Store) ClaimTOTPStep(
 	ctx context.Context,
 	accountID string,
+	verifiedSecretEncrypted string,
 	step int64,
 ) (bool, error) {
 	result, err := s.db.ExecContext(
 		ctx,
-		`UPDATE accounts SET totp_last_used_step = ? WHERE id = ? AND totp_last_used_step < ?`,
+		`UPDATE accounts SET totp_last_used_step = ?
+		 WHERE id = ? AND totp_last_used_step < ? AND totp_secret_encrypted = ?`,
 		step,
 		accountID,
 		step,
+		verifiedSecretEncrypted,
 	)
 	if err != nil {
 		return false, fmt.Errorf("claim totp step: %w", err)

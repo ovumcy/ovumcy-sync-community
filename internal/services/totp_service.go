@@ -289,7 +289,7 @@ func (s *TOTPService) CompleteEnrollment(
 		return "", ErrTOTPInvalidCode
 	}
 
-	claimed, err := s.store.ClaimTOTPStep(ctx, accountID, step)
+	claimed, err := s.store.ClaimTOTPStep(ctx, accountID, account.TOTPSecretEncrypted, step)
 	if err != nil {
 		return "", err // codecov:ignore -- FindAccountByID above already touches "accounts" as this function's first store call, so isolating a second, later accounts-table failure here needs a fake driver.
 	}
@@ -438,7 +438,7 @@ func (s *TOTPService) verifyAccountCode(ctx context.Context, account models.Acco
 		return ErrTOTPInvalidCode
 	}
 
-	claimed, err := s.store.ClaimTOTPStep(ctx, account.ID, step)
+	claimed, err := s.store.ClaimTOTPStep(ctx, account.ID, account.TOTPSecretEncrypted, step)
 	if err != nil {
 		return err // codecov:ignore -- the caller's FindAccountByID already touched "accounts" in this same call, so isolating a later accounts-table failure here needs a fake driver.
 	}
@@ -583,7 +583,7 @@ func (s *TOTPService) VerifyChallenge(
 		return AuthResult{}, ErrTOTPInvalidCode
 	}
 
-	claimed, err := s.store.ClaimTOTPStep(ctx, account.ID, step)
+	claimed, err := s.store.ClaimTOTPStep(ctx, account.ID, account.TOTPSecretEncrypted, step)
 	if err != nil {
 		return AuthResult{}, err // codecov:ignore -- the account lookup above already touches "accounts" within this same call, so isolating a second, later accounts-table failure here needs a fake driver.
 	}

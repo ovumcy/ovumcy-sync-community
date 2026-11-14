@@ -31,7 +31,7 @@ func seedResetAccount(t *testing.T, store *Store, accountID string, tokenExpires
 	if err := store.UpdateTOTPSecretAndEnabled(ctx, accountID, "sealed-secret", true); err != nil {
 		t.Fatalf("enable totp: %v", err)
 	}
-	if _, err := store.ClaimTOTPStep(ctx, accountID, 42); err != nil {
+	if _, err := store.ClaimTOTPStep(ctx, accountID, "sealed-secret", 42); err != nil {
 		t.Fatalf("claim totp step: %v", err)
 	}
 	if _, err := store.CreateSession(ctx, models.Session{

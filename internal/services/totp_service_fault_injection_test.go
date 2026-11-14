@@ -179,7 +179,11 @@ func TestCompleteEnrollmentRejectsPreClaimedStepAsReplay(t *testing.T) {
 
 	// Claim the step directly through the repository before CompleteEnrollment
 	// ever runs, so its own internal ClaimTOTPStep call finds it already taken.
-	if claimed, err := totp.store.ClaimTOTPStep(ctx, registered.AccountID, step); err != nil || !claimed {
+	pending, err := totp.store.FindAccountByID(ctx, registered.AccountID)
+	if err != nil {
+		t.Fatalf("find account: %v", err)
+	}
+	if claimed, err := totp.store.ClaimTOTPStep(ctx, registered.AccountID, pending.TOTPSecretEncrypted, step); err != nil || !claimed {
 		t.Fatalf("pre-claim step: claimed=%v err=%v", claimed, err)
 	}
 
