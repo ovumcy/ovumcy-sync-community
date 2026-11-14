@@ -418,10 +418,12 @@ func (s *TOTPService) disableConflict(
 ) (models.Account, error) {
 	current, err := s.store.FindAccountByID(ctx, verified.ID)
 	if err != nil {
+		// codecov:ignore:start -- a missing account needs a delete between the conflicting DisableTOTP and this read within one synchronous call (a TOCTOU, same class as the managed_bridge_service.go precedents); any other read failure right after that transaction on "accounts" needs a fake driver.
 		if errors.Is(err, db.ErrNotFound) {
-			return models.Account{}, ErrUnauthorized // codecov:ignore -- the account would have to be deleted between the conflicting DisableTOTP and this read within one synchronous call; a TOCTOU, same class as the managed_bridge_service.go precedents.
+			return models.Account{}, ErrUnauthorized
 		}
-		return models.Account{}, err // codecov:ignore -- the DisableTOTP transaction on "accounts" just ran within this same call, so isolating a read failure here needs a fake driver.
+		return models.Account{}, err
+		// codecov:ignore:end
 	}
 	switch {
 	case !current.TOTPEnabled:

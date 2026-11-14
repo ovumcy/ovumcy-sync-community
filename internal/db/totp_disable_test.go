@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -65,4 +66,27 @@ func TestDisableTOTPClearsAndRevokesOnlyWhileVerifiedStateHolds(t *testing.T) {
 	if err := store.DisableTOTP(ctx, "missing-account", "verified-hash", "secret-v1"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for a missing account, got %v", err)
 	}
+}
+
+func TestDisableTOTPSurfacesStoreFailures(t *testing.T) {
+	t.Run("closed store", func(t *testing.T) {
+		store := openTestStore(t)
+		if err := store.Close(); err != nil {
+			t.Fatalf("close store: %v", err)
+		}
+		err := store.DisableTOTP(context.Background(), "account-target", "hash", "secret")
+		if err == nil || !strings.Contains(err.Error(), "begin disable totp") {
+			t.Fatalf("expected the begin error, got %v", err)
+		}
+	})
+
+	t.Run("accounts table dropped", func(t *testing.T) {
+		store, dbPath := newFileBackedTestStore(t)
+		seedFaultInjectionAccount(t, store, "account-target")
+		dropTable(t, dbPath, "accounts")
+		err := store.DisableTOTP(context.Background(), "account-target", "hash", "secret")
+		if err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, ErrConflict) {
+			t.Fatalf("expected a store failure, got %v", err)
+		}
+	})
 }
