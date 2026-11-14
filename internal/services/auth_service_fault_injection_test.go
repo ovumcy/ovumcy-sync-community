@@ -176,74 +176,80 @@ func TestChangePasswordStoreErrors(t *testing.T) {
 		}
 	})
 
-	t.Run("sessions table dropped fails session revocation", func(t *testing.T) {
-		store, dbPath := openFileBackedTestStore(t)
-		service := NewAuthService(store, 24*time.Hour)
-		ctx := context.Background()
-		const password = "correct horse battery staple"
+	// The change and its cleanup share one transaction: a failed cleanup
+	// statement rolls the new hash back, so the old password keeps working
+	// and no half-applied change is left behind.
+	for _, table := range []string{"sessions", "password_reset_tokens", "totp_challenges"} {
+		t.Run(table+" table dropped rolls the change back", func(t *testing.T) {
+			store, dbPath := openFileBackedTestStore(t)
+			service := NewAuthService(store, 24*time.Hour)
+			ctx := context.Background()
+			const password = "correct horse battery staple"
 
-		result, err := service.Register(ctx, "owner@example.com", password)
-		if err != nil {
-			t.Fatalf("register: %v", err)
+			result, err := service.Register(ctx, "owner@example.com", password)
+			if err != nil {
+				t.Fatalf("register: %v", err)
+			}
+			before, err := store.FindAccountByID(ctx, result.AccountID)
+			if err != nil {
+				t.Fatalf("load account: %v", err)
+			}
+
+			dropTable(t, dbPath, table)
+
+			err = service.ChangePassword(ctx, result.AccountID, "any-hash", password, "a brand new password")
+			if err == nil || !strings.Contains(err.Error(), "clean up on password change") {
+				t.Fatalf("expected the cleanup store error to surface, got %v", err)
+			}
+			after, err := store.FindAccountByID(ctx, result.AccountID)
+			if err != nil {
+				t.Fatalf("reload account: %v", err)
+			}
+			if after.PasswordHash != before.PasswordHash {
+				t.Fatal("expected the password hash rolled back after the failed cleanup")
+			}
+		})
+	}
+}
+
+// TestChangePasswordRefusesAStaleVerifiedHash lands a reset-style hash change
+// between ChangePassword's verify and its write: the change must refuse
+// rather than overwrite it, and leave the other session alive.
+func TestChangePasswordRefusesAStaleVerifiedHash(t *testing.T) {
+	store := openTestStore(t)
+	service := NewAuthService(store, 24*time.Hour)
+	ctx := context.Background()
+	const password = "correct horse battery staple"
+
+	first, err := service.Register(ctx, "owner@example.com", password)
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	other, err := service.Login(ctx, "owner@example.com", password)
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	service.hashPassword = func(p string) (string, error) {
+		if err := store.UpdateAccountPasswordHash(ctx, first.AccountID, "hash-written-by-a-concurrent-reset"); err != nil {
+			t.Fatalf("concurrent change: %v", err)
 		}
+		return security.HashPassword(p)
+	}
 
-		dropTable(t, dbPath, "sessions")
-
-		err = service.ChangePassword(ctx, result.AccountID, "any-hash", password, "a brand new password")
-		if err == nil {
-			t.Fatal("expected ChangePassword to fail when the sessions table is dropped")
-		}
-		if !strings.Contains(err.Error(), "delete other sessions") {
-			t.Fatalf("expected the session-revocation store error to surface, got %v", err)
-		}
-	})
-
-	t.Run("password_reset_tokens table dropped fails reset-token cleanup", func(t *testing.T) {
-		store, dbPath := openFileBackedTestStore(t)
-		service := NewAuthService(store, 24*time.Hour)
-		ctx := context.Background()
-		const password = "correct horse battery staple"
-
-		result, err := service.Register(ctx, "owner@example.com", password)
-		if err != nil {
-			t.Fatalf("register: %v", err)
-		}
-
-		dropTable(t, dbPath, "password_reset_tokens")
-
-		err = service.ChangePassword(ctx, result.AccountID, "any-hash", password, "a brand new password")
-		if err == nil {
-			t.Fatal("expected ChangePassword to fail when the password_reset_tokens table is dropped")
-		}
-		if !strings.Contains(err.Error(), "delete password reset tokens") {
-			t.Fatalf("expected the reset-token cleanup store error to surface, got %v", err)
-		}
-	})
-
-	t.Run("totp_challenges table dropped fails challenge cleanup", func(t *testing.T) {
-		store, dbPath := openFileBackedTestStore(t)
-		service := NewAuthService(store, 24*time.Hour)
-		ctx := context.Background()
-		const password = "correct horse battery staple"
-
-		result, err := service.Register(ctx, "owner@example.com", password)
-		if err != nil {
-			t.Fatalf("register: %v", err)
-		}
-
-		dropTable(t, dbPath, "totp_challenges")
-
-		err = service.ChangePassword(ctx, result.AccountID, "any-hash", password, "a brand new password")
-		if err == nil {
-			t.Fatal("expected ChangePassword to fail when the totp_challenges table is dropped")
-		}
-		if !strings.Contains(err.Error(), "delete totp challenges") {
-			t.Fatalf("expected the challenge cleanup store error to surface, got %v", err)
-		}
-		if _, err := store.FindSessionByTokenHash(ctx, security.HashToken(result.SessionToken)); err == nil {
-			t.Fatal("expected sessions to be revoked even though the challenge cleanup failed")
-		}
-	})
+	err = service.ChangePassword(ctx, first.AccountID, security.HashToken(first.SessionToken), password, "a brand new password")
+	if !errors.Is(err, ErrInvalidCurrentPassword) {
+		t.Fatalf("expected ErrInvalidCurrentPassword for a stale verify, got %v", err)
+	}
+	account, err := store.FindAccountByID(ctx, first.AccountID)
+	if err != nil {
+		t.Fatalf("reload account: %v", err)
+	}
+	if account.PasswordHash != "hash-written-by-a-concurrent-reset" {
+		t.Fatal("a stale change overwrote the concurrent hash")
+	}
+	if _, err := store.FindSessionByTokenHash(ctx, security.HashToken(other.SessionToken)); err != nil {
+		t.Fatalf("a refused change must not revoke sessions: %v", err)
+	}
 }
 
 // TestForgotPasswordStoreErrors exercises ForgotPassword's two remaining

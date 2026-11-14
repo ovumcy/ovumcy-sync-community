@@ -303,7 +303,7 @@ func (s *AuthService) ChangePassword(
 		return ErrNewPasswordMustDiffer
 	}
 
-	newHash, err := security.HashPassword(newPassword)
+	newHash, err := s.hashPassword(newPassword)
 	if err != nil {
 		if errors.Is(err, security.ErrWeakPassword) {
 			return ErrWeakNewPassword
@@ -311,38 +311,23 @@ func (s *AuthService) ChangePassword(
 		return err // codecov:ignore -- HashPassword fails only with ErrWeakPassword on input it validated (see its own codecov:ignore on the bcrypt error).
 	}
 
-	// codecov:ignore:start -- both branches below need the account row or the
-	// accounts table to fail specifically for THIS write, after the
-	// FindAccountByID lookup above has already succeeded against the same
-	// table within this one synchronous call: the ErrNotFound case is a
-	// TOCTOU (same class as the managed_bridge_service.go precedents) and
-	// the generic case needs a fake driver (same same-table-multi-step
-	// limitation as the RowsAffected/COMMIT deviations in
-	// internal/db/fault_injection_test.go).
-	if err := s.store.UpdateAccountPasswordHash(ctx, accountID, newHash); err != nil {
+	// One transaction: the hash moves only while it is still the one verified
+	// above (a reset or another change landing during bcrypt wins and this
+	// call answers ErrInvalidCurrentPassword), and the challenges, other
+	// sessions and reset tokens go with it or not at all.
+	if err := s.store.ChangeAccountPassword(
+		ctx,
+		accountID,
+		account.PasswordHash,
+		newHash,
+		currentSessionTokenHash,
+	); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			return ErrUnauthorized
+			return ErrInvalidCurrentPassword
 		}
 		return err
 	}
-	// codecov:ignore:end
-
-	// A login challenge minted under the old password would otherwise still
-	// complete into a session after the change. Challenges go before sessions,
-	// as in ResetPassword, so a verify racing this call is more likely to land
-	// its session before the revoke below. A failed challenge delete must not
-	// skip the revoke, so its error is returned only after it.
-	challengeErr := s.store.DeleteTOTPChallengesForAccount(ctx, accountID)
-
-	if err := s.store.DeleteSessionsForAccountExcept(ctx, accountID, currentSessionTokenHash); err != nil {
-		return err
-	}
-
-	if err := s.store.DeletePasswordResetTokensForAccount(ctx, accountID); err != nil {
-		return err
-	}
-
-	return challengeErr
+	return nil
 }
 
 // ForgotPassword verifies an account-level recovery code and issues a
@@ -506,21 +491,19 @@ func (s *AuthService) RegenerateRecoveryCode(
 		return "", err // codecov:ignore -- crypto-primitive error that cannot occur in practice (see internal/security/password.go's own codecov:ignore annotation on NewRecoveryCode's internal rand.Read).
 	}
 
-	// codecov:ignore:start -- both branches below need the account row or the
-	// accounts table to fail specifically for THIS write, after the
-	// FindAccountByID lookup above has already succeeded against the same
-	// table within this one synchronous call: the ErrNotFound case is a
-	// TOCTOU (same class as the managed_bridge_service.go precedents) and
-	// the generic case needs a fake driver (same same-table-multi-step
-	// limitation as the RowsAffected/COMMIT deviations in
-	// internal/db/fault_injection_test.go).
-	if err := s.store.UpdateAccountRecoveryCodeHash(ctx, accountID, recoveryHash); err != nil {
+	// The rotation lands only while the password, recovery code and TOTP state
+	// are still the ones verified above: a stale step-up racing the owner's
+	// reset must not hand out a working code.
+	if err := s.store.UpdateAccountRecoveryCodeHash(ctx, accountID, db.CredentialSnapshot{
+		PasswordHash:     account.PasswordHash,
+		RecoveryCodeHash: account.RecoveryCodeHash,
+		TOTPEnabled:      account.TOTPEnabled,
+	}, recoveryHash); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			return "", ErrUnauthorized
+			return "", ErrInvalidCurrentPassword
 		}
-		return "", err
+		return "", err // codecov:ignore -- the accounts table already answered FindAccountByID above within this one call; isolating a later failure of this write needs a fake driver (see internal/db/fault_injection_test.go's RowsAffected/COMMIT deviations).
 	}
-	// codecov:ignore:end
 
 	return plainRecovery, nil
 }
