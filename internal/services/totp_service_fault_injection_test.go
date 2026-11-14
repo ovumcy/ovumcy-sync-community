@@ -278,13 +278,11 @@ func TestDisableRejectsWrongPasswordAndWrongCode(t *testing.T) {
 	}
 }
 
-// TestDisableSurfacesSessionAndChallengeCleanupStoreErrorsSeparately
-// exercises Disable's DeleteAllSessionsForAccount and
-// DeleteTOTPChallengesForAccount generic-error branches. They run
-// sequentially against different tables, so each is isolated with its own
-// store and its own single dropped table — dropping "sessions" alone must
-// not also need "totp_challenges" to still work, and vice versa.
-func TestDisableSurfacesSessionAndChallengeCleanupStoreErrorsSeparately(t *testing.T) {
+// TestDisableRollsBackWhenEitherCleanupFails drops "sessions" or
+// "totp_challenges" (each with its own store) so the disable transaction's
+// cleanup fails: the error surfaces, TOTP stays enabled and the caller's
+// session survives, so a retry redoes the whole disable.
+func TestDisableRollsBackWhenEitherCleanupFails(t *testing.T) {
 	setup := func(t *testing.T) (totp *TOTPService, accountID, sessionToken string, dbPath string, now time.Time) {
 		t.Helper()
 		store, path := openFileBackedTestStore(t)
@@ -329,8 +327,15 @@ func TestDisableSurfacesSessionAndChallengeCleanupStoreErrorsSeparately(t *testi
 		if err == nil {
 			t.Fatal("expected Disable to fail when the sessions table is dropped")
 		}
-		if !strings.Contains(err.Error(), "delete all sessions") {
+		if !strings.Contains(err.Error(), "delete all sessions on disable") {
 			t.Fatalf("expected the session-cleanup store error to surface, got %v", err)
+		}
+		after, err := totp.store.FindAccountByID(context.Background(), accountID)
+		if err != nil {
+			t.Fatalf("find account: %v", err)
+		}
+		if !after.TOTPEnabled || after.TOTPSecretEncrypted != account.TOTPSecretEncrypted {
+			t.Fatal("expected the disable to roll back with TOTP still enabled")
 		}
 	})
 
@@ -353,13 +358,18 @@ func TestDisableSurfacesSessionAndChallengeCleanupStoreErrorsSeparately(t *testi
 		if err == nil {
 			t.Fatal("expected Disable to fail when the totp_challenges table is dropped")
 		}
-		if !strings.Contains(err.Error(), "delete totp challenge") {
+		if !strings.Contains(err.Error(), "delete totp challenges on disable") {
 			t.Fatalf("expected the challenge-cleanup store error to surface, got %v", err)
 		}
-		// TOTP is already off, so a retry would never reach the revoke: it
-		// must have run despite the challenge failure.
-		if _, err := totp.auth.Authenticate(context.Background(), token); !errors.Is(err, ErrUnauthorized) {
-			t.Fatalf("expected sessions revoked despite the challenge failure, got %v", err)
+		after, err := totp.store.FindAccountByID(context.Background(), accountID)
+		if err != nil {
+			t.Fatalf("find account: %v", err)
+		}
+		if !after.TOTPEnabled {
+			t.Fatal("expected the disable to roll back with TOTP still enabled")
+		}
+		if _, err := totp.auth.Authenticate(context.Background(), token); err != nil {
+			t.Fatalf("expected the caller's session to survive the rolled-back disable, got %v", err)
 		}
 	})
 }
