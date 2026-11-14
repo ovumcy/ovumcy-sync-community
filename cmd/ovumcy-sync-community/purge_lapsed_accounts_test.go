@@ -100,6 +100,33 @@ func TestRunPurgeLapsedAccountsRejectsUnknownFlag(t *testing.T) {
 	}
 }
 
+func TestRunPurgeLapsedAccountsRejectsPositionalArgumentWithoutDeleting(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "positional.sqlite")
+	const accountID = "purgeclipositional01"
+	seedLapsedManagedAccount(t, dbPath, accountID, 90*24*time.Hour)
+	cfg := testConfigForDBPath(dbPath)
+
+	for _, args := range [][]string{{"dry-run"}, {"-limit=1", "dry-run"}, {"--", "-dry-run"}} {
+		var buf bytes.Buffer
+		err := runPurgeLapsedAccounts(cfg, args, &buf)
+		if err == nil || !strings.Contains(err.Error(), "unexpected argument") {
+			t.Fatalf("args %q: expected an unexpected-argument error, got %v", args, err)
+		}
+		if buf.Len() != 0 {
+			t.Fatalf("args %q: expected no output, got %q", args, buf.String())
+		}
+	}
+
+	store, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	if _, err := store.FindAccountByID(context.Background(), accountID); err != nil {
+		t.Fatalf("expected the lapsed account kept, got %v", err)
+	}
+}
+
 func TestRunPurgeLapsedAccountsPropagatesDBOpenError(t *testing.T) {
 	cfg := testConfigForDBPath(blockedDBPath(t))
 
