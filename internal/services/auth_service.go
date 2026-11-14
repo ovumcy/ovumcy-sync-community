@@ -39,6 +39,7 @@ type AuthService struct {
 	store          *db.Store
 	sessionTTL     time.Duration
 	now            func() time.Time
+	hashPassword   func(string) (string, error)
 	totpChallenges TOTPChallengeIssuer
 }
 
@@ -82,8 +83,9 @@ type ForgotPasswordResult struct {
 func NewAuthService(store *db.Store, sessionTTL time.Duration) *AuthService {
 	return &AuthService{
 		store:      store,
-		sessionTTL: sessionTTL,
-		now:        time.Now,
+		sessionTTL:   sessionTTL,
+		now:          time.Now,
+		hashPassword: security.HashPassword,
 	}
 }
 
@@ -185,10 +187,12 @@ func (s *AuthService) Login(ctx context.Context, login string, password string) 
 	// upgrades too — re-hash at the current cost. Strictly best-effort: a
 	// failed re-hash or a failed persist must never fail a login that already
 	// verified, so both errors are deliberately discarded (this service also
-	// never logs, and a hash-upgrade skip is not an auth event).
+	// never logs, and a hash-upgrade skip is not an auth event). The write is
+	// a CAS on the verified hash: a password change that lands during the
+	// re-hash wins, and the upgrade is skipped.
 	if security.PasswordHashNeedsRehash(account.PasswordHash) {
-		if upgradedHash, rehashErr := security.HashPassword(password); rehashErr == nil {
-			_ = s.store.UpdateAccountPasswordHash(ctx, account.ID, upgradedHash)
+		if upgradedHash, rehashErr := s.hashPassword(password); rehashErr == nil {
+			_ = s.store.UpgradeAccountPasswordHash(ctx, account.ID, account.PasswordHash, upgradedHash)
 		}
 	}
 

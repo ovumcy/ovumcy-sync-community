@@ -131,6 +131,7 @@ on the account's next successful login.
 | Only parseable lower-cost hashes are flagged for rehash; current-cost and unparseable hashes are not | `TestPasswordHashNeedsRehash` in [internal/security/security_test.go](internal/security/security_test.go) |
 | A successful login transparently upgrades a legacy lower-cost password hash to the current cost, on the session path and the TOTP-challenge path alike | `TestLoginRehashesLegacyLowerCostHash`, `TestLoginRehashesLegacyHashOnTOTPChallengePath` in [internal/services/auth_service_rehash_test.go](internal/services/auth_service_rehash_test.go) |
 | Login succeeds even when the transparent rehash cannot produce a new hash | `TestLoginSucceedsWhenRehashCannotProduceNewHash` in [internal/services/auth_service_rehash_test.go](internal/services/auth_service_rehash_test.go) |
+| The login rehash writes only while the stored hash still equals the one it verified, so a concurrent password change is never rolled back | `TestLoginRehashDoesNotRollBackAConcurrentPasswordChange` in [internal/services/auth_service_rehash_test.go](internal/services/auth_service_rehash_test.go), `TestUpgradeAccountPasswordHashRefusesAStaleVerifiedHash` in [internal/db/account_password_upgrade_test.go](internal/db/account_password_upgrade_test.go) |
 
 ### Login Normalization and Validation
 
