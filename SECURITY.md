@@ -351,6 +351,8 @@ or uptime check.
 | The container healthcheck fails while readiness is unavailable, even though liveness answers `200` — the probe is bound to `/readyz` | `TestRunHealthcheckProbesReadinessNotLiveness` in [cmd/ovumcy-sync-community/healthcheck_test.go](cmd/ovumcy-sync-community/healthcheck_test.go) |
 | Readiness turns `503 not_ready` once the database stops answering, while `/healthz` keeps returning `200` | `TestServerReadinessFailsWhenTheDatabaseIsUnusableWhileLivenessStaysOK` in [internal/api/server_test.go](internal/api/server_test.go) |
 | The readiness check refuses a database ahead of this build, an uninitialized schema, and a store that no longer answers — it is the startup gate's set comparison, re-run per probe | `TestCheckReadyRefusesADatabaseAheadOfThisBuild`, `TestCheckReadyRefusesAnUninitializedSchema`, `TestCheckReadyFailsOnAClosedStore`, `TestCheckReadyPassesOnAMigratedDatabase` in [internal/db/migrations_schema_ahead_test.go](internal/db/migrations_schema_ahead_test.go) |
+| Every connection runs with `secure_delete` on, so freed pages (a deleted account's ciphertext and hashes) are zeroed in the database file | `TestConnectionPragmasSurviveConnectionRecycling` in [internal/db/sqlite_pragmas_test.go](internal/db/sqlite_pragmas_test.go) |
+| A database file the server creates, and its `-wal` sidecar, are owner-only (0600) and its directory 0700; an in-memory database is never recycled out from under the process | `TestOpenCreatesANewDatabaseFileOwnerOnly`, `TestIsInMemoryPath` in [internal/db/sqlite_pragmas_test.go](internal/db/sqlite_pragmas_test.go) |
 
 ### Policy-Level Claims (Human-Reviewed, Exempt from the Matrix)
 

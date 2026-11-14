@@ -2,7 +2,9 @@ package db
 
 import (
 	"context"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -54,6 +56,7 @@ func TestConnectionPragmasSurviveConnectionRecycling(t *testing.T) {
 		{pragma: "foreign_keys", want: "1"},
 		{pragma: "busy_timeout", want: "5000"},
 		{pragma: "journal_mode", want: "wal"},
+		{pragma: "secure_delete", want: "1"},
 	} {
 		var got string
 		if err := store.db.QueryRowContext(ctx, "PRAGMA "+tc.pragma+";").Scan(&got); err != nil { // #nosec G202 -- pragma names are test-table constants
@@ -61,6 +64,60 @@ func TestConnectionPragmasSurviveConnectionRecycling(t *testing.T) {
 		}
 		if !strings.EqualFold(got, tc.want) {
 			t.Fatalf("PRAGMA %s on a recycled connection = %q, want %q", tc.pragma, got, tc.want)
+		}
+	}
+}
+
+func TestOpenCreatesANewDatabaseFileOwnerOnly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file modes")
+	}
+	dbPath := filepath.Join(t.TempDir(), "fresh.sqlite")
+	store, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if _, err := store.db.Exec(`CREATE TABLE wal_probe (x INTEGER);`); err != nil {
+		t.Fatalf("write to open the WAL: %v", err)
+	}
+
+	for _, path := range []string{dbPath, dbPath + "-wal"} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat %s: %v", path, err)
+		}
+		if mode := info.Mode().Perm(); mode != 0o600 {
+			t.Fatalf("%s mode = %o, want 600", filepath.Base(path), mode)
+		}
+	}
+}
+
+func TestOpenReportsAnUncreatableDatabaseFile(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Open(dir); err == nil || !strings.Contains(err.Error(), "create db file") {
+		t.Fatalf("expected a directory as DB path to fail creating the file, got %v", err)
+	}
+}
+
+func TestCreatePlainDBFileLeavesURIAndQueryPathsToSQLite(t *testing.T) {
+	for _, path := range []string{"file:/nonexistent/dir/x.sqlite", "/nonexistent/dir/x.sqlite?mode=ro"} {
+		if err := createPlainDBFileOwnerOnly(path); err != nil {
+			t.Fatalf("createPlainDBFileOwnerOnly(%q) = %v, want nil", path, err)
+		}
+	}
+}
+
+func TestIsInMemoryPath(t *testing.T) {
+	for path, want := range map[string]bool{
+		":memory:":                        true,
+		"file::memory:?cache=shared":      true,
+		"file:sync?mode=memory":           true,
+		"./data/sync.sqlite":              false,
+		"file:/data/sync.sqlite?mode=rwc": false,
+	} {
+		if got := isInMemoryPath(path); got != want {
+			t.Errorf("isInMemoryPath(%q) = %v, want %v", path, got, want)
 		}
 	}
 }
