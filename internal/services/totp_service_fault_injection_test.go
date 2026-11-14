@@ -189,11 +189,11 @@ func TestCompleteEnrollmentRejectsPreClaimedStepAsReplay(t *testing.T) {
 	}
 }
 
-// TestCompleteEnrollmentSurfacesSessionRevocationStoreError exercises
-// CompleteEnrollment's DeleteSessionsForAccountExcept generic-error branch.
-// Unlike the accounts-table calls earlier in this method, "sessions" is a
-// different table untouched by anything before this call, so dropping it
-// alone isolates exactly this step.
+// TestCompleteEnrollmentSurfacesSessionRevocationStoreError exercises the
+// session-revocation step of the enable transaction. "sessions" is a table
+// untouched by anything before it, so dropping it isolates exactly this step,
+// and the whole enable must roll back: TOTP stays off and the recovery code
+// issued at registration keeps working.
 func TestCompleteEnrollmentSurfacesSessionRevocationStoreError(t *testing.T) {
 	store, dbPath := openFileBackedTestStore(t)
 	auth := NewAuthService(store, 24*time.Hour)
@@ -230,8 +230,19 @@ func TestCompleteEnrollmentSurfacesSessionRevocationStoreError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected CompleteEnrollment to fail when the sessions table is dropped")
 	}
-	if !strings.Contains(err.Error(), "delete other sessions") {
+	if !strings.Contains(err.Error(), "delete other sessions on totp enable") {
 		t.Fatalf("expected the session-revocation store error to surface, got %v", err)
+	}
+
+	account, err := store.FindAccountByID(ctx, registered.AccountID)
+	if err != nil {
+		t.Fatalf("find account: %v", err)
+	}
+	if account.TOTPEnabled {
+		t.Fatal("expected the enable to roll back")
+	}
+	if security.CompareRecoveryCodeHash(account.RecoveryCodeHash, registered.RecoveryCode) != nil {
+		t.Fatal("expected the registration recovery code to survive the rolled-back enable")
 	}
 }
 

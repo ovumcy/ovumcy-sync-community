@@ -270,33 +270,35 @@ func (s *TOTPService) CompleteEnrollment(
 		return "", err // codecov:ignore -- crypto-primitive error that cannot occur in practice (see internal/security/password.go's own codecov:ignore annotation on NewRecoveryCode's internal rand.Read).
 	}
 
-	// codecov:ignore:start -- every branch below needs the account row or the
-	// accounts table to change specifically for THIS write, after
-	// FindAccountByID and ClaimTOTPStep above have already succeeded against
-	// the same table within this one synchronous call: ErrNotFound and
-	// ErrConflict are TOCTOUs (account deleted, or a concurrent enrollment
-	// enabled first, mid-call — same class as the managed_bridge_service.go
-	// precedents) and the generic case needs a fake driver (same
-	// same-table-multi-step limitation as the RowsAffected/COMMIT deviations
-	// in internal/db/fault_injection_test.go).
-	//
 	// The enable flip keeps totp_last_used_step: the step just claimed above
 	// must stay consumed, or this same enrollment code would be accepted again
 	// by the login-challenge and disable paths within its ±1-step skew window.
-	if err := s.store.EnableTOTPAndRotateRecoveryCode(ctx, accountID, recoveryHash); err != nil {
+	// Other sessions are revoked in the same transaction; the caller's stays
+	// valid via currentSessionTokenHash.
+	if err := s.store.EnableTOTPAndRotateRecoveryCode(
+		ctx,
+		accountID,
+		account.TOTPSecretEncrypted,
+		recoveryHash,
+		currentSessionTokenHash,
+	); err != nil {
+		// codecov:ignore:start -- ErrNotFound, ErrConflict and
+		// ErrTOTPPendingSecretChanged are TOCTOUs (account deleted, a
+		// concurrent enrollment enabled first, or a concurrent StartEnrollment
+		// replaced the secret, all between FindAccountByID above and this
+		// write within one synchronous call — same class as the
+		// managed_bridge_service.go precedents); the store-level branches are
+		// covered in internal/db/totp_enable_test.go.
 		switch {
 		case errors.Is(err, db.ErrNotFound):
 			return "", ErrUnauthorized
 		case errors.Is(err, db.ErrConflict):
 			return "", ErrTOTPAlreadyEnabled
+		case errors.Is(err, db.ErrTOTPPendingSecretChanged):
+			s.observeEnrollmentCompletion("invalid_code")
+			return "", ErrTOTPInvalidCode
 		}
-		return "", err
-	}
-	// codecov:ignore:end
-
-	// Enabling 2FA changes the account's security posture; invalidate other
-	// sessions. The caller's session stays valid via currentSessionTokenHash.
-	if err := s.store.DeleteSessionsForAccountExcept(ctx, accountID, currentSessionTokenHash); err != nil {
+		// codecov:ignore:end
 		return "", err
 	}
 

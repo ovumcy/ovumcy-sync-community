@@ -39,6 +39,11 @@ var ErrAccountLapsed = errors.New("account_lapsed")
 // newer entitlement signal has already been applied to the account.
 var ErrStaleEntitlementSignal = errors.New("stale_entitlement_signal")
 
+// ErrTOTPPendingSecretChanged is returned by EnableTOTPAndRotateRecoveryCode
+// when the pending TOTP secret is no longer the one the caller verified a code
+// against (a concurrent StartEnrollment replaced it).
+var ErrTOTPPendingSecretChanged = errors.New("totp_pending_secret_changed")
+
 func (s *Store) CreateAccount(ctx context.Context, account models.Account) (models.Account, error) {
 	_, err := s.db.ExecContext(
 		ctx,
@@ -885,13 +890,21 @@ func (s *Store) UpdateTOTPSecretAndEnabled(
 // against the login challenge and disable paths within its ±1-step skew
 // window (RFC 6238 §5.2).
 //
-// The update is guarded on totp_enabled = 0 so two concurrent enrollments
-// cannot both rotate and each hand out a code: the loser gets ErrConflict
-// (ErrNotFound when the account is gone).
+// Sessions other than keepSessionTokenHash are deleted in the same
+// transaction, so a failure leaves nothing half-applied: the new recovery code
+// is never committed without the caller receiving it.
+//
+// The update is guarded on totp_enabled = 0 AND on the pending ciphertext the
+// caller verified: a concurrent enrollment that already enabled wins
+// (ErrConflict), and a concurrent StartEnrollment that swapped in a new secret
+// is not enabled unverified (ErrTOTPPendingSecretChanged). ErrNotFound when
+// the account is gone.
 func (s *Store) EnableTOTPAndRotateRecoveryCode(
 	ctx context.Context,
 	accountID string,
+	verifiedSecretEncrypted string,
 	recoveryCodeHash string,
+	keepSessionTokenHash string,
 ) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -903,9 +916,11 @@ func (s *Store) EnableTOTPAndRotateRecoveryCode(
 
 	result, err := tx.ExecContext(
 		ctx,
-		`UPDATE accounts SET totp_enabled = 1, recovery_code_hash = ? WHERE id = ? AND totp_enabled = 0`,
+		`UPDATE accounts SET totp_enabled = 1, recovery_code_hash = ?
+		 WHERE id = ? AND totp_enabled = 0 AND totp_secret_encrypted = ?`,
 		recoveryCodeHash,
 		accountID,
+		verifiedSecretEncrypted,
 	)
 	if err != nil {
 		return fmt.Errorf("enable totp: %w", err)
@@ -916,18 +931,21 @@ func (s *Store) EnableTOTPAndRotateRecoveryCode(
 		return fmt.Errorf("enable totp rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); needs a fake driver, the same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
 	}
 	if affected == 0 {
-		var exists int
+		var enabled int
 		if err := tx.QueryRowContext(
 			ctx,
-			`SELECT COUNT(1) FROM accounts WHERE id = ?`,
+			`SELECT totp_enabled FROM accounts WHERE id = ?`,
 			accountID,
-		).Scan(&exists); err != nil {
+		).Scan(&enabled); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNotFound
+			}
 			return fmt.Errorf("enable totp lookup: %w", err) // codecov:ignore -- the UPDATE above on the same table inside this transaction already succeeded, so a failure isolated to this SELECT needs a fake driver (same same-table-multi-step limitation as the RowsAffected/COMMIT deviations in fault_injection_test.go).
 		}
-		if exists == 0 {
-			return ErrNotFound
+		if enabled != 0 {
+			return ErrConflict
 		}
-		return ErrConflict
+		return ErrTOTPPendingSecretChanged
 	}
 
 	if _, err := tx.ExecContext(
@@ -936,6 +954,15 @@ func (s *Store) EnableTOTPAndRotateRecoveryCode(
 		accountID,
 	); err != nil {
 		return fmt.Errorf("delete reset tokens on totp enable: %w", err)
+	}
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`DELETE FROM sessions WHERE account_id = ? AND token_hash != ?`,
+		accountID,
+		keepSessionTokenHash,
+	); err != nil {
+		return fmt.Errorf("delete other sessions on totp enable: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
