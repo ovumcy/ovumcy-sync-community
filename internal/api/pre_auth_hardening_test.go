@@ -106,7 +106,7 @@ func TestLogoutStoreFailureIsInternalError(t *testing.T) {
 	}
 
 	// More failures than the logout budget: each stays a 500, never a 429.
-	for i := 0; i <= 10; i++ {
+	for i := range 11 {
 		response := sendRaw(handler, http.MethodDelete, "/auth/session", "", session)
 		if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "internal_error") {
 			t.Fatalf("request %d: status %d body %s, want 500 internal_error", i+1, response.Code, response.Body.String())
