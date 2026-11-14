@@ -312,9 +312,10 @@ func (s *AuthService) ChangePassword(
 	}
 
 	// One transaction: the hash moves only while it is still the one verified
-	// above (a reset or another change landing during bcrypt wins and this
-	// call answers ErrInvalidCurrentPassword), and the challenges, other
-	// sessions and reset tokens go with it or not at all.
+	// above and the caller's session still exists, and the challenges, other
+	// sessions and reset tokens go with it or not at all. A reset or another
+	// change landing during bcrypt wins (ErrInvalidCurrentPassword); a revoked
+	// session or deleted account answers ErrUnauthorized.
 	if err := s.store.ChangeAccountPassword(
 		ctx,
 		accountID,
@@ -322,8 +323,11 @@ func (s *AuthService) ChangePassword(
 		newHash,
 		currentSessionTokenHash,
 	); err != nil {
-		if errors.Is(err, db.ErrNotFound) {
+		switch {
+		case errors.Is(err, db.ErrConflict):
 			return ErrInvalidCurrentPassword
+		case errors.Is(err, db.ErrNotFound):
+			return ErrUnauthorized
 		}
 		return err
 	}
@@ -491,19 +495,21 @@ func (s *AuthService) RegenerateRecoveryCode(
 		return "", err // codecov:ignore -- crypto-primitive error that cannot occur in practice (see internal/security/password.go's own codecov:ignore annotation on NewRecoveryCode's internal rand.Read).
 	}
 
-	// The rotation lands only while the password, recovery code and TOTP state
-	// are still the ones verified above: a stale step-up racing the owner's
-	// reset must not hand out a working code.
-	if err := s.store.UpdateAccountRecoveryCodeHash(ctx, accountID, db.CredentialSnapshot{
-		PasswordHash:     account.PasswordHash,
-		RecoveryCodeHash: account.RecoveryCodeHash,
-		TOTPEnabled:      account.TOTPEnabled,
-	}, recoveryHash); err != nil {
+	// codecov:ignore:start -- both branches below need the account row or the
+	// accounts table to fail specifically for THIS write, after the
+	// FindAccountByID lookup above has already succeeded against the same
+	// table within this one synchronous call: the ErrNotFound case is a
+	// TOCTOU (same class as the managed_bridge_service.go precedents) and
+	// the generic case needs a fake driver (same same-table-multi-step
+	// limitation as the RowsAffected/COMMIT deviations in
+	// internal/db/fault_injection_test.go).
+	if err := s.store.UpdateAccountRecoveryCodeHash(ctx, accountID, recoveryHash); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			return "", ErrInvalidCurrentPassword
+			return "", ErrUnauthorized
 		}
-		return "", err // codecov:ignore -- the accounts table already answered FindAccountByID above within this one call; isolating a later failure of this write needs a fake driver (see internal/db/fault_injection_test.go's RowsAffected/COMMIT deviations).
+		return "", err
 	}
+	// codecov:ignore:end
 
 	return plainRecovery, nil
 }

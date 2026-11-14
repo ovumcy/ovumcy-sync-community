@@ -8,7 +8,6 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/ovumcy/ovumcy-sync-community/internal/db"
 	"github.com/ovumcy/ovumcy-sync-community/internal/security"
 )
 
@@ -102,14 +101,7 @@ func TestForgotPasswordEqualizesTimingWhenRecoveryCodeUnset(t *testing.T) {
 
 	// Wipe recovery_code_hash to simulate a pre-migration account that has
 	// never had one set.
-	registered, err := store.FindAccountByID(ctx, registerResult.AccountID)
-	if err != nil {
-		t.Fatalf("load account: %v", err)
-	}
-	if err := store.UpdateAccountRecoveryCodeHash(ctx, registerResult.AccountID, db.CredentialSnapshot{
-		PasswordHash:     registered.PasswordHash,
-		RecoveryCodeHash: registered.RecoveryCodeHash,
-	}, ""); err != nil {
+	if err := store.UpdateAccountRecoveryCodeHash(ctx, registerResult.AccountID, ""); err != nil {
 		t.Fatalf("clear recovery code hash: %v", err)
 	}
 
