@@ -998,9 +998,9 @@ func (s *Store) TouchSession(ctx context.Context, sessionID string, lastSeenAt t
 
 // UpdateTOTPSecretAndEnabled writes the TOTP secret ciphertext alongside the
 // totp_enabled flag in one statement, resetting totp_last_used_step to 0. It
-// is the secret-write transition: storing a fresh pending secret at enrollment
-// start (enabled=false) and clearing the secret on disable / recovery reset
-// (empty ciphertext, enabled=false). Resetting the step here is deliberate and
+// is the unconditional secret-write transition, now used only by tests:
+// production disable goes through DisableTOTP, enrollment start through
+// StorePendingTOTPSecret. Resetting the step here is deliberate and
 // safe — either the secret is brand new (any leftover step from a prior secret
 // must not reject the new secret's first verify) or the secret is gone (no
 // code can verify against it). The enable transition does NOT go through here;

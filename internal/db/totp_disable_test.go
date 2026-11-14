@@ -38,6 +38,9 @@ func TestDisableTOTPClearsAndRevokesOnlyWhileVerifiedStateHolds(t *testing.T) {
 	if _, err := store.FindSessionByTokenHash(ctx, "owner"); err != nil {
 		t.Fatalf("expected the session kept after a conflict: %v", err)
 	}
+	if _, err := store.FindTOTPChallengeByHash(ctx, "pending"); err != nil {
+		t.Fatalf("expected the challenge kept after a conflict: %v", err)
+	}
 
 	if err := store.DisableTOTP(ctx, "disable-account", "verified-hash", "secret-v1"); err != nil {
 		t.Fatalf("disable with the verified state: %v", err)
