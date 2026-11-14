@@ -28,6 +28,30 @@ func TestRemoveDeviceRevokesTheSessionThatAttachedIt(t *testing.T) {
 	}
 }
 
+func TestAttachDeviceForSessionRefusesASecondDevice(t *testing.T) {
+	auth, sync := newDeviceTestServices(t, 1)
+	ctx := context.Background()
+	registered, err := auth.Register(ctx, "owner@example.com", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	tokenHash := security.HashToken(registered.SessionToken)
+
+	if _, err := sync.AttachDeviceForSession(ctx, registered.AccountID, tokenHash, "device-abcd1234", "Pixel 7"); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	if _, err := sync.AttachDeviceForSession(ctx, registered.AccountID, tokenHash, "device-abcd1234", "Pixel 7"); err != nil {
+		t.Fatalf("re-attach: %v", err)
+	}
+	// At the ceiling the one-device rule still answers first.
+	if _, err := sync.AttachDeviceForSession(ctx, registered.AccountID, tokenHash, "device-efgh5678", "Tablet"); !errors.Is(err, ErrSessionDeviceBound) {
+		t.Fatalf("expected ErrSessionDeviceBound, got %v", err)
+	}
+	if _, err := sync.AttachDeviceForSession(ctx, registered.AccountID, "unbound-hash", "device-efgh5678", "Tablet"); !errors.Is(err, ErrTooManyDevices) {
+		t.Fatalf("expected ErrTooManyDevices, got %v", err)
+	}
+}
+
 func TestAttachDeviceForSessionSurfacesBindErrors(t *testing.T) {
 	store, dbPath := openFileBackedTestStore(t)
 	auth := NewAuthService(store, 24*time.Hour)

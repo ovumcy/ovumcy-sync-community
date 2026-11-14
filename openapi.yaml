@@ -1098,7 +1098,7 @@ paths:
       tags: [sync]
       operationId: attachDevice
       summary: Register or refresh a device for this account
-      description: Upserts a device row scoped to the caller's account and binds the calling session to it if the session is not bound yet (a bound session keeps its first device). Rejected once the account is at its configured device ceiling and the device is not already known.
+      description: Upserts a device row scoped to the caller's account and binds the calling session to it if the session is not bound yet. One device per session — a session already bound to a different device is refused with `409 session_device_bound` and nothing is attached; re-attaching its own device refreshes it. Rejected once the account is at its configured device ceiling and the device is not already known.
       security:
         - sessionBearerAuth: []
       requestBody:
@@ -1128,12 +1128,14 @@ paths:
         "403":
           $ref: "#/components/responses/SyncDisabled"
         "409":
-          description: Account is already at its configured device ceiling and this device is not already registered.
+          description: "`session_device_bound` — the calling session is already bound to a different device (log in again to attach another one); checked first. `too_many_devices` — the account is already at its configured device ceiling and this device is not already registered."
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               examples:
+                sessionDeviceBound:
+                  value: { error: session_device_bound }
                 tooManyDevices:
                   value: { error: too_many_devices }
         "429":

@@ -29,6 +29,10 @@ var ErrStaleGeneration = errors.New("stale_generation")
 // CountDevicesForAccount (TOCTOU).
 var ErrDeviceLimitReached = errors.New("device_limit_reached")
 
+// ErrSessionDeviceBound is returned by AttachDeviceForSession when the calling
+// session is already bound to a different device; the attach is rolled back.
+var ErrSessionDeviceBound = errors.New("session_device_bound")
+
 // ErrAccountLapsed is returned by UpsertManagedAccount when the managed
 // account carries an entitlement-lapse marker: a mint never reverses a lapse.
 // It also covers an id that turned self-hosted after the caller's mode check;
@@ -1579,7 +1583,20 @@ func (s *Store) UpsertDevice(
 	device models.Device,
 	maxDevices int,
 ) (models.Device, error) {
-	result, err := s.db.ExecContext(
+	return upsertDevice(ctx, s.db, device, maxDevices)
+}
+
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func upsertDevice(
+	ctx context.Context,
+	exec execer,
+	device models.Device,
+	maxDevices int,
+) (models.Device, error) {
+	result, err := exec.ExecContext(
 		ctx,
 		`
 INSERT INTO devices (device_id, account_id, device_label, created_at, last_seen_at)
@@ -1644,24 +1661,56 @@ func (s *Store) ListDevicesForAccount(ctx context.Context, accountID string) ([]
 	return devices, nil
 }
 
-// BindSessionToDevice binds the session to deviceID if it is not bound yet;
-// a bound session keeps its first device. Scoped by account so a token hash
-// can never bind another account's session. The device must still exist in
-// the same statement, so a removal that commits between the attach and this
-// bind cannot leave a session bound to a deleted device.
-func (s *Store) BindSessionToDevice(ctx context.Context, accountID string, tokenHash string, deviceID string) error {
-	if _, err := s.db.ExecContext(
-		ctx,
-		`UPDATE sessions SET device_id = ?1
-WHERE account_id = ?2 AND token_hash = ?3 AND device_id IS NULL
-  AND EXISTS (SELECT 1 FROM devices WHERE account_id = ?2 AND device_id = ?1)`,
-		deviceID,
-		accountID,
-		tokenHash,
-	); err != nil {
-		return fmt.Errorf("bind session to device: %w", err)
+// AttachDeviceForSession binds the session identified by tokenHash to the
+// device and upserts the device (UpsertDevice's in-statement ceiling), in one
+// transaction. A session binds once: when it is already bound to a different
+// device the attach fails with ErrSessionDeviceBound before the device is
+// created or refreshed. The bound-device check is the UPDATE ... RETURNING
+// itself, so no concurrent attach can slip between a read and the write; a
+// ceiling rejection rolls the bind back. Scoped by account, so a token hash
+// never binds another account's session; a session that no longer exists binds
+// nothing and the attach still commits.
+func (s *Store) AttachDeviceForSession(
+	ctx context.Context,
+	device models.Device,
+	maxDevices int,
+	tokenHash string,
+) (models.Device, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return models.Device{}, fmt.Errorf("begin attach device: %w", err)
 	}
-	return nil
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	var boundDeviceID string
+	err = tx.QueryRowContext(
+		ctx,
+		`UPDATE sessions SET device_id = COALESCE(device_id, ?1)
+WHERE account_id = ?2 AND token_hash = ?3
+RETURNING device_id`,
+		device.DeviceID,
+		device.AccountID,
+		tokenHash,
+	).Scan(&boundDeviceID)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return models.Device{}, fmt.Errorf("bind session to device: %w", err)
+	case boundDeviceID != device.DeviceID:
+		return models.Device{}, ErrSessionDeviceBound
+	}
+
+	attached, err := upsertDevice(ctx, tx, device, maxDevices)
+	if err != nil {
+		return models.Device{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return models.Device{}, fmt.Errorf("commit attach device: %w", err) // codecov:ignore -- on this store's single-connection sqlite (WAL, busy_timeout) a COMMIT whose statements all succeeded has no deterministically injectable in-process failure; needs a fake driver, the same deviation documented for DeleteAccount's commit branch.
+	}
+	return attached, nil
 }
 
 // DeleteDevice removes one device from the account together with every
