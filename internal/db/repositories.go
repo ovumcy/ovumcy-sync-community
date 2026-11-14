@@ -268,9 +268,16 @@ func (s *Store) ResetAccountCredentials(
 // account's pending reset tokens in one transaction: a token issued against
 // the old code must not outlive the rotation, and a failed cleanup must not
 // leave the hash rotated with the new code never handed out.
+//
+// The write applies only while the stored hash is still expectedHash, the one
+// the caller read: a regeneration that read the account before a concurrent
+// TOTP enable (or reset, or another regeneration) rotated the code must not
+// overwrite that rotation with a code issued without the step-up. ErrConflict
+// when the hash moved, ErrNotFound when the account is gone.
 func (s *Store) UpdateAccountRecoveryCodeHash(
 	ctx context.Context,
 	accountID string,
+	expectedHash string,
 	recoveryCodeHash string,
 ) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -283,9 +290,10 @@ func (s *Store) UpdateAccountRecoveryCodeHash(
 
 	result, err := tx.ExecContext(
 		ctx,
-		`UPDATE accounts SET recovery_code_hash = ? WHERE id = ?`,
+		`UPDATE accounts SET recovery_code_hash = ? WHERE id = ? AND recovery_code_hash = ?`,
 		recoveryCodeHash,
 		accountID,
+		expectedHash,
 	)
 	if err != nil {
 		return fmt.Errorf("update account recovery code: %w", err)
@@ -296,7 +304,14 @@ func (s *Store) UpdateAccountRecoveryCodeHash(
 		return fmt.Errorf("update account recovery code rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); needs a fake driver, the same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
 	}
 	if affected == 0 {
-		return ErrNotFound
+		var one int
+		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM accounts WHERE id = ?`, accountID).Scan(&one); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("update account recovery code lookup: %w", err) // codecov:ignore -- the UPDATE above on the same table inside this transaction already succeeded, so a failure isolated to this SELECT needs a fake driver (same same-table-multi-step limitation as the RowsAffected/COMMIT deviations in fault_injection_test.go).
+		}
+		return ErrConflict
 	}
 
 	if _, err := tx.ExecContext(
@@ -876,6 +891,69 @@ func (s *Store) UpdateTOTPSecretAndEnabled(
 	}
 
 	return nil
+}
+
+// StorePendingTOTPSecret writes a fresh pending secret (totp_enabled stays 0,
+// totp_last_used_step resets to 0) only while TOTP is still off: an enrollment
+// start that read "disabled" before a concurrent verify committed must not
+// switch the just-enabled factor back off. ErrConflict when TOTP is enabled,
+// ErrNotFound when the account is gone.
+func (s *Store) StorePendingTOTPSecret(
+	ctx context.Context,
+	accountID string,
+	encryptedSecret string,
+) error {
+	result, err := s.db.ExecContext(
+		ctx,
+		`UPDATE accounts SET totp_secret_encrypted = ?, totp_last_used_step = 0
+		 WHERE id = ? AND totp_enabled = 0`,
+		encryptedSecret,
+		accountID,
+	)
+	if err != nil {
+		return fmt.Errorf("store pending totp secret: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store pending totp secret rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); needs a fake driver, the same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
+	}
+	if affected == 0 {
+		return s.accountExistsOr(ctx, accountID, ErrConflict)
+	}
+	return nil
+}
+
+// DiscardPendingTOTPSecret clears a pending secret, but only while it is still
+// the given ciphertext and TOTP is still off; otherwise it changes nothing and
+// returns nil. It burns an enrollment whose code window is spent.
+func (s *Store) DiscardPendingTOTPSecret(
+	ctx context.Context,
+	accountID string,
+	encryptedSecret string,
+) error {
+	if _, err := s.db.ExecContext(
+		ctx,
+		`UPDATE accounts SET totp_secret_encrypted = '', totp_last_used_step = 0
+		 WHERE id = ? AND totp_enabled = 0 AND totp_secret_encrypted = ?`,
+		accountID,
+		encryptedSecret,
+	); err != nil {
+		return fmt.Errorf("discard pending totp secret: %w", err)
+	}
+	return nil
+}
+
+// accountExistsOr returns ErrNotFound when accountID has no row, else
+// otherwise: it names why a guarded single-row write matched nothing.
+func (s *Store) accountExistsOr(ctx context.Context, accountID string, otherwise error) error {
+	var one int
+	if err := s.db.QueryRowContext(ctx, `SELECT 1 FROM accounts WHERE id = ?`, accountID).Scan(&one); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("account lookup: %w", err) // codecov:ignore -- every caller's guarded UPDATE on the same table has just succeeded, so a failure isolated to this SELECT needs a fake driver (same same-table-multi-step limitation as the RowsAffected/COMMIT deviations in fault_injection_test.go).
+	}
+	return otherwise
 }
 
 // EnableTOTPAndRotateRecoveryCode is the enable transition at the end of

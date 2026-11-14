@@ -349,10 +349,15 @@ if [[ "${verify_wrong_status}" == "200" ]]; then
   exit 1
 fi
 
-curl -fsS -X POST "${BASE_URL}/auth/totp/verify" \
+totp_verify_response="$(curl -fsS -X POST "${BASE_URL}/auth/totp/verify" \
   -H "Authorization: Bearer ${totp_session_token}" \
   -H 'Content-Type: application/json' \
-  -d "{\"code\":\"$(totp_code "${totp_secret}")\"}" >/dev/null
+  -d "{\"code\":\"$(totp_code "${totp_secret}")\"}")"
+totp_verify_recovery="$("${PYTHON}" -c 'import json,sys; print(json.load(sys.stdin).get("recovery_code") or "")' <<<"${totp_verify_response}")"
+if [[ -z "${totp_verify_recovery}" ]]; then
+  echo "expected totp verify to return a rotated recovery code" >&2
+  exit 1
+fi
 
 # With TOTP enabled, login must return a challenge and withhold the session.
 totp_login_response="$(curl -fsS -X POST "${BASE_URL}/auth/login" \

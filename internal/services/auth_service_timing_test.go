@@ -101,7 +101,11 @@ func TestForgotPasswordEqualizesTimingWhenRecoveryCodeUnset(t *testing.T) {
 
 	// Wipe recovery_code_hash to simulate a pre-migration account that has
 	// never had one set.
-	if err := store.UpdateAccountRecoveryCodeHash(ctx, registerResult.AccountID, ""); err != nil {
+	registered, err := store.FindAccountByID(ctx, registerResult.AccountID)
+	if err != nil {
+		t.Fatalf("find account: %v", err)
+	}
+	if err := store.UpdateAccountRecoveryCodeHash(ctx, registerResult.AccountID, registered.RecoveryCodeHash, ""); err != nil {
 		t.Fatalf("clear recovery code hash: %v", err)
 	}
 
