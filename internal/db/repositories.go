@@ -182,7 +182,7 @@ func (s *Store) UpgradeAccountPasswordHash(
 }
 
 // ResetAccountCredentials completes a recovery-code reset in one transaction:
-// it claims the reset token (same CAS as ConsumePasswordResetToken), sets the
+// it claims the reset token (consumeResetTokenSQL), sets the
 // new password and recovery-code hashes, clears TOTP, and deletes the
 // account's TOTP challenges, sessions and reset tokens. Any failure rolls all
 // of it back, so the token stays usable for a retry and the old recovery code
@@ -205,19 +205,16 @@ func (s *Store) ResetAccountCredentials(
 	}()
 
 	nowFormatted := now.UTC().Format(time.RFC3339Nano)
-	var accountID string
+	// Only the account id is used: the token row is deleted below in this
+	// same transaction, so its timestamps are never read.
+	var accountID, claimedHash, createdAt, expiresAt string
 	if err := tx.QueryRowContext(
 		ctx,
-		`UPDATE password_reset_tokens
-		 SET consumed_at = ?
-		 WHERE token_hash = ?
-		   AND consumed_at IS NULL
-		   AND expires_at > ?
-		 RETURNING account_id`,
+		consumeResetTokenSQL,
 		nowFormatted,
 		tokenHash,
 		nowFormatted,
-	).Scan(&accountID); err != nil {
+	).Scan(&accountID, &claimedHash, &createdAt, &expiresAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", ErrNotFound
 		}
@@ -1074,12 +1071,24 @@ ON CONFLICT(account_id) DO UPDATE SET
 	return nil
 }
 
-// ConsumePasswordResetToken atomically claims the matching token via a single
-// UPDATE ... WHERE consumed_at IS NULL AND expires_at > now CAS. Returns the
-// claimed row only when RowsAffected == 1; ErrNotFound otherwise (unknown
-// token, already consumed, or expired). This is the single source of truth
-// for "is this reset token still actionable" — callers must not pre-check
-// expiry or pre-load the token, or the race the CAS prevents reopens.
+// consumeResetTokenSQL is the reset-token claim CAS, shared by
+// ConsumePasswordResetToken and ResetAccountCredentials: it matches only an
+// unconsumed, unexpired token, so the claim is the single source of truth for
+// "is this reset token still actionable" — callers must not pre-check expiry
+// or pre-load the token, or the race the CAS prevents reopens. Args: now,
+// token hash, now.
+const consumeResetTokenSQL = `UPDATE password_reset_tokens
+	 SET consumed_at = ?
+	 WHERE token_hash = ?
+	   AND consumed_at IS NULL
+	   AND expires_at > ?
+	 RETURNING account_id, token_hash, created_at, expires_at`
+
+// ConsumePasswordResetToken claims the matching token with consumeResetTokenSQL
+// on its own, outside any transaction, and returns the claimed row;
+// ErrNotFound when the token is unknown, already consumed, or expired.
+// ResetPassword claims through ResetAccountCredentials instead, so the claim
+// rolls back with the rest of the reset.
 func (s *Store) ConsumePasswordResetToken(
 	ctx context.Context,
 	tokenHash string,
@@ -1088,12 +1097,7 @@ func (s *Store) ConsumePasswordResetToken(
 	nowFormatted := now.UTC().Format(time.RFC3339Nano)
 	row := s.db.QueryRowContext(
 		ctx,
-		`UPDATE password_reset_tokens
-		 SET consumed_at = ?
-		 WHERE token_hash = ?
-		   AND consumed_at IS NULL
-		   AND expires_at > ?
-		 RETURNING account_id, token_hash, created_at, expires_at`,
+		consumeResetTokenSQL,
 		nowFormatted,
 		tokenHash,
 		nowFormatted,
