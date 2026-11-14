@@ -323,33 +323,9 @@ func (s *TOTPService) Disable(
 		return ErrInvalidCurrentPassword
 	}
 
-	rawSecret, err := security.DecryptField(
-		account.TOTPSecretEncrypted,
-		s.secretKey,
-		aadForTOTPSecret(accountID),
-	)
-	if err != nil {
-		return fmt.Errorf("%w: %v", ErrTOTPSecretDecrypt, err)
-	}
-
-	now := s.now().UTC()
-	if err := s.reserveCodeAttempt(ctx, accountID, now); err != nil {
+	if err := s.verifyAccountCode(ctx, account, code); err != nil {
 		return err
 	}
-
-	step, ok := security.VerifyTOTPCode([]byte(rawSecret), code, now.Unix())
-	if !ok {
-		return ErrTOTPInvalidCode
-	}
-
-	claimed, err := s.store.ClaimTOTPStep(ctx, accountID, step)
-	if err != nil {
-		return err // codecov:ignore -- FindAccountByID above already touches "accounts" as this function's first store call, so isolating a second, later accounts-table failure here needs a fake driver.
-	}
-	if !claimed {
-		return ErrTOTPReplayed
-	}
-	s.clearCodeFailures(ctx, accountID)
 
 	// codecov:ignore:start -- both branches below need the account row or the
 	// accounts table to fail specifically for THIS write, after
@@ -376,6 +352,48 @@ func (s *TOTPService) Disable(
 		return err
 	}
 
+	return nil
+}
+
+// VerifyAccountCode is the step-up check for an enrolled account on a route
+// that already verified the password: it meters the attempt in the
+// per-account window, verifies the code, and claims its step so the same
+// code cannot be replayed on any other TOTP path.
+func (s *TOTPService) VerifyAccountCode(ctx context.Context, account models.Account, code string) error {
+	if !s.Configured() {
+		return ErrTOTPNotConfigured
+	}
+	return s.verifyAccountCode(ctx, account, code)
+}
+
+func (s *TOTPService) verifyAccountCode(ctx context.Context, account models.Account, code string) error {
+	rawSecret, err := security.DecryptField(
+		account.TOTPSecretEncrypted,
+		s.secretKey,
+		aadForTOTPSecret(account.ID),
+	)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrTOTPSecretDecrypt, err)
+	}
+
+	now := s.now().UTC()
+	if err := s.reserveCodeAttempt(ctx, account.ID, now); err != nil {
+		return err
+	}
+
+	step, ok := security.VerifyTOTPCode([]byte(rawSecret), code, now.Unix())
+	if !ok {
+		return ErrTOTPInvalidCode
+	}
+
+	claimed, err := s.store.ClaimTOTPStep(ctx, account.ID, step)
+	if err != nil {
+		return err // codecov:ignore -- the caller's FindAccountByID already touched "accounts" in this same call, so isolating a later accounts-table failure here needs a fake driver.
+	}
+	if !claimed {
+		return ErrTOTPReplayed
+	}
+	s.clearCodeFailures(ctx, account.ID)
 	return nil
 }
 
