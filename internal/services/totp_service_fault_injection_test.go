@@ -325,7 +325,7 @@ func TestDisableSurfacesSessionAndChallengeCleanupStoreErrorsSeparately(t *testi
 	})
 
 	t.Run("totp_challenges table dropped", func(t *testing.T) {
-		totp, accountID, _, dbPath, now := setup(t)
+		totp, accountID, token, dbPath, now := setup(t)
 		account, err := totp.store.FindAccountByID(context.Background(), accountID)
 		if err != nil {
 			t.Fatalf("find account: %v", err)
@@ -345,6 +345,11 @@ func TestDisableSurfacesSessionAndChallengeCleanupStoreErrorsSeparately(t *testi
 		}
 		if !strings.Contains(err.Error(), "delete totp challenge") {
 			t.Fatalf("expected the challenge-cleanup store error to surface, got %v", err)
+		}
+		// TOTP is already off, so a retry would never reach the revoke: it
+		// must have run despite the challenge failure.
+		if _, err := totp.auth.Authenticate(context.Background(), token); !errors.Is(err, ErrUnauthorized) {
+			t.Fatalf("expected sessions revoked despite the challenge failure, got %v", err)
 		}
 	})
 }

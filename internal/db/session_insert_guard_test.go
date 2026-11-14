@@ -70,10 +70,30 @@ func TestCreateSessionForVerifiedPasswordRequiresUnchangedHash(t *testing.T) {
 	}
 }
 
+func TestCreateSessionForVerifiedPasswordRefusesAnEnrolledAccount(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedGuardAccount(t, store, "guard-account")
+	if err := store.UpdateTOTPSecretAndEnabled(ctx, "guard-account", "secret-ciphertext", true); err != nil {
+		t.Fatalf("enable totp: %v", err)
+	}
+
+	if err := store.CreateSessionForVerifiedPassword(ctx, guardSession("guard-account", "single-factor"), "verified-hash"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound once TOTP is on, got %v", err)
+	}
+}
+
 func TestCreateTOTPChallengeForVerifiedPasswordRequiresUnchangedHash(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 	seedGuardAccount(t, store, "guard-account")
+
+	if err := store.CreateTOTPChallengeForVerifiedPassword(ctx, guardChallenge("guard-account", "not-enrolled"), "verified-hash"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound while TOTP is off, got %v", err)
+	}
+	if err := store.UpdateTOTPSecretAndEnabled(ctx, "guard-account", "secret-ciphertext", true); err != nil {
+		t.Fatalf("enable totp: %v", err)
+	}
 
 	if err := store.CreateTOTPChallengeForVerifiedPassword(ctx, guardChallenge("guard-account", "fresh"), "verified-hash"); err != nil {
 		t.Fatalf("insert with the current hash: %v", err)

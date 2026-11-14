@@ -389,12 +389,16 @@ func (s *TOTPService) Disable(
 
 	// Challenges go first: a verify consumes its challenge in the transaction
 	// that inserts its session, so once they are gone no new session can
-	// appear after the revoke below.
-	if err := s.store.DeleteTOTPChallengesForAccount(ctx, accountID); err != nil {
+	// appear after the revoke below. A failed challenge delete must not skip
+	// the revoke — TOTP is already off, so a retry would never reach it — so
+	// its error is returned only after it.
+	challengeErr := s.store.DeleteTOTPChallengesForAccount(ctx, accountID)
+
+	if err := s.store.DeleteAllSessionsForAccount(ctx, accountID); err != nil {
 		return err
 	}
 
-	return s.store.DeleteAllSessionsForAccount(ctx, accountID)
+	return challengeErr
 }
 
 // VerifyAccountCode is the step-up check for an enrolled account on a route
@@ -450,8 +454,8 @@ func (s *TOTPService) verifyAccountCode(ctx context.Context, account models.Acco
 // verifiedPasswordHash. The plaintext challenge id is returned to the caller;
 // only the SHA-256 hash is persisted, so a leaked db row cannot be replayed
 // without the issuer's response body. The challenge is stored only while the
-// password hash is unchanged: a change or reset that committed since the
-// verification answers ErrInvalidCredentials.
+// password hash is unchanged and TOTP still enabled; otherwise
+// errLoginStateMoved, which Login answers by verifying once more.
 func (s *TOTPService) IssueChallengeForVerifiedPassword(
 	ctx context.Context,
 	accountID string,
@@ -479,7 +483,7 @@ func (s *TOTPService) IssueChallengeForVerifiedPassword(
 		ExpiresAt:       expiresAt,
 	}, verifiedPasswordHash); storeErr != nil {
 		if errors.Is(storeErr, db.ErrNotFound) {
-			return "", time.Time{}, ErrInvalidCredentials
+			return "", time.Time{}, errLoginStateMoved
 		}
 		return "", time.Time{}, storeErr
 	}

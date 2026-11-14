@@ -151,7 +151,25 @@ func (s *AuthService) Register(ctx context.Context, login string, password strin
 	return result, nil
 }
 
+// errLoginStateMoved: the account's password hash or TOTP state changed
+// between the login's verify and its session/challenge insert.
+var errLoginStateMoved = errors.New("login_state_moved")
+
 func (s *AuthService) Login(ctx context.Context, login string, password string) (AuthResult, error) {
+	result, err := s.login(ctx, login, password)
+	if errors.Is(err, errLoginStateMoved) {
+		// Verify once more against the fresh row: a concurrent rehash or TOTP
+		// enrollment then succeeds (or yields a challenge), while a password
+		// change or reset rejects the old password.
+		result, err = s.login(ctx, login, password)
+		if errors.Is(err, errLoginStateMoved) {
+			return AuthResult{}, ErrInvalidCredentials
+		}
+	}
+	return result, err
+}
+
+func (s *AuthService) login(ctx context.Context, login string, password string) (AuthResult, error) {
 	account, err := s.store.FindAccountByLogin(ctx, security.NormalizeLogin(login))
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
@@ -191,9 +209,9 @@ func (s *AuthService) Login(ctx context.Context, login string, password string) 
 	// verified, so both errors are deliberately discarded (this service also
 	// never logs, and a hash-upgrade skip is not an auth event). The write is
 	// a CAS on the verified hash: a password change that lands during the
-	// re-hash wins, and the upgrade is skipped.
-	// The session or challenge below is minted only while the stored hash is
-	// still this one, so a password change or reset racing the login wins.
+	// re-hash wins, and the upgrade is skipped. The session or challenge below
+	// is minted only while the stored hash and TOTP state are still the ones
+	// verified here.
 	verifiedHash := account.PasswordHash
 	if security.PasswordHashNeedsRehash(account.PasswordHash) {
 		if upgradedHash, rehashErr := s.hashPassword(password); rehashErr == nil {
@@ -621,8 +639,8 @@ func (s *AuthService) createSession(
 }
 
 // createSessionForVerifiedPassword mints the session only while the stored
-// password hash is still verifiedHash; a change or reset that won the race
-// answers ErrInvalidCredentials.
+// password hash is still verifiedHash and TOTP is still off; otherwise
+// errLoginStateMoved.
 func (s *AuthService) createSessionForVerifiedPassword(
 	ctx context.Context,
 	accountID string,
@@ -634,7 +652,7 @@ func (s *AuthService) createSessionForVerifiedPassword(
 	}
 	if err := s.store.CreateSessionForVerifiedPassword(ctx, session, verifiedHash); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			return AuthResult{}, ErrInvalidCredentials
+			return AuthResult{}, errLoginStateMoved
 		}
 		return AuthResult{}, err
 	}
