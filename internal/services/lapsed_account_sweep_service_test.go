@@ -33,7 +33,8 @@ func seedLapsedCandidateWithFullData(
 	t.Helper()
 	ctx := context.Background()
 
-	if _, err := bridgeService.CreateManagedSession(ctx, accountID); err != nil {
+	session, err := bridgeService.CreateManagedSession(ctx, accountID)
+	if err != nil {
 		t.Fatalf("create managed session for %s: %v", accountID, err)
 	}
 	if _, err := syncService.AttachDevice(ctx, accountID, accountID+"-device", "Test Device"); err != nil {
@@ -49,7 +50,7 @@ func seedLapsedCandidateWithFullData(
 	}); err != nil {
 		t.Fatalf("put blob for %s: %v", accountID, err)
 	}
-	if _, err := syncService.PutRecoveryKeyPackage(ctx, accountID, PutRecoveryKeyPackageInput{
+	if _, err := syncService.PutRecoveryKeyPackage(ctx, accountID, ownerStepUp(session), PutRecoveryKeyPackageInput{
 		Algorithm:            "xchacha20poly1305",
 		KDF:                  "bip39_seed_hkdf_sha256",
 		MnemonicWordCount:    12,

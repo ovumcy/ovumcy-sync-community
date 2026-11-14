@@ -35,7 +35,7 @@ func TestDeleteAccountErasesBlobDeviceAndSessionThenIsIdempotent(t *testing.T) {
 		t.Fatalf("put blob: %v", err)
 	}
 
-	if _, err := syncService.PutRecoveryKeyPackage(ctx, result.AccountID, PutRecoveryKeyPackageInput{
+	if _, err := syncService.PutRecoveryKeyPackage(ctx, result.AccountID, ownerStepUp(result), PutRecoveryKeyPackageInput{
 		Algorithm:            "xchacha20poly1305",
 		KDF:                  "bip39_seed_hkdf_sha256",
 		MnemonicWordCount:    12,
@@ -55,7 +55,7 @@ func TestDeleteAccountErasesBlobDeviceAndSessionThenIsIdempotent(t *testing.T) {
 		t.Fatalf("expected session valid before delete, got %v", err)
 	}
 
-	if err := auth.DeleteAccount(ctx, result.AccountID); err != nil {
+	if err := auth.DeleteAccount(ctx, result.AccountID, ownerStepUp(result)); err != nil {
 		t.Fatalf("delete account: %v", err)
 	}
 
@@ -79,7 +79,7 @@ func TestDeleteAccountErasesBlobDeviceAndSessionThenIsIdempotent(t *testing.T) {
 	// report success rather than surfacing db.ErrNotFound to the caller. A
 	// client retrying DELETE /account after a dropped response should see
 	// the same "your data is gone" outcome both times.
-	if err := auth.DeleteAccount(ctx, result.AccountID); err != nil {
+	if err := auth.DeleteAccount(ctx, result.AccountID, ownerStepUp(result)); err != nil {
 		t.Fatalf("expected idempotent repeat delete to succeed, got %v", err)
 	}
 }
@@ -88,7 +88,7 @@ func TestDeleteAccountUnknownAccountIsIdempotentNoOp(t *testing.T) {
 	store := openTestStore(t)
 	auth := NewAuthService(store, 24*time.Hour)
 
-	if err := auth.DeleteAccount(context.Background(), "never-existed"); err != nil {
+	if err := auth.DeleteAccount(context.Background(), "never-existed", StepUp{}); err != nil {
 		t.Fatalf("expected no error deleting an account that never existed, got %v", err)
 	}
 }
@@ -119,7 +119,7 @@ func TestDeleteAccountDoesNotTouchOtherAccounts(t *testing.T) {
 		t.Fatalf("put bystander blob: %v", err)
 	}
 
-	if err := auth.DeleteAccount(ctx, target.AccountID); err != nil {
+	if err := auth.DeleteAccount(ctx, target.AccountID, ownerStepUp(target)); err != nil {
 		t.Fatalf("delete target account: %v", err)
 	}
 

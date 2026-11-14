@@ -114,7 +114,7 @@ func TestManagedBridgePurgeErasesBlobDeviceAndSessionThenIsIdempotent(t *testing
 		t.Fatalf("put blob: %v", err)
 	}
 
-	if _, err := syncService.PutRecoveryKeyPackage(ctx, accountID, PutRecoveryKeyPackageInput{
+	if _, err := syncService.PutRecoveryKeyPackage(ctx, accountID, ownerStepUp(session), PutRecoveryKeyPackageInput{
 		Algorithm:            "xchacha20poly1305",
 		KDF:                  "bip39_seed_hkdf_sha256",
 		MnemonicWordCount:    12,
