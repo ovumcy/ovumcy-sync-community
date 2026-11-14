@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A failed password reset could lose the new recovery code.** Reset rotated the password and recovery code, then cleared TOTP and deleted sessions, challenges and reset tokens in separate statements. A failure after the rotation answered 500: the new recovery code was never shown while the old one no longer worked, and sessions could outlive the reset. All of it now commits in one transaction; a failure changes nothing and leaves the reset token usable for a retry.
+
 - **The password alone could remove TOTP.** On a TOTP-enrolled account, a session plus the password was enough to regenerate the recovery code, and a reset with that fresh code clears TOTP — so whoever held only the first factor could strip the second. `POST /auth/recovery-code/regenerate` now also requires a current TOTP `code` on an enrolled account, checked like `POST /auth/totp/disable` (counted in the per-account TOTP window, single-use). **Client change:** a client that regenerates on an enrolled account must send `code`; without it the request answers 401 `totp_invalid_code` (a missing code does not count against the TOTP window; a missing code on `POST /auth/totp/disable` no longer does either). Accounts without TOTP are unaffected.
 
 - **A login could undo a concurrent password change.** On an account whose password hash predates the current bcrypt cost, a successful login re-hashes the password and saves it. That write replaced the hash unconditionally, so a login racing a password change could put the old password back. The upgrade now saves only while the stored hash is still the one the login verified; otherwise it is skipped.

@@ -66,9 +66,8 @@ func dropAccountsLapsedAtColumn(t *testing.T, dbPath string) {
 }
 
 // TestAccountFieldUpdatesHappyPathAndNotFound exercises the success and
-// not-found branches of the three account-field update methods
-// (UpdateAccountPasswordHash, UpdateAccountPasswordAndRecoveryHash,
-// UpdateAccountRecoveryCodeHash), all previously at 0% because internal/db
+// not-found branches of the two account-field update methods
+// (UpdateAccountPasswordHash, UpdateAccountRecoveryCodeHash), both previously at 0% because internal/db
 // itself never called them (only internal/services did, through its own
 // mocked/live store in that package's tests). Multi-account isolation is
 // asserted: updating one account's fields must not touch a bystander
@@ -98,17 +97,6 @@ func TestAccountFieldUpdatesHappyPathAndNotFound(t *testing.T) {
 		t.Fatalf("expected bystander password hash untouched, got %#v", untouched)
 	}
 
-	if err := store.UpdateAccountPasswordAndRecoveryHash(ctx, target.ID, "rotated-hash-2", "rotated-recovery-hash"); err != nil {
-		t.Fatalf("update account password and recovery hash: %v", err)
-	}
-	updated, err = store.FindAccountByID(ctx, target.ID)
-	if err != nil {
-		t.Fatalf("find account after password+recovery update: %v", err)
-	}
-	if updated.PasswordHash != "rotated-hash-2" || updated.RecoveryCodeHash != "rotated-recovery-hash" {
-		t.Fatalf("expected rotated password+recovery hash, got %#v", updated)
-	}
-
 	if err := store.UpdateAccountRecoveryCodeHash(ctx, target.ID, "rotated-recovery-hash-2"); err != nil {
 		t.Fatalf("update account recovery code hash: %v", err)
 	}
@@ -122,9 +110,6 @@ func TestAccountFieldUpdatesHappyPathAndNotFound(t *testing.T) {
 
 	if err := store.UpdateAccountPasswordHash(ctx, "missing-account", "any-hash"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for missing account password update, got %v", err)
-	}
-	if err := store.UpdateAccountPasswordAndRecoveryHash(ctx, "missing-account", "any-hash", "any-recovery-hash"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("expected ErrNotFound for missing account password+recovery update, got %v", err)
 	}
 	if err := store.UpdateAccountRecoveryCodeHash(ctx, "missing-account", "any-recovery-hash"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for missing account recovery update, got %v", err)
@@ -157,7 +142,7 @@ func TestCreateAccountReturnsErrorWhenAccountsTableIsDropped(t *testing.T) {
 }
 
 // TestAccountFieldUpdatesReturnErrorWhenAccountsTableIsDropped exercises the
-// generic ExecContext-error branch of the three account-field update
+// generic ExecContext-error branch of the two account-field update
 // methods by dropping the accounts table out from under a live store.
 func TestAccountFieldUpdatesReturnErrorWhenAccountsTableIsDropped(t *testing.T) {
 	store, dbPath := newFileBackedTestStore(t)
@@ -168,12 +153,6 @@ func TestAccountFieldUpdatesReturnErrorWhenAccountsTableIsDropped(t *testing.T) 
 
 	if err := store.UpdateAccountPasswordHash(ctx, target.ID, "any-hash"); err == nil {
 		t.Fatal("expected error updating password hash after accounts table is dropped")
-	} else if errors.Is(err, ErrNotFound) {
-		t.Fatalf("expected a store-failure error, not ErrNotFound, got %v", err)
-	}
-
-	if err := store.UpdateAccountPasswordAndRecoveryHash(ctx, target.ID, "any-hash", "any-recovery-hash"); err == nil {
-		t.Fatal("expected error updating password+recovery hash after accounts table is dropped")
 	} else if errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected a store-failure error, not ErrNotFound, got %v", err)
 	}
