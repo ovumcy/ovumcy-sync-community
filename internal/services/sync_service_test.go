@@ -69,6 +69,7 @@ func TestSyncServiceAttachDeviceAndBlobRoundTrip(t *testing.T) {
 	recoveryKeyPackage, err := syncService.PutRecoveryKeyPackage(
 		context.Background(),
 		result.AccountID,
+		ownerStepUp(result),
 		PutRecoveryKeyPackageInput{
 			Algorithm:            "xchacha20poly1305",
 			KDF:                  "bip39_seed_hkdf_sha256",
@@ -361,7 +362,7 @@ func TestSyncServiceRejectsInvalidRecoveryKeyPackage(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	if _, err := syncService.PutRecoveryKeyPackage(context.Background(), result.AccountID, PutRecoveryKeyPackageInput{
+	if _, err := syncService.PutRecoveryKeyPackage(context.Background(), result.AccountID, ownerStepUp(result), PutRecoveryKeyPackageInput{
 		Algorithm:            "aes",
 		KDF:                  "wrong",
 		MnemonicWordCount:    8,
@@ -452,7 +453,7 @@ func TestSyncServiceRejectsEachRecoveryKeyPackageFieldIndependently(t *testing.T
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := syncService.PutRecoveryKeyPackage(context.Background(), result.AccountID, tc.mutate(validInput)); err != ErrInvalidRecoveryPackage {
+			if _, err := syncService.PutRecoveryKeyPackage(context.Background(), result.AccountID, ownerStepUp(result), tc.mutate(validInput)); err != ErrInvalidRecoveryPackage {
 				t.Fatalf("expected ErrInvalidRecoveryPackage, got %v", err)
 			}
 		})
@@ -461,7 +462,7 @@ func TestSyncServiceRejectsEachRecoveryKeyPackageFieldIndependently(t *testing.T
 	// Sanity check: the shared valid input actually succeeds, so the cases
 	// above are each isolating exactly one bad field rather than resting on
 	// an already-broken baseline.
-	if _, err := syncService.PutRecoveryKeyPackage(context.Background(), result.AccountID, validInput); err != nil {
+	if _, err := syncService.PutRecoveryKeyPackage(context.Background(), result.AccountID, ownerStepUp(result), validInput); err != nil {
 		t.Fatalf("expected the shared valid baseline input to succeed, got %v", err)
 	}
 }

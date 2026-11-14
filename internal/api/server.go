@@ -722,43 +722,33 @@ func (s *Server) handleDeleteAccount(
 	if !decodeJSON(writer, request, &payload, 4<<10) {
 		return
 	}
-	if !s.confirmCurrentPassword(writer, request, account.ID, payload.CurrentPassword) {
-		return
-	}
-
-	if err := s.auth.DeleteAccount(request.Context(), account.ID); err != nil {
-		writeError(writer, http.StatusInternalServerError, "internal_error")
+	err := s.auth.DeleteAccount(request.Context(), account.ID, stepUpFromRequest(request, payload.CurrentPassword))
+	if err != nil {
+		writeStepUpError(writer, err)
 		return
 	}
 
 	writeJSON(writer, http.StatusOK, map[string]string{"status": "account_deleted"})
 }
 
-// confirmCurrentPassword gates a destructive write behind a password
-// re-check, writing the error response itself when it refuses.
-func (s *Server) confirmCurrentPassword(
-	writer http.ResponseWriter,
-	request *http.Request,
-	accountID string,
-	currentPassword string,
-) bool {
-	err := s.auth.ConfirmCurrentPassword(request.Context(), accountID, currentPassword)
+func stepUpFromRequest(request *http.Request, currentPassword string) services.StepUp {
+	return services.StepUp{
+		SessionTokenHash: security.HashToken(bearerTokenFromRequest(request)),
+		CurrentPassword:  currentPassword,
+	}
+}
+
+// writeStepUpError answers a step-up write's refusal: a wrong (or stale)
+// password, a caller whose session was revoked meanwhile, or a server error.
+func writeStepUpError(writer http.ResponseWriter, err error) {
 	switch {
-	case err == nil:
-		return true
 	case errors.Is(err, services.ErrInvalidCurrentPassword):
 		writeError(writer, http.StatusUnauthorized, "invalid_current_password")
-	// codecov:ignore:start -- withAuth has just loaded this account through the
-	// same FindAccountByID query, with no store write in between: a missing row
-	// is a concurrent-delete TOCTOU and a read error needs a fake driver (same
-	// limitation as the Authenticate TouchSession block).
 	case errors.Is(err, services.ErrUnauthorized):
 		writeError(writer, http.StatusUnauthorized, "unauthorized")
 	default:
 		writeError(writer, http.StatusInternalServerError, "internal_error")
 	}
-	// codecov:ignore:end
-	return false
 }
 
 func (s *Server) handleManagedSession(writer http.ResponseWriter, request *http.Request) {
@@ -1030,13 +1020,10 @@ func (s *Server) handlePutRecoveryKey(
 	if !decodeJSON(writer, request, &payload, 8<<10) {
 		return
 	}
-	if !s.confirmCurrentPassword(writer, request, account.ID, payload.CurrentPassword) {
-		return
-	}
-
 	recoveryKeyPackage, err := s.sync.PutRecoveryKeyPackage(
 		request.Context(),
 		account.ID,
+		stepUpFromRequest(request, payload.CurrentPassword),
 		services.PutRecoveryKeyPackageInput{
 			Algorithm:            payload.Algorithm,
 			KDF:                  payload.KDF,
@@ -1051,7 +1038,7 @@ func (s *Server) handlePutRecoveryKey(
 		case errors.Is(err, services.ErrInvalidRecoveryPackage):
 			writeError(writer, http.StatusBadRequest, "invalid_recovery_package")
 		default:
-			writeError(writer, http.StatusInternalServerError, "internal_error")
+			writeStepUpError(writer, err)
 		}
 		return
 	}

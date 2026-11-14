@@ -203,7 +203,7 @@ func TestChangePasswordStoreErrors(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("expected %q to surface, got %v", tc.wantErr, err)
 			}
-			if err := service.ConfirmCurrentPassword(ctx, result.AccountID, password); err != nil {
+			if _, err := verifyStepUp(ctx, store, result.AccountID, password); err != nil {
 				t.Fatalf("expected the old password to keep working: %v", err)
 			}
 			if tc.table != "sessions" {
@@ -244,7 +244,7 @@ func TestChangePasswordRefusesAfterTheCallersSessionWasRevoked(t *testing.T) {
 	if !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("expected ErrUnauthorized for a revoked caller session, got %v", err)
 	}
-	if err := service.ConfirmCurrentPassword(ctx, attacker.AccountID, password); err != nil {
+	if _, err := verifyStepUp(ctx, store, attacker.AccountID, password); err != nil {
 		t.Fatalf("expected the password unchanged: %v", err)
 	}
 	if _, err := store.FindSessionByTokenHash(ctx, security.HashToken(owner.SessionToken)); err != nil {

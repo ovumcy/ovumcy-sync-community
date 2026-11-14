@@ -435,6 +435,20 @@ func (s *Store) DeleteAccount(ctx context.Context, accountID string) error {
 		_ = tx.Rollback()
 	}()
 
+	if err := deleteAccountRows(ctx, tx, accountID); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit delete account: %w", err) // codecov:ignore -- on this store's single-connection sqlite (WAL, busy_timeout) a COMMIT whose statements all succeeded has no deterministically injectable in-process failure; needs a fake driver, the same deviation documented for DeleteLapsedManagedAccount's commit branch below.
+	}
+
+	return nil
+}
+
+// deleteAccountRows is DeleteAccount's body, run inside the caller's
+// transaction. ErrNotFound when the account row is already gone.
+func deleteAccountRows(ctx context.Context, tx *sql.Tx, accountID string) error {
 	childTables := []string{
 		"sessions",
 		"devices",
@@ -466,11 +480,6 @@ func (s *Store) DeleteAccount(ctx context.Context, accountID string) error {
 	if affected == 0 {
 		return ErrNotFound
 	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit delete account: %w", err) // codecov:ignore -- on this store's single-connection sqlite (WAL, busy_timeout) a COMMIT whose statements all succeeded has no deterministically injectable in-process failure; needs a fake driver, the same deviation documented for DeleteLapsedManagedAccount's commit branch below.
-	}
-
 	return nil
 }
 
@@ -1781,7 +1790,17 @@ func (s *Store) UpsertRecoveryKeyPackage(
 	ctx context.Context,
 	recoveryKeyPackage models.RecoveryKeyPackage,
 ) (models.RecoveryKeyPackage, error) {
-	_, err := s.db.ExecContext(
+	return upsertRecoveryKeyPackage(ctx, s.db, recoveryKeyPackage)
+}
+
+func upsertRecoveryKeyPackage(
+	ctx context.Context,
+	execer interface {
+		ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	},
+	recoveryKeyPackage models.RecoveryKeyPackage,
+) (models.RecoveryKeyPackage, error) {
+	_, err := execer.ExecContext(
 		ctx,
 		`
 INSERT INTO recovery_key_packages (

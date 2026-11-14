@@ -558,54 +558,33 @@ func (s *AuthService) RevokeSession(ctx context.Context, sessionToken string) er
 	return nil
 }
 
-// ConfirmCurrentPassword re-authenticates the session's owner before a write
-// a stolen session must not be able to make alone: account deletion and the
-// recovery-key overwrite. A wrong password returns the same
-// ErrInvalidCurrentPassword as every other step-up, after a full bcrypt
-// compare. Managed accounts have no password (sessions come only from the
-// managed bridge, whose own re-authentication stands in), so they pass.
-func (s *AuthService) ConfirmCurrentPassword(ctx context.Context, accountID string, currentPassword string) error {
-	account, err := s.store.FindAccountByID(ctx, accountID)
-	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			return ErrUnauthorized
-		}
-		return err
-	}
-
-	if account.Mode == "managed" {
-		return nil
-	}
-
-	if err := security.ComparePasswordHash(account.PasswordHash, currentPassword); err != nil {
-		return ErrInvalidCurrentPassword
-	}
-	return nil
-}
-
 // DeleteAccount permanently erases every row this server holds for
 // accountID: the account row, its sessions, its devices, its encrypted sync
 // blob, its wrapped recovery-key package, any pending password reset token,
-// and any pending TOTP login challenge. The delete runs in a single
-// transaction (db.Store.DeleteAccount) so a partial failure never leaves the
-// account half-erased.
+// and any pending TOTP login challenge — after the step-up re-authentication
+// (verifyStepUp), in a single transaction that also re-checks the verified
+// state (db.Store.DeleteAccountForSession), so a partial failure never leaves
+// the account half-erased and a password change or session revocation landing
+// during the bcrypt compare stops the erase.
 //
 // accountID must come from the caller's own authenticated session
 // (models.Account.ID from AuthService.Authenticate), never from a
 // client-supplied identifier, so one account can never erase another's data.
 //
-// Idempotent: calling this again after a successful delete is a no-op
-// success rather than an error, since the end state the caller wants
-// ("this account's data does not exist on the server") is already true.
-func (s *AuthService) DeleteAccount(ctx context.Context, accountID string) error {
-	if err := s.store.DeleteAccount(ctx, accountID); err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			return nil
-		}
-		return err
+// Idempotent: an account already gone is a no-op success, since the end state
+// the caller wants ("this account's data does not exist on the server") is
+// already true.
+func (s *AuthService) DeleteAccount(ctx context.Context, accountID string, stepUp StepUp) error {
+	account, err := verifyStepUp(ctx, s.store, accountID, stepUp.CurrentPassword)
+	if err == nil {
+		err = s.store.DeleteAccountForSession(ctx, accountID, account.PasswordHash, stepUp.SessionTokenHash)
 	}
-
-	return nil
+	// The account gone at the read (ErrUnauthorized) or at the write
+	// (db.ErrNotFound) is the end state the caller asked for.
+	if errors.Is(err, ErrUnauthorized) || errors.Is(err, db.ErrNotFound) {
+		return nil
+	}
+	return stepUpWriteError(err)
 }
 
 func (s *AuthService) CreateSessionForAccount(

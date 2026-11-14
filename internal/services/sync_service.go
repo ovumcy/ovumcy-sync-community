@@ -258,11 +258,21 @@ func (s *SyncService) GetBlob(ctx context.Context, accountID string) (models.Enc
 	return blob, nil
 }
 
+// PutRecoveryKeyPackage overwrites the account's wrapped recovery key after
+// the step-up re-authentication; the store re-checks the verified state in
+// the write's own transaction. The password is checked before the package is
+// validated, so a wrong password answers as such whatever the body holds.
 func (s *SyncService) PutRecoveryKeyPackage(
 	ctx context.Context,
 	accountID string,
+	stepUp StepUp,
 	input PutRecoveryKeyPackageInput,
 ) (models.RecoveryKeyPackage, error) {
+	account, err := verifyStepUp(ctx, s.store, accountID, stepUp.CurrentPassword)
+	if err != nil {
+		return models.RecoveryKeyPackage{}, err
+	}
+
 	algorithm := strings.TrimSpace(strings.ToLower(input.Algorithm))
 	kdf := strings.TrimSpace(strings.ToLower(input.KDF))
 	wrapNonceHex := strings.TrimSpace(strings.ToLower(input.WrapNonceHex))
@@ -296,7 +306,16 @@ func (s *SyncService) PutRecoveryKeyPackage(
 		UpdatedAt:            s.now().UTC(),
 	}
 
-	return s.store.UpsertRecoveryKeyPackage(ctx, recoveryKeyPackage)
+	stored, err := s.store.UpsertRecoveryKeyPackageForSession(
+		ctx,
+		recoveryKeyPackage,
+		account.PasswordHash,
+		stepUp.SessionTokenHash,
+	)
+	if err != nil {
+		return models.RecoveryKeyPackage{}, stepUpWriteError(err)
+	}
+	return stored, nil
 }
 
 func (s *SyncService) GetRecoveryKeyPackage(
