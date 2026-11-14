@@ -378,34 +378,40 @@ func (s *TOTPService) Disable(
 		return err
 	}
 
-	// codecov:ignore:start -- both branches below need the account row or the
-	// accounts table to fail specifically for THIS write, after
-	// FindAccountByID and ClaimTOTPStep above have already succeeded against
-	// the same table within this one synchronous call: the ErrNotFound case
-	// is a TOCTOU (same class as the managed_bridge_service.go precedents)
-	// and the generic case needs a fake driver (same same-table-multi-step
-	// limitation as the RowsAffected/COMMIT deviations in
-	// internal/db/fault_injection_test.go).
-	if err := s.store.UpdateTOTPSecretAndEnabled(ctx, accountID, "", false); err != nil {
+	// One transaction: the secret clears only while the password hash and the
+	// secret are still the ones verified above, and the challenges and every
+	// session go with it or not at all.
+	err = s.store.DisableTOTP(ctx, accountID, account.PasswordHash, account.TOTPSecretEncrypted)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, db.ErrConflict):
+		return s.disableConflictError(ctx, account)
+	case errors.Is(err, db.ErrNotFound):
+		return ErrUnauthorized // codecov:ignore -- the account would have to be deleted between ClaimTOTPStep above and this write within one synchronous call; a TOCTOU, same class as the managed_bridge_service.go precedents.
+	}
+	return err
+}
+
+// disableConflictError names what moved under a Disable whose CAS missed: a
+// concurrent disable leaves nothing to disable, a password change/reset makes
+// the verified password stale, and a disable-and-re-enroll makes the verified
+// code belong to a secret that no longer exists.
+func (s *TOTPService) disableConflictError(ctx context.Context, verified models.Account) error {
+	current, err := s.store.FindAccountByID(ctx, verified.ID)
+	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			return ErrUnauthorized
+			return ErrUnauthorized // codecov:ignore -- the account would have to be deleted between the conflicting DisableTOTP and this read within one synchronous call; a TOCTOU, same class as the managed_bridge_service.go precedents.
 		}
-		return err
+		return err // codecov:ignore -- the DisableTOTP transaction on "accounts" just ran within this same call, so isolating a read failure here needs a fake driver.
 	}
-	// codecov:ignore:end
-
-	// Challenges go first: a verify consumes its challenge in the transaction
-	// that inserts its session, so once they are gone no new session can
-	// appear after the revoke below. A failed challenge delete must not skip
-	// the revoke — TOTP is already off, so a retry would never reach it — so
-	// its error is returned only after it.
-	challengeErr := s.store.DeleteTOTPChallengesForAccount(ctx, accountID)
-
-	if err := s.store.DeleteAllSessionsForAccount(ctx, accountID); err != nil {
-		return err
+	switch {
+	case !current.TOTPEnabled:
+		return ErrTOTPNotConfigured
+	case current.PasswordHash != verified.PasswordHash:
+		return ErrInvalidCurrentPassword
 	}
-
-	return challengeErr
+	return ErrTOTPInvalidCode
 }
 
 // VerifyAccountCode is the step-up check for an enrolled account on a route

@@ -1034,6 +1034,67 @@ func (s *Store) UpdateTOTPSecretAndEnabled(
 	return nil
 }
 
+// DisableTOTP clears the TOTP secret, deletes the account's login challenges
+// and revokes every session in one transaction. The clear applies only while
+// the password hash and the enabled secret are still the ones the caller
+// verified: a password change/reset or a disable-and-re-enroll that commits
+// first makes it change nothing (ErrConflict). ErrNotFound when the account
+// is gone. A failed cleanup rolls the clear back, so TOTP stays on and a retry
+// redoes all of it.
+func (s *Store) DisableTOTP(
+	ctx context.Context,
+	accountID string,
+	verifiedPasswordHash string,
+	verifiedSecretEncrypted string,
+) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin disable totp: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	result, err := tx.ExecContext(
+		ctx,
+		`UPDATE accounts SET totp_secret_encrypted = '', totp_enabled = 0, totp_last_used_step = 0
+		 WHERE id = ? AND password_hash = ? AND totp_enabled = 1 AND totp_secret_encrypted = ?`,
+		accountID,
+		verifiedPasswordHash,
+		verifiedSecretEncrypted,
+	)
+	if err != nil {
+		return fmt.Errorf("disable totp: %w", err)
+	}
+	if err := requireOneRow(result, "disable totp"); err != nil {
+		var one int
+		if lookupErr := tx.QueryRowContext(ctx, `SELECT 1 FROM accounts WHERE id = ?`, accountID).Scan(&one); lookupErr != nil {
+			if errors.Is(lookupErr, sql.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("disable totp account lookup: %w", lookupErr) // codecov:ignore -- the UPDATE above on "accounts" inside this transaction already succeeded, so a failure isolated to this SELECT needs a fake driver (same same-table-multi-step limitation as the RowsAffected/COMMIT deviations in fault_injection_test.go).
+		}
+		return ErrConflict
+	}
+
+	for _, cleanup := range []struct {
+		query string
+		what  string
+	}{
+		{`DELETE FROM totp_challenges WHERE account_id = ?`, "delete totp challenges on disable"},
+		{`DELETE FROM sessions WHERE account_id = ?`, "delete all sessions on disable"},
+	} {
+		if _, err := tx.ExecContext(ctx, cleanup.query, accountID); err != nil {
+			return fmt.Errorf("%s: %w", cleanup.what, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit disable totp: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteAccount's COMMIT branch in fault_injection_test.go.
+	}
+	return nil
+}
+
 // StorePendingTOTPSecret writes a fresh pending secret (totp_enabled stays 0,
 // totp_last_used_step resets to 0) only while TOTP is still off: an enrollment
 // start that read "disabled" before a concurrent verify committed must not
