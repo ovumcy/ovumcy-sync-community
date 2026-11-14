@@ -79,7 +79,11 @@ snapshot.
   insert, so a taken and a free login cost the same bcrypt work. The route is
   rate-limited per client IP only (there is no per-login bucket), and probing a
   free login creates that account. Login and forgot-password stay
-  enumeration-safe.
+  enumeration-safe. Pinned by `TestServerRegisterRejectsDuplicateLogin`
+  ([internal/api/server_test.go](internal/api/server_test.go)) and
+  `TestAuthServiceDuplicateRegistrationIsGeneric`
+  ([internal/services/auth_service_test.go](internal/services/auth_service_test.go)),
+  whose "generic" means the error carries no detail beyond the refusal.
 - **`managed:` login namespace.** Public registration cannot claim the
   `managed:` prefix, while bridge-provisioned logins use it by design behind
   the `MANAGED_BRIDGE_TOKEN` gate.
