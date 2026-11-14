@@ -44,7 +44,6 @@ services:
       - edge
     labels:
       - traefik.enable=true
-      - traefik.docker.network=ovumcy-sync-edge
       - traefik.http.services.ovumcy-sync.loadbalancer.server.port=8080
 
       # Public API.
@@ -71,7 +70,6 @@ services:
 
 networks:
   edge:
-    name: ovumcy-sync-edge
     ipam:
       config:
         - subnet: "${SYNC_EDGE_SUBNET:-172.30.98.0/24}"

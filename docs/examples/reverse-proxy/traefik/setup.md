@@ -22,7 +22,7 @@ The override drops the base file's `127.0.0.1:8080` host mapping (`ports: !reset
 - **Client address.** The entrypoint does not trust inbound `X-Forwarded-*` headers
   (`forwardedheaders.insecure=false`), so Traefik replaces them with the connecting client's
   address. The server honours them only from `TRUSTED_PROXY_CIDRS`.
-- **`TRUSTED_PROXY_CIDRS`** is Traefik's own address, pinned on the `ovumcy-sync-edge` network
+- **`TRUSTED_PROXY_CIDRS`** is Traefik's own address, pinned on the override's `edge` network (Traefik's only network, so it reaches the app there)
   (`SYNC_PROXY_IP`, default `172.30.98.10`, inside `SYNC_EDGE_SUBNET`, default `172.30.98.0/24`).
   Trusting the whole subnet would let any other container on it choose its own rate-limit key.
   Without a trusted proxy all users share one rate-limit bucket and get `429 rate_limited`; see
