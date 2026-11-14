@@ -214,7 +214,16 @@ func TestTOTPAccountFieldMethodsHappyPathAndNotFound(t *testing.T) {
 		t.Fatal("expected a lower step claim to be rejected")
 	}
 
-	if err := store.EnableTOTPAndRotateRecoveryCode(ctx, target.ID, "rotated-recovery-hash"); err != nil {
+	// A secret other than the pending one is refused: a concurrent
+	// StartEnrollment must not get its fresh secret enabled unverified.
+	if err := store.EnableTOTPAndRotateRecoveryCode(ctx, target.ID, "superseded-secret", "rotated-recovery-hash", ""); !errors.Is(err, ErrTOTPPendingSecretChanged) {
+		t.Fatalf("expected ErrTOTPPendingSecretChanged for a superseded secret, got %v", err)
+	}
+	if pending, err := store.FindAccountByID(ctx, target.ID); err != nil || pending.TOTPEnabled || pending.RecoveryCodeHash != target.RecoveryCodeHash {
+		t.Fatalf("expected the refused enable to change nothing, got %#v err=%v", pending, err)
+	}
+
+	if err := store.EnableTOTPAndRotateRecoveryCode(ctx, target.ID, "encrypted-secret-placeholder", "rotated-recovery-hash", ""); err != nil {
 		t.Fatalf("enable totp: %v", err)
 	}
 	afterEnable, err := store.FindAccountByID(ctx, target.ID)
@@ -233,7 +242,7 @@ func TestTOTPAccountFieldMethodsHappyPathAndNotFound(t *testing.T) {
 		t.Fatalf("expected claimed step to survive the enable, got %d", afterEnable.TOTPLastUsedStep)
 	}
 	// A second enable loses the totp_enabled = 0 guard and leaves the hash alone.
-	if err := store.EnableTOTPAndRotateRecoveryCode(ctx, target.ID, "second-hash"); !errors.Is(err, ErrConflict) {
+	if err := store.EnableTOTPAndRotateRecoveryCode(ctx, target.ID, "encrypted-secret-placeholder", "second-hash", ""); !errors.Is(err, ErrConflict) {
 		t.Fatalf("expected ErrConflict for an already-enabled account, got %v", err)
 	}
 	if again, err := store.FindAccountByID(ctx, target.ID); err != nil || again.RecoveryCodeHash != "rotated-recovery-hash" {
@@ -251,7 +260,7 @@ func TestTOTPAccountFieldMethodsHappyPathAndNotFound(t *testing.T) {
 	if err := store.UpdateTOTPSecretAndEnabled(ctx, "missing-account", "secret", false); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for missing account totp secret update, got %v", err)
 	}
-	if err := store.EnableTOTPAndRotateRecoveryCode(ctx, "missing-account", "hash"); !errors.Is(err, ErrNotFound) {
+	if err := store.EnableTOTPAndRotateRecoveryCode(ctx, "missing-account", "secret", "hash", ""); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for missing account totp enable, got %v", err)
 	}
 	if claimed, err := store.ClaimTOTPStep(ctx, "missing-account", 1); err != nil || claimed {
@@ -272,7 +281,7 @@ func TestTOTPAccountFieldMethodsReturnErrorWhenAccountsTableIsDropped(t *testing
 	if err := store.UpdateTOTPSecretAndEnabled(ctx, target.ID, "secret", true); err == nil {
 		t.Fatal("expected error updating totp secret after accounts table is dropped")
 	}
-	if err := store.EnableTOTPAndRotateRecoveryCode(ctx, target.ID, "hash"); err == nil {
+	if err := store.EnableTOTPAndRotateRecoveryCode(ctx, target.ID, "secret", "hash", ""); err == nil {
 		t.Fatal("expected error enabling totp after accounts table is dropped")
 	}
 	if _, err := store.ClaimTOTPStep(ctx, target.ID, 1); err == nil {
