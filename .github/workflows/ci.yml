@@ -170,7 +170,7 @@ jobs:
     name: race
     runs-on: ubuntu-latest
     # The slowest lane of the battery (bcrypt cost 12 under the race
-    # detector, -timeout=25m) — the main beneficiary of the skip.
+    # detector, -timeout=45m) — the main beneficiary of the skip.
     needs: go-relevance
     if: needs.go-relevance.outputs.run == 'true'
     permissions:
@@ -197,9 +197,9 @@ jobs:
         # Explicit -timeout above Go's 10m default: instrumented under -race the
         # internal/api and internal/services suites (bcrypt cost 12 on every
         # account) run close to the wall, and the default limit leaves no
-        # headroom. This only widens the deadline; it never relaxes the race
-        # detector itself.
-        run: go test -race -timeout=25m ./...
+        # headroom; internal/services alone reached 22-25 min under -race. This
+        # only widens the deadline; it never relaxes the race detector itself.
+        run: go test -race -timeout=45m ./...
 
   coverage-upload:
     name: coverage-upload
