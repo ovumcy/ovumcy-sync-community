@@ -87,8 +87,8 @@ the strength of the phrase and the client KDF, which are client concerns and out
 - Residual: a stolen token is valid until expiry or revocation. A session binds to the first device
   it attaches and cannot attach another, so removing that device revokes it; but the device id is
   client-asserted, so a holder replaying the token under the same id is indistinguishable, and a
-  session that never attached is cut off only by a password change. A holder can read and overwrite
-  that account's blob.
+  session that never attached is cut off only by an account-wide revocation (password change or
+  reset, TOTP enable or disable). A holder can read and overwrite that account's blob.
 
 ### Other account holder (IDOR)
 
