@@ -716,7 +716,9 @@ func (s *Server) handleLogout(writer http.ResponseWriter, request *http.Request)
 			return
 		}
 		// A store failure must not tell the client its session is gone: it
-		// would drop the token while the session stays live server-side.
+		// would drop the token while the session stays live server-side. Nor
+		// is it the caller's attempt to charge.
+		s.authLimiter.Refund(request.URL.Path + ":" + s.clientIPForRateLimit(request))
 		writeError(writer, http.StatusInternalServerError, "internal_error")
 		return
 	}
@@ -1226,6 +1228,11 @@ func (r *statusRecorder) WriteHeader(code int) {
 		r.code = code
 	}
 	r.ResponseWriter.WriteHeader(code)
+}
+
+// Unwrap lets http.ResponseController reach the underlying writer.
+func (r *statusRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
 }
 
 // requireSyncEnabled gates the device, recovery-key and blob routes (inside
