@@ -387,16 +387,14 @@ func (s *TOTPService) Disable(
 	}
 	// codecov:ignore:end
 
-	if err := s.store.DeleteAllSessionsForAccount(ctx, accountID); err != nil {
-		return err
-	}
-
-	// Any in-flight TOTP challenges for this account are now meaningless.
+	// Challenges go first: a verify consumes its challenge in the transaction
+	// that inserts its session, so once they are gone no new session can
+	// appear after the revoke below.
 	if err := s.store.DeleteTOTPChallengesForAccount(ctx, accountID); err != nil {
 		return err
 	}
 
-	return nil
+	return s.store.DeleteAllSessionsForAccount(ctx, accountID)
 }
 
 // VerifyAccountCode is the step-up check for an enrolled account on a route
