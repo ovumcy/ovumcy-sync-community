@@ -28,7 +28,9 @@ line, and both pass through `sanitizeLogValue` (`internal/api/server.go`). It re
 - the C1 range 0x80-0x9F, because a percent-decoded path can carry U+009B, a single-character CSI
   that a UTF-8 terminal executes like an escape sequence;
 - the Unicode format category (Cf), which includes bidirectional overrides that reorder how a line
-  is displayed.
+  is displayed;
+- the line and paragraph separators U+2028/U+2029 (Zl, Zp), which JSON and JavaScript log viewers
+  break lines on like LF.
 
 This closes log forging by line breaks (CWE-117) and terminal-escape injection. Printable runes,
 including non-ASCII text, are kept. The query string is not logged.
