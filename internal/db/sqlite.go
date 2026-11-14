@@ -18,9 +18,13 @@ type Store struct {
 }
 
 func Open(path string) (*Store, error) {
-	if path != ":memory:" {
+	inMemory := isInMemoryPath(path)
+	if !inMemory {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return nil, fmt.Errorf("create db dir: %w", err)
+		}
+		if err := createPlainDBFileOwnerOnly(path); err != nil {
+			return nil, err
 		}
 	}
 
@@ -29,7 +33,11 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("open sqlite: %w", err) // codecov:ignore -- database/sql.Open validates only that the driver name is registered; it never dials the DSN (that happens lazily on first use, exercised by the "configure sqlite" Ping just below). "sqlite" is always registered via the blank modernc.org/sqlite import, so this can only fail on a broken build, not any runtime path input. Cannot occur in practice.
 	}
 
-	database.SetConnMaxLifetime(30 * time.Minute)
+	// An in-memory database lives and dies with its one connection: retiring
+	// it would silently start over on an empty, unmigrated database.
+	if !inMemory {
+		database.SetConnMaxLifetime(30 * time.Minute)
+	}
 	database.SetMaxIdleConns(1)
 	database.SetMaxOpenConns(1)
 
@@ -43,12 +51,32 @@ func Open(path string) (*Store, error) {
 	return &Store{db: database}, nil
 }
 
+func isInMemoryPath(path string) bool {
+	return path == ":memory:" || strings.HasPrefix(path, "file::memory:") || strings.Contains(path, "mode=memory")
+}
+
+// createPlainDBFileOwnerOnly creates a missing database file as 0600 before
+// SQLite opens it: SQLite would create it under the process umask (commonly
+// 0644), and it gives the -wal and -shm files the main file's mode. URI and
+// query paths are left to SQLite. An existing file keeps its mode.
+func createPlainDBFileOwnerOnly(path string) error {
+	if strings.HasPrefix(path, "file:") || strings.Contains(path, "?") {
+		return nil
+	}
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600) // #nosec G304 -- DB_PATH is operator config
+	if err != nil {
+		return fmt.Errorf("create db file: %w", err)
+	}
+	return file.Close()
+}
+
 // connectionPragmas run on every connection the pool dials. They live in the
 // DSN, not in a one-off Exec, because foreign_keys and busy_timeout are
 // per-connection settings and SetConnMaxLifetime replaces the connection such
 // an Exec configured: from then on writes would run with foreign keys off and
-// no busy wait.
-const connectionPragmas = "_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)"
+// no busy wait. secure_delete zeroes freed pages, so a deleted account's
+// ciphertext and hashes do not linger in a copied database file.
+const connectionPragmas = "_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=secure_delete(1)"
 
 // sqliteDSN appends connectionPragmas to the configured path. modernc.org/sqlite
 // splits the DSN at the first '?' and opens everything before it as a plain
