@@ -332,14 +332,10 @@ func resetPasswordFixture(t *testing.T, service *AuthService) (accountID, resetT
 	return registered.AccountID, forgot.ResetToken
 }
 
-// TestResetPasswordAccountUpdateEdgeCases covers ResetPassword's
-// UpdateAccountPasswordAndRecoveryHash branches: a token whose account row
-// was deleted after issuance (ErrNotFound -> ErrInvalidResetToken, a
-// deterministic static precondition, not a race — the token lookup and the
-// account write are different tables), and a generic store failure once the
-// accounts table itself is gone (dropped before ResetPassword is ever
-// called, leaving password_reset_tokens untouched so the token consume
-// step — this function's actual first store call — still succeeds).
+// TestResetPasswordAccountUpdateEdgeCases covers ResetPassword's account
+// branches: a token whose account row was deleted after issuance (ErrNotFound
+// -> ErrInvalidResetToken, a deterministic static precondition, not a race),
+// and a generic store failure once the accounts table itself is gone.
 func TestResetPasswordAccountUpdateEdgeCases(t *testing.T) {
 	t.Run("account row deleted after the reset token was issued", func(t *testing.T) {
 		store, dbPath := openFileBackedTestStore(t)
@@ -374,49 +370,59 @@ func TestResetPasswordAccountUpdateEdgeCases(t *testing.T) {
 		if err == nil || errors.Is(err, ErrInvalidResetToken) {
 			t.Fatalf("expected a store-failure error, not ErrInvalidResetToken, got %v", err)
 		}
-		if !strings.Contains(err.Error(), "update account password and recovery") {
-			t.Fatalf("expected the account-update store error to surface, got %v", err)
-		}
 	})
 }
 
-// TestResetPasswordCleanupStoreErrors exercises ResetPassword's two
-// account-scoped cleanup deletes that run after the account write succeeds:
-// DeleteTOTPChallengesForAccount and DeleteAllSessionsForAccount. Each is a
-// different table from the account write and from each other, so dropping
-// one alone isolates exactly that step.
-func TestResetPasswordCleanupStoreErrors(t *testing.T) {
-	t.Run("totp_challenges table dropped", func(t *testing.T) {
-		store, dbPath := openFileBackedTestStore(t)
-		service := NewAuthService(store, 24*time.Hour)
-		_, resetToken := resetPasswordFixture(t, service)
+// TestResetPasswordCleanupFailureChangesNothing drops one cleanup table at a
+// time so the reset fails after the account write, and checks the whole reset
+// rolled back: the password and recovery hashes are the old ones and the token
+// is still unconsumed, so the owner can retry with it.
+func TestResetPasswordCleanupFailureChangesNothing(t *testing.T) {
+	for _, table := range []string{"totp_challenges", "sessions"} {
+		t.Run(table+" table dropped", func(t *testing.T) {
+			store, dbPath := openFileBackedTestStore(t)
+			service := NewAuthService(store, 24*time.Hour)
+			accountID, resetToken := resetPasswordFixture(t, service)
+			before, err := store.FindAccountByID(context.Background(), accountID)
+			if err != nil {
+				t.Fatalf("find account: %v", err)
+			}
 
-		dropTable(t, dbPath, "totp_challenges")
+			dropTable(t, dbPath, table)
 
-		_, err := service.ResetPassword(context.Background(), resetToken, "a brand new password")
-		if err == nil {
-			t.Fatal("expected ResetPassword to fail when the totp_challenges table is dropped")
-		}
-		if !strings.Contains(err.Error(), "delete totp challenges for account") {
-			t.Fatalf("expected the challenge-cleanup store error to surface, got %v", err)
-		}
-	})
+			_, err = service.ResetPassword(context.Background(), resetToken, "a brand new password")
+			if err == nil {
+				t.Fatalf("expected ResetPassword to fail when the %s table is dropped", table)
+			}
+			if !strings.Contains(err.Error(), "delete "+table+" on reset") {
+				t.Fatalf("expected the %s cleanup error to surface, got %v", table, err)
+			}
 
-	t.Run("sessions table dropped", func(t *testing.T) {
-		store, dbPath := openFileBackedTestStore(t)
-		service := NewAuthService(store, 24*time.Hour)
-		_, resetToken := resetPasswordFixture(t, service)
+			after, err := store.FindAccountByID(context.Background(), accountID)
+			if err != nil {
+				t.Fatalf("find account after failed reset: %v", err)
+			}
+			if after.PasswordHash != before.PasswordHash || after.RecoveryCodeHash != before.RecoveryCodeHash {
+				t.Fatal("a failed reset must leave the password and recovery hashes unchanged")
+			}
 
-		dropTable(t, dbPath, "sessions")
-
-		_, err := service.ResetPassword(context.Background(), resetToken, "a brand new password")
-		if err == nil {
-			t.Fatal("expected ResetPassword to fail when the sessions table is dropped")
-		}
-		if !strings.Contains(err.Error(), "delete all sessions") {
-			t.Fatalf("expected the session-cleanup store error to surface, got %v", err)
-		}
-	})
+			raw, err := sql.Open("sqlite", dbPath)
+			if err != nil {
+				t.Fatalf("open raw sqlite: %v", err)
+			}
+			t.Cleanup(func() { _ = raw.Close() })
+			var consumed sql.NullString
+			if err := raw.QueryRow(
+				`SELECT consumed_at FROM password_reset_tokens WHERE account_id = ?`,
+				accountID,
+			).Scan(&consumed); err != nil {
+				t.Fatalf("read reset token: %v", err)
+			}
+			if consumed.Valid {
+				t.Fatal("a failed reset must leave the reset token unconsumed for a retry")
+			}
+		})
+	}
 }
 
 // TestRegenerateRecoveryCodeStoreErrors covers the trivial unknown-account

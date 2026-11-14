@@ -181,32 +181,85 @@ func (s *Store) UpgradeAccountPasswordHash(
 	return nil
 }
 
-func (s *Store) UpdateAccountPasswordAndRecoveryHash(
+// ResetAccountCredentials completes a recovery-code reset in one transaction:
+// it claims the reset token (same CAS as ConsumePasswordResetToken), sets the
+// new password and recovery-code hashes, clears TOTP, and deletes the
+// account's TOTP challenges, sessions and reset tokens. Any failure rolls all
+// of it back, so the token stays usable for a retry and the old recovery code
+// stays valid — the new one is never committed without being handed out.
+// Returns the account id, or ErrNotFound when the token is unknown, consumed,
+// expired, or its account no longer exists.
+func (s *Store) ResetAccountCredentials(
 	ctx context.Context,
-	accountID string,
+	tokenHash string,
+	now time.Time,
 	passwordHash string,
 	recoveryCodeHash string,
-) error {
-	result, err := s.db.ExecContext(
+) (string, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", fmt.Errorf("begin reset account credentials: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	nowFormatted := now.UTC().Format(time.RFC3339Nano)
+	var accountID string
+	if err := tx.QueryRowContext(
 		ctx,
-		`UPDATE accounts SET password_hash = ?, recovery_code_hash = ? WHERE id = ?`,
+		`UPDATE password_reset_tokens
+		 SET consumed_at = ?
+		 WHERE token_hash = ?
+		   AND consumed_at IS NULL
+		   AND expires_at > ?
+		 RETURNING account_id`,
+		nowFormatted,
+		tokenHash,
+		nowFormatted,
+	).Scan(&accountID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrNotFound
+		}
+		return "", fmt.Errorf("consume password reset token: %w", err)
+	}
+
+	result, err := tx.ExecContext(
+		ctx,
+		`UPDATE accounts
+		 SET password_hash = ?, recovery_code_hash = ?,
+		     totp_secret_encrypted = '', totp_enabled = 0, totp_last_used_step = 0
+		 WHERE id = ?`,
 		passwordHash,
 		recoveryCodeHash,
 		accountID,
 	)
 	if err != nil {
-		return fmt.Errorf("update account password and recovery: %w", err)
+		return "", fmt.Errorf("update account password and recovery: %w", err)
 	}
-
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("update account password and recovery rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); needs a fake driver, the same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
+		return "", fmt.Errorf("update account password and recovery rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); needs a fake driver, the same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
 	}
 	if affected == 0 {
-		return ErrNotFound
+		return "", ErrNotFound
 	}
 
-	return nil
+	for _, table := range []string{"totp_challenges", "sessions", "password_reset_tokens"} {
+		if _, err := tx.ExecContext(
+			ctx,
+			`DELETE FROM `+table+` WHERE account_id = ?`, // #nosec G202 -- table ranges only over the fixed literal list above, never user input; account_id is bound as a placeholder
+			accountID,
+		); err != nil {
+			return "", fmt.Errorf("delete %s on reset: %w", table, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("commit reset account credentials: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteAccount's COMMIT branch in fault_injection_test.go.
+	}
+
+	return accountID, nil
 }
 
 // UpdateAccountRecoveryCodeHash rotates the recovery code hash and deletes the

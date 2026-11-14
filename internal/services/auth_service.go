@@ -414,7 +414,8 @@ func (s *AuthService) ForgotPassword(
 
 // ResetPassword consumes a reset token and rotates both password and recovery
 // code. On success: token is deleted, every existing session of the account is
-// revoked, and a freshly generated recovery code is returned in plaintext.
+// revoked, TOTP is cleared, and a freshly generated recovery code is returned
+// in plaintext — all in one transaction, so a failure changes nothing.
 func (s *AuthService) ResetPassword(
 	ctx context.Context,
 	resetToken string,
@@ -430,14 +431,8 @@ func (s *AuthService) ResetPassword(
 		return PasswordResetResult{}, ErrWeakNewPassword
 	}
 
-	tokenRecord, err := s.store.ConsumePasswordResetToken(ctx, security.HashToken(resetToken), s.now().UTC())
-	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			return PasswordResetResult{}, ErrInvalidResetToken
-		}
-		return PasswordResetResult{}, err
-	}
-
+	// Hashed before the transaction so no write lock is held across bcrypt;
+	// the cost on an invalid token is the one login already pays.
 	newPasswordHash, err := security.HashPassword(newPassword)
 	if err != nil {
 		return PasswordResetResult{}, err // codecov:ignore -- newPassword already passed ValidatePassword above, and HashPassword cannot fail on validated input (see its own codecov:ignore on the bcrypt error).
@@ -448,9 +443,15 @@ func (s *AuthService) ResetPassword(
 		return PasswordResetResult{}, err // codecov:ignore -- crypto-primitive error that cannot occur in practice (see internal/security/password.go's own codecov:ignore annotation on NewRecoveryCode's internal rand.Read).
 	}
 
-	if err := s.store.UpdateAccountPasswordAndRecoveryHash(
+	// Recovery-code-driven reset is also the documented fallback for a lost
+	// authenticator app, so the store clears TOTP with the credentials: whoever
+	// proves possession of the recovery code already has full account control,
+	// and keeping TOTP past reset would turn a recoverable situation into a
+	// lock-out.
+	if _, err := s.store.ResetAccountCredentials(
 		ctx,
-		tokenRecord.AccountID,
+		security.HashToken(resetToken),
+		s.now().UTC(),
 		newPasswordHash,
 		recoveryHash,
 	); err != nil {
@@ -458,32 +459,6 @@ func (s *AuthService) ResetPassword(
 			return PasswordResetResult{}, ErrInvalidResetToken
 		}
 		return PasswordResetResult{}, err
-	}
-
-	// Recovery-code-driven reset is also the documented fallback for a lost
-	// authenticator app: proving control of the account-level recovery code
-	// disables 2FA so the owner is not permanently locked out. The recovery
-	// code is the catch-all credential — anyone who can prove possession of
-	// it already has full account control, so keeping TOTP enabled past
-	// reset would only convert a recoverable situation into a lock-out.
-	if err := s.store.UpdateTOTPSecretAndEnabled(
-		ctx,
-		tokenRecord.AccountID,
-		"",
-		false,
-	); err != nil && !errors.Is(err, db.ErrNotFound) {
-		return PasswordResetResult{}, err // codecov:ignore -- UpdateAccountPasswordAndRecoveryHash above already touches "accounts" within this same call, so isolating a second, later accounts-table failure here needs a fake driver.
-	}
-	if err := s.store.DeleteTOTPChallengesForAccount(ctx, tokenRecord.AccountID); err != nil {
-		return PasswordResetResult{}, err
-	}
-
-	if err := s.store.DeleteAllSessionsForAccount(ctx, tokenRecord.AccountID); err != nil {
-		return PasswordResetResult{}, err
-	}
-
-	if err := s.store.DeletePasswordResetTokensForAccount(ctx, tokenRecord.AccountID); err != nil {
-		return PasswordResetResult{}, err // codecov:ignore -- ConsumePasswordResetToken above already touches "password_reset_tokens" as this function's first store call, so isolating a second, later failure on that same table here needs a fake driver.
 	}
 
 	return PasswordResetResult{RecoveryCode: plainRecovery}, nil
