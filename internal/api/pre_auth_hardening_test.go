@@ -105,9 +105,19 @@ func TestLogoutStoreFailureIsInternalError(t *testing.T) {
 		t.Fatalf("close store: %v", err)
 	}
 
-	response := sendRaw(handler, http.MethodDelete, "/auth/session", "", session)
-	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "internal_error") {
-		t.Fatalf("status %d body %s, want 500 internal_error", response.Code, response.Body.String())
+	// More failures than the logout budget: each stays a 500, never a 429.
+	for i := 0; i <= 10; i++ {
+		response := sendRaw(handler, http.MethodDelete, "/auth/session", "", session)
+		if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "internal_error") {
+			t.Fatalf("request %d: status %d body %s, want 500 internal_error", i+1, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestStatusRecorderUnwrapsToTheUnderlyingWriter(t *testing.T) {
+	inner := httptest.NewRecorder()
+	if got := (&statusRecorder{ResponseWriter: inner}).Unwrap(); got != inner {
+		t.Fatalf("Unwrap() = %v, want the wrapped writer", got)
 	}
 }
 
