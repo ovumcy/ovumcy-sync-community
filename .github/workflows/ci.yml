@@ -268,7 +268,11 @@ jobs:
           path: .
 
       - name: Fetch base branch
-        run: git fetch --no-tags origin ${{ github.event.pull_request.base.ref }}
+        # Through env, never interpolated into the script: a ref name is text
+        # the shell must not parse.
+        env:
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+        run: git fetch --no-tags origin "refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"
 
       - name: Enforce patch coverage
         # Fails when a modified, coverable Go line is not covered by tests. This
@@ -294,7 +298,12 @@ jobs:
       - name: Docker Compose config with Caddy example
         env:
           SYNC_SITE_ADDRESS: sync.example.com
-        run: docker compose -f docker-compose.yml -f docker-compose.caddy.yml config
+        run: |
+          set -euo pipefail
+          config=$(docker compose -f docker-compose.yml -f docker-compose.caddy.yml config --format json)
+          # Caddy must be the only way in: the app publishes no host port.
+          ports=$(echo "$config" | jq '.services["ovumcy-sync-community"].ports // [] | length')
+          [ "$ports" = "0" ] || { echo "app still publishes $ports port(s) under the Caddy example"; exit 1; }
 
       - name: Caddy example refuses to start without a site address
         run: |
