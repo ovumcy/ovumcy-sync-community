@@ -827,6 +827,119 @@ func (s *Store) CreateSession(ctx context.Context, session models.Session) (mode
 	return session, nil
 }
 
+// CreateSessionForVerifiedPassword inserts the session only while the
+// account's password hash still equals verifiedHash. A password change or
+// reset that commits first makes it insert nothing (ErrNotFound); one that
+// commits after deletes the session with the rest. Either way no session
+// minted from the old password survives the change.
+func (s *Store) CreateSessionForVerifiedPassword(
+	ctx context.Context,
+	session models.Session,
+	verifiedHash string,
+) error {
+	result, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO sessions (id, account_id, token_hash, created_at, last_seen_at, expires_at)
+		 SELECT ?, id, ?, ?, ?, ? FROM accounts WHERE id = ? AND password_hash = ?`,
+		session.ID,
+		session.TokenHash,
+		session.CreatedAt.UTC().Format(time.RFC3339Nano),
+		session.LastSeenAt.UTC().Format(time.RFC3339Nano),
+		session.ExpiresAt.UTC().Format(time.RFC3339Nano),
+		session.AccountID,
+		verifiedHash,
+	)
+	if err != nil {
+		return fmt.Errorf("insert session for verified password: %w", err)
+	}
+	return requireOneRow(result, "insert session for verified password")
+}
+
+// CreateTOTPChallengeForVerifiedPassword is the challenge counterpart of
+// CreateSessionForVerifiedPassword: the login challenge is inserted only
+// while the password hash still equals verifiedHash.
+func (s *Store) CreateTOTPChallengeForVerifiedPassword(
+	ctx context.Context,
+	challenge models.TOTPChallenge,
+	verifiedHash string,
+) error {
+	result, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO totp_challenges (challenge_id_hash, account_id, created_at, expires_at)
+		 SELECT ?, id, ?, ? FROM accounts WHERE id = ? AND password_hash = ?`,
+		challenge.ChallengeIDHash,
+		challenge.CreatedAt.UTC().Format(time.RFC3339Nano),
+		challenge.ExpiresAt.UTC().Format(time.RFC3339Nano),
+		challenge.AccountID,
+		verifiedHash,
+	)
+	if err != nil {
+		return fmt.Errorf("insert totp challenge for verified password: %w", err)
+	}
+	return requireOneRow(result, "insert totp challenge for verified password")
+}
+
+// ConsumeTOTPChallengeAndCreateSession deletes the challenge and inserts the
+// session in one transaction. The delete must remove exactly one row, so two
+// verifies racing on one challenge yield one session, and a password change
+// or reset that already deleted the account's challenges yields none.
+// ErrNotFound when the challenge is already gone.
+func (s *Store) ConsumeTOTPChallengeAndCreateSession(
+	ctx context.Context,
+	challengeIDHash string,
+	session models.Session,
+) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin consume totp challenge: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	result, err := tx.ExecContext(
+		ctx,
+		`DELETE FROM totp_challenges WHERE challenge_id_hash = ? AND account_id = ?`,
+		challengeIDHash,
+		session.AccountID,
+	)
+	if err != nil {
+		return fmt.Errorf("consume totp challenge: %w", err)
+	}
+	if err := requireOneRow(result, "consume totp challenge"); err != nil {
+		return err
+	}
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO sessions (id, account_id, token_hash, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		session.ID,
+		session.AccountID,
+		session.TokenHash,
+		session.CreatedAt.UTC().Format(time.RFC3339Nano),
+		session.LastSeenAt.UTC().Format(time.RFC3339Nano),
+		session.ExpiresAt.UTC().Format(time.RFC3339Nano),
+	); err != nil {
+		return fmt.Errorf("insert session for totp challenge: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit consume totp challenge: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteAccount's COMMIT branch in fault_injection_test.go.
+	}
+	return nil
+}
+
+func requireOneRow(result sql.Result, op string) error {
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("%s rows: %w", op, err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); needs a fake driver, the same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) FindSessionByTokenHash(ctx context.Context, tokenHash string) (models.Session, error) {
 	row := s.db.QueryRowContext(
 		ctx,

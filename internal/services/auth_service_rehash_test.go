@@ -180,8 +180,8 @@ func TestLoginSucceedsWhenRehashCannotProduceNewHash(t *testing.T) {
 // TestLoginRehashDoesNotRollBackAConcurrentPasswordChange lands a password
 // change inside the re-hash window (between the login's verify and its
 // upgrade write). The change must win: the stored hash stays the new
-// password's, the old password stops working, and the login itself still
-// succeeds because it verified before the change.
+// password's, the old password stops working, and the racing login gets no
+// session — one minted from the old password would outlive the change.
 func TestLoginRehashDoesNotRollBackAConcurrentPasswordChange(t *testing.T) {
 	store := openTestStore(t)
 	service := NewAuthService(store, 24*time.Hour)
@@ -206,8 +206,8 @@ func TestLoginRehashDoesNotRollBackAConcurrentPasswordChange(t *testing.T) {
 		return security.HashPassword(password)
 	}
 
-	if _, err := service.Login(ctx, "racer@example.com", oldPassword); err != nil {
-		t.Fatalf("login that verified before the change must still succeed: %v", err)
+	if _, err := service.Login(ctx, "racer@example.com", oldPassword); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("a login racing the change must not get a session, got %v", err)
 	}
 
 	account, err := store.FindAccountByLogin(ctx, "racer@example.com")
