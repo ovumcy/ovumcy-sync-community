@@ -230,6 +230,34 @@ func TestServerManagedAccountPremiumRejectsInvalidSignal(t *testing.T) {
 	}
 }
 
+// A body without an explicit `active` is not a lapse signal: decoding it to
+// false would revoke the account's sessions and start its purge clock.
+func TestServerManagedAccountPremiumRequiresActive(t *testing.T) {
+	handler := newTestServer(t)
+
+	const accountID = "managedacct1234"
+	session := provisionManagedAccountWithData(t, handler, accountID)
+
+	for _, body := range []string{`{}`, `null`, `{"active":null}`, `{"as_of":"2026-01-01T00:00:00Z"}`} {
+		response := performRawRequest(
+			t,
+			handler,
+			http.MethodPost,
+			"/managed/accounts/"+accountID+"/premium",
+			[]byte(body),
+			"test-managed-bridge-token",
+			http.StatusBadRequest,
+		)
+		var payload map[string]string
+		decodeResponse(t, response.Body.Bytes(), &payload)
+		if payload["error"] != "invalid_entitlement_signal" {
+			t.Fatalf("body %s: unexpected payload %#v", body, payload)
+		}
+	}
+
+	performJSONRequest(t, handler, http.MethodGet, "/auth/session", nil, session, http.StatusOK)
+}
+
 // TestServerManagedAccountPremiumRejectsStaleReactivation: a reactivation
 // observed before the applied lapse is refused with 409 and the account
 // stays unable to mint.

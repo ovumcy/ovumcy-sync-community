@@ -813,8 +813,13 @@ func (s *Server) handleManagedAccountPremium(writer http.ResponseWriter, request
 	if !decodeJSON(writer, request, &payload, 4<<10) {
 		return
 	}
+	if payload.Active == nil {
+		writeError(writer, http.StatusBadRequest, "invalid_entitlement_signal")
+		return
+	}
+	active := *payload.Active
 
-	err := s.managedBridge.SetAccountLapseSignal(request.Context(), request.PathValue("account_id"), payload.Active, payload.AsOf)
+	err := s.managedBridge.SetAccountLapseSignal(request.Context(), request.PathValue("account_id"), active, payload.AsOf)
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrInvalidManagedAccount):
@@ -829,7 +834,7 @@ func (s *Server) handleManagedAccountPremium(writer http.ResponseWriter, request
 		return
 	}
 
-	if payload.Active {
+	if active {
 		writeJSON(writer, http.StatusOK, map[string]string{"status": "lapse_cleared"})
 		return
 	}
@@ -1498,11 +1503,12 @@ type managedSessionRequest struct {
 
 // managedAccountPremiumRequest is the POST /managed/accounts/{account_id}
 // /premium body. Active false records an entitlement lapse; true reactivates
-// after one. An omitted active decodes to false. AsOf is the managed
-// service's observation instant (RFC 3339): required for active=true,
-// optional for a lapse; the zero value means omitted.
+// after one. Active is required: a pointer, so `{}` or `null` is refused
+// rather than read as a lapse. AsOf is the managed service's observation
+// instant (RFC 3339): required for active=true, optional for a lapse; the zero
+// value means omitted.
 type managedAccountPremiumRequest struct {
-	Active bool      `json:"active"`
+	Active *bool     `json:"active"`
 	AsOf   time.Time `json:"as_of"`
 }
 
