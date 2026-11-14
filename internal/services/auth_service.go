@@ -630,7 +630,7 @@ func (s *AuthService) createSession(
 ) (AuthResult, error) {
 	session, result, err := s.newSession(accountID, now)
 	if err != nil {
-		return AuthResult{}, err
+		return AuthResult{}, err // codecov:ignore -- newSession fails only on a crypto-primitive error that cannot occur in practice (see its own codecov:ignore annotations).
 	}
 	if _, err := s.store.CreateSession(ctx, session); err != nil {
 		return AuthResult{}, err
@@ -648,7 +648,7 @@ func (s *AuthService) createSessionForVerifiedPassword(
 ) (AuthResult, error) {
 	session, result, err := s.newSession(accountID, s.now().UTC())
 	if err != nil {
-		return AuthResult{}, err
+		return AuthResult{}, err // codecov:ignore -- newSession fails only on a crypto-primitive error that cannot occur in practice (see its own codecov:ignore annotations).
 	}
 	if err := s.store.CreateSessionForVerifiedPassword(ctx, session, verifiedHash); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
@@ -670,7 +670,7 @@ func (s *AuthService) createSessionConsumingChallenge(
 ) (AuthResult, error) {
 	session, result, err := s.newSession(accountID, s.now().UTC())
 	if err != nil {
-		return AuthResult{}, err
+		return AuthResult{}, err // codecov:ignore -- newSession fails only on a crypto-primitive error that cannot occur in practice (see its own codecov:ignore annotations).
 	}
 	if err := s.store.ConsumeTOTPChallengeAndCreateSession(ctx, challengeIDHash, session); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
