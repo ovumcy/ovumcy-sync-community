@@ -1031,7 +1031,7 @@ paths:
                   summary: active=true
                   value: { status: lapse_cleared }
         "400":
-          description: "account_id fails the managed-account id pattern or names an existing non-managed account, or the signal is invalid (`active: true` without `as_of`, or an `as_of` before the Unix epoch or more than 5 minutes ahead of this server's clock)."
+          description: "account_id fails the managed-account id pattern or names an existing non-managed account, or the signal is invalid (`active` missing or null, `active: true` without `as_of`, or an `as_of` before the Unix epoch or more than 5 minutes ahead of this server's clock)."
           content:
             application/json:
               schema:
@@ -1720,11 +1720,12 @@ components:
       properties:
         active:
           type: boolean
-          description: 'false records an entitlement lapse (clears premium_active, revokes sessions); true reactivates after one (clears the marker without touching premium_active or sessions). Omitted decodes to false.'
+          description: 'false records an entitlement lapse (clears premium_active, revokes sessions); true reactivates after one (clears the marker without touching premium_active or sessions). Required; a body without it (including `{}` and `null`) is refused with 400 `invalid_entitlement_signal`.'
         as_of:
           type: string
           format: date-time
           description: The managed service's observation instant, used to order signals. Required when active is true; optional for a lapse.
+      required: [active]
       additionalProperties: false
 
     CapabilityDocument:
