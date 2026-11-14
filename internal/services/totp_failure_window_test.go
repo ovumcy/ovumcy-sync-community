@@ -256,6 +256,55 @@ func TestDisableSharesTheAccountTOTPWindow(t *testing.T) {
 	}
 }
 
+// Recovery-code regeneration on an enrolled account spends the same window:
+// otherwise it would be a code oracle bounded only by the route limiter.
+func TestRegenerateRecoveryCodeSharesTheAccountTOTPWindow(t *testing.T) {
+	auth, totp, now := fixedTOTPClock(t)
+	ctx := context.Background()
+	accountID, _, secret, _ := enrollTOTP(t, auth, totp, now)
+
+	later := now.Add(security.TOTPStepSeconds * time.Second)
+	setTOTPClock(auth, totp, later)
+	wrong := wrongTOTPCode(t, secret, later)
+	for range maxTOTPAccountFailedAttempts {
+		if _, err := auth.RegenerateRecoveryCode(ctx, accountID, totpWindowTestPassword, wrong); !errors.Is(err, ErrTOTPInvalidCode) {
+			t.Fatalf("expected ErrTOTPInvalidCode, got %v", err)
+		}
+	}
+
+	correct := security.GenerateTOTPCode(secret, later.Unix()/security.TOTPStepSeconds)
+	if _, err := auth.RegenerateRecoveryCode(ctx, accountID, totpWindowTestPassword, correct); !errors.Is(err, ErrTOTPLocked) {
+		t.Fatalf("expected regeneration to be locked, got %v", err)
+	}
+	if err := totp.Disable(ctx, accountID, totpWindowTestPassword, correct); !errors.Is(err, ErrTOTPLocked) {
+		t.Fatalf("expected disable to share the lock, got %v", err)
+	}
+}
+
+// A missing code (an old client) and a wrong password both stop before the
+// window: a full window of either leaves the correct code usable.
+func TestRegenerateRecoveryCodeMissingCodeSpendsNoTOTPAttempt(t *testing.T) {
+	auth, totp, now := fixedTOTPClock(t)
+	ctx := context.Background()
+	accountID, _, secret, _ := enrollTOTP(t, auth, totp, now)
+
+	later := now.Add(security.TOTPStepSeconds * time.Second)
+	setTOTPClock(auth, totp, later)
+	correct := security.GenerateTOTPCode(secret, later.Unix()/security.TOTPStepSeconds)
+	for range maxTOTPAccountFailedAttempts {
+		if _, err := auth.RegenerateRecoveryCode(ctx, accountID, totpWindowTestPassword, ""); !errors.Is(err, ErrTOTPInvalidCode) {
+			t.Fatalf("expected ErrTOTPInvalidCode for a missing code, got %v", err)
+		}
+		if _, err := auth.RegenerateRecoveryCode(ctx, accountID, "wrong password entirely", correct); !errors.Is(err, ErrInvalidCurrentPassword) {
+			t.Fatalf("expected ErrInvalidCurrentPassword, got %v", err)
+		}
+	}
+
+	if _, err := auth.RegenerateRecoveryCode(ctx, accountID, totpWindowTestPassword, correct); err != nil {
+		t.Fatalf("expected the correct code to work after a window of missing codes, got %v", err)
+	}
+}
+
 func TestVerifyChallengeSurfacesFailureWindowStoreErrors(t *testing.T) {
 	store, dbPath := openFileBackedTestStore(t)
 	auth := NewAuthService(store, 24*time.Hour)

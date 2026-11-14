@@ -367,6 +367,12 @@ func (s *TOTPService) VerifyAccountCode(ctx context.Context, account models.Acco
 }
 
 func (s *TOTPService) verifyAccountCode(ctx context.Context, account models.Account, code string) error {
+	// An absent code is a client that does not know the step-up exists, not
+	// a guess: refuse it without spending a slot of the owner's window.
+	if code == "" {
+		return ErrTOTPInvalidCode
+	}
+
 	rawSecret, err := security.DecryptField(
 		account.TOTPSecretEncrypted,
 		s.secretKey,
