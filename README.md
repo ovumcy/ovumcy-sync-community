@@ -112,13 +112,13 @@ go run ./cmd/ovumcy-sync-community serve
 | `AUTH_RATE_LIMIT_COUNT` | `10` | Requests per window, per route: anonymous auth routes count per client IP, authenticated routes (including `GET /sync/blob` and `GET /sync/recovery-key`) per account, and `POST /auth/login` also per login identifier across all IPs. Only `GET /auth/session`, `GET /sync/capabilities`, and `GET /sync/devices` get 30× this, per account |
 | `AUTH_RATE_LIMIT_WINDOW` | `1m` | Auth rate-limit window |
 | `METRICS_ENABLED` | `false` | Enables `GET /metrics` |
-| `METRICS_BEARER_TOKEN` | _(unset)_ | Bearer token for `/metrics`; required when `METRICS_ENABLED=true`, rejected otherwise |
+| `METRICS_BEARER_TOKEN` | _(unset)_ | Bearer token for `/metrics` (at least 32 bytes); required when `METRICS_ENABLED=true`, rejected otherwise |
 | `MANAGED_BRIDGE_TOKEN` | _(unset)_ | Enables the managed-bridge endpoints (leave unset for community use) |
 | `ALLOWED_ORIGINS` | _(empty)_ | Explicit CORS allowlist for browser clients |
-| `TRUSTED_PROXY_CIDRS` | _(unset)_ | Reverse-proxy CIDRs whose forwarded client IP is trusted for rate limiting; a range wider than an IPv4 /8, an IPv6 /32 or a unique-local IPv6 /8 fails startup |
+| `TRUSTED_PROXY_CIDRS` | _(unset)_ | Reverse-proxy CIDRs whose forwarded client IP is trusted for rate limiting; a public range wider than an IPv4 /12 or an IPv6 /32 fails startup (private, loopback, CGNAT and link-local ranges may be as wide as the range itself) |
 | `FIELD_ENCRYPTION_KEY` | _(unset)_ | Hex key (≥32 bytes / 64 hex chars) that enables the optional TOTP surface |
 | `TOTP_ISSUER` | `ovumcy-sync-community` | Issuer label embedded in `otpauth://` provisioning URIs |
-| `LAPSED_ACCOUNT_GRACE_PERIOD` | `1440h` (60d) | Retention window for a managed account after the bridge signals an entitlement lapse, before it is erased |
+| `LAPSED_ACCOUNT_GRACE_PERIOD` | `1440h` (60d) | Retention window for a managed account after the bridge signals an entitlement lapse, before it is erased; at least `24h` |
 | `LAPSED_ACCOUNT_SWEEP_INTERVAL` | `24h` | How often the server itself purges accounts past that window. `0` disables the in-process sweep and leaves `purge-lapsed-accounts` as the only trigger |
 | `LAPSED_ACCOUNT_SWEEP_LIMIT` | `0` | Candidate accounts examined per in-process run; `0` or unset uses the store's own default page size |
 | `EXPIRED_ROWS_SWEEP_INTERVAL` | `24h` | How often `serve` deletes expired sessions, password-reset tokens, and TOTP challenges. `0` disables the in-process sweep |
