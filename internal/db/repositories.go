@@ -269,15 +269,17 @@ func (s *Store) ResetAccountCredentials(
 // the old code must not outlive the rotation, and a failed cleanup must not
 // leave the hash rotated with the new code never handed out.
 //
-// The write applies only while the stored hash is still expectedHash, the one
-// the caller read: a regeneration that read the account before a concurrent
-// TOTP enable (or reset, or another regeneration) rotated the code must not
-// overwrite that rotation with a code issued without the step-up. ErrConflict
-// when the hash moved, ErrNotFound when the account is gone.
+// The write applies only while the stored recovery and password hashes are
+// still the ones the caller read and verified against: a regeneration that
+// read the account before a concurrent TOTP enable (or reset, or another
+// regeneration) rotated the code, or before a password change, must not land
+// a code issued on stale credentials. ErrConflict when either hash moved,
+// ErrNotFound when the account is gone.
 func (s *Store) UpdateAccountRecoveryCodeHash(
 	ctx context.Context,
 	accountID string,
 	expectedHash string,
+	expectedPasswordHash string,
 	recoveryCodeHash string,
 ) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -290,10 +292,12 @@ func (s *Store) UpdateAccountRecoveryCodeHash(
 
 	result, err := tx.ExecContext(
 		ctx,
-		`UPDATE accounts SET recovery_code_hash = ? WHERE id = ? AND recovery_code_hash = ?`,
+		`UPDATE accounts SET recovery_code_hash = ?
+		 WHERE id = ? AND recovery_code_hash = ? AND password_hash = ?`,
 		recoveryCodeHash,
 		accountID,
 		expectedHash,
+		expectedPasswordHash,
 	)
 	if err != nil {
 		return fmt.Errorf("update account recovery code: %w", err)
