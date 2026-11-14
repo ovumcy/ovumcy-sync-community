@@ -447,13 +447,17 @@ func (s *TOTPService) verifyAccountCode(ctx context.Context, account models.Acco
 	return nil
 }
 
-// IssueChallenge mints a short-lived TOTP login challenge for an account
-// that just passed password verification. The plaintext challenge id is
-// returned to the caller; only the SHA-256 hash is persisted, so a leaked
-// db row cannot be replayed without the issuer's response body.
-func (s *TOTPService) IssueChallenge(
+// IssueChallengeForVerifiedPassword mints a short-lived TOTP login challenge
+// for an account that just passed password verification against
+// verifiedPasswordHash. The plaintext challenge id is returned to the caller;
+// only the SHA-256 hash is persisted, so a leaked db row cannot be replayed
+// without the issuer's response body. The challenge is stored only while the
+// password hash is unchanged: a change or reset that committed since the
+// verification answers ErrInvalidCredentials.
+func (s *TOTPService) IssueChallengeForVerifiedPassword(
 	ctx context.Context,
 	accountID string,
+	verifiedPasswordHash string,
 ) (challengeID string, expiresAt time.Time, err error) {
 	plain, hash, tokenErr := security.NewOpaqueToken()
 	if tokenErr != nil {
@@ -470,12 +474,15 @@ func (s *TOTPService) IssueChallenge(
 
 	now := s.now().UTC()
 	expiresAt = now.Add(TOTPChallengeTTL)
-	if storeErr := s.store.UpsertTOTPChallenge(ctx, models.TOTPChallenge{
+	if storeErr := s.store.CreateTOTPChallengeForVerifiedPassword(ctx, models.TOTPChallenge{
 		ChallengeIDHash: hash,
 		AccountID:       accountID,
 		CreatedAt:       now,
 		ExpiresAt:       expiresAt,
-	}); storeErr != nil {
+	}, verifiedPasswordHash); storeErr != nil {
+		if errors.Is(storeErr, db.ErrNotFound) {
+			return "", time.Time{}, ErrInvalidCredentials
+		}
 		return "", time.Time{}, storeErr
 	}
 
@@ -584,12 +591,16 @@ func (s *TOTPService) VerifyChallenge(
 	}
 	s.clearCodeFailures(ctx, account.ID)
 
-	if err := s.store.DeleteTOTPChallengeByHash(ctx, security.HashToken(challengeID)); err != nil {
-		return AuthResult{}, err // codecov:ignore -- FindTOTPChallengeByHash above already touches "totp_challenges" as this function's first store call, so isolating a second, later totp_challenges failure here needs a fake driver.
+	result, err := s.auth.createSessionConsumingChallenge(ctx, account.ID, security.HashToken(challengeID))
+	if err != nil {
+		if errors.Is(err, ErrTOTPChallengeInvalid) {
+			s.observeChallengeCompletion("challenge_invalid")
+		}
+		return AuthResult{}, err
 	}
 
 	s.observeChallengeCompletion("ok")
-	return s.auth.CreateSessionForAccount(ctx, account.ID)
+	return result, nil
 }
 
 // reserveCodeAttempt spends one slot of the account's failed-TOTP window

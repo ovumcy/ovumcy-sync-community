@@ -33,7 +33,7 @@ const PasswordResetTokenTTL = 30 * time.Minute
 // importing the TOTPService directly so the dependency graph stays
 // one-directional (totp -> auth -> store).
 type TOTPChallengeIssuer interface {
-	IssueChallenge(ctx context.Context, accountID string) (challengeID string, expiresAt time.Time, err error)
+	IssueChallengeForVerifiedPassword(ctx context.Context, accountID string, verifiedPasswordHash string) (challengeID string, expiresAt time.Time, err error)
 	VerifyAccountCode(ctx context.Context, account models.Account, code string) error
 }
 
@@ -192,9 +192,14 @@ func (s *AuthService) Login(ctx context.Context, login string, password string) 
 	// never logs, and a hash-upgrade skip is not an auth event). The write is
 	// a CAS on the verified hash: a password change that lands during the
 	// re-hash wins, and the upgrade is skipped.
+	// The session or challenge below is minted only while the stored hash is
+	// still this one, so a password change or reset racing the login wins.
+	verifiedHash := account.PasswordHash
 	if security.PasswordHashNeedsRehash(account.PasswordHash) {
 		if upgradedHash, rehashErr := s.hashPassword(password); rehashErr == nil {
-			_ = s.store.UpgradeAccountPasswordHash(ctx, account.ID, account.PasswordHash, upgradedHash)
+			if s.store.UpgradeAccountPasswordHash(ctx, account.ID, account.PasswordHash, upgradedHash) == nil {
+				verifiedHash = upgradedHash
+			}
 		}
 	}
 
@@ -209,7 +214,7 @@ func (s *AuthService) Login(ctx context.Context, login string, password string) 
 			// restores the key.
 			return AuthResult{}, ErrTOTPNotConfigured
 		}
-		challengeID, expiresAt, issueErr := s.totpChallenges.IssueChallenge(ctx, account.ID)
+		challengeID, expiresAt, issueErr := s.totpChallenges.IssueChallengeForVerifiedPassword(ctx, account.ID, verifiedHash)
 		if issueErr != nil {
 			return AuthResult{}, issueErr
 		}
@@ -222,7 +227,7 @@ func (s *AuthService) Login(ctx context.Context, login string, password string) 
 		}, nil
 	}
 
-	return s.createSession(ctx, account.ID, s.now().UTC())
+	return s.createSessionForVerifiedPassword(ctx, account.ID, verifiedHash)
 }
 
 func (s *AuthService) Authenticate(ctx context.Context, sessionToken string) (models.Account, error) {
@@ -605,30 +610,80 @@ func (s *AuthService) createSession(
 	accountID string,
 	now time.Time,
 ) (AuthResult, error) {
+	session, result, err := s.newSession(accountID, now)
+	if err != nil {
+		return AuthResult{}, err
+	}
+	if _, err := s.store.CreateSession(ctx, session); err != nil {
+		return AuthResult{}, err
+	}
+	return result, nil
+}
+
+// createSessionForVerifiedPassword mints the session only while the stored
+// password hash is still verifiedHash; a change or reset that won the race
+// answers ErrInvalidCredentials.
+func (s *AuthService) createSessionForVerifiedPassword(
+	ctx context.Context,
+	accountID string,
+	verifiedHash string,
+) (AuthResult, error) {
+	session, result, err := s.newSession(accountID, s.now().UTC())
+	if err != nil {
+		return AuthResult{}, err
+	}
+	if err := s.store.CreateSessionForVerifiedPassword(ctx, session, verifiedHash); err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return AuthResult{}, ErrInvalidCredentials
+		}
+		return AuthResult{}, err
+	}
+	return result, nil
+}
+
+// createSessionConsumingChallenge mints the session in the same transaction
+// that consumes the TOTP login challenge; a challenge already consumed (a
+// concurrent verify, or a password change/reset) answers
+// ErrTOTPChallengeInvalid.
+func (s *AuthService) createSessionConsumingChallenge(
+	ctx context.Context,
+	accountID string,
+	challengeIDHash string,
+) (AuthResult, error) {
+	session, result, err := s.newSession(accountID, s.now().UTC())
+	if err != nil {
+		return AuthResult{}, err
+	}
+	if err := s.store.ConsumeTOTPChallengeAndCreateSession(ctx, challengeIDHash, session); err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return AuthResult{}, ErrTOTPChallengeInvalid
+		}
+		return AuthResult{}, err
+	}
+	return result, nil
+}
+
+func (s *AuthService) newSession(accountID string, now time.Time) (models.Session, AuthResult, error) {
 	sessionID, err := security.NewIdentifier()
 	if err != nil {
-		return AuthResult{}, err // codecov:ignore -- crypto-primitive error that cannot occur in practice (see internal/security/token.go's own codecov:ignore annotation on NewIdentifier's internal rand.Read).
+		return models.Session{}, AuthResult{}, err // codecov:ignore -- crypto-primitive error that cannot occur in practice (see internal/security/token.go's own codecov:ignore annotation on NewIdentifier's internal rand.Read).
 	}
 
 	plainToken, tokenHash, err := security.NewOpaqueToken()
 	if err != nil {
-		return AuthResult{}, err // codecov:ignore -- crypto-primitive error that cannot occur in practice (see internal/security/token.go's own codecov:ignore annotation on NewOpaqueToken's internal rand.Read).
+		return models.Session{}, AuthResult{}, err // codecov:ignore -- crypto-primitive error that cannot occur in practice (see internal/security/token.go's own codecov:ignore annotation on NewOpaqueToken's internal rand.Read).
 	}
 
 	expiresAt := now.Add(s.sessionTTL)
-	_, err = s.store.CreateSession(ctx, models.Session{
+	session := models.Session{
 		ID:         sessionID,
 		AccountID:  accountID,
 		TokenHash:  tokenHash,
 		CreatedAt:  now,
 		LastSeenAt: now,
 		ExpiresAt:  expiresAt,
-	})
-	if err != nil {
-		return AuthResult{}, err
 	}
-
-	return AuthResult{
+	return session, AuthResult{
 		AccountID:        accountID,
 		SessionToken:     plainToken,
 		SessionExpiresAt: expiresAt,
