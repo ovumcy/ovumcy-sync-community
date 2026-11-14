@@ -1312,6 +1312,7 @@ func TestServerSyncEndpointValidationErrors(t *testing.T) {
 func TestServerAttachDeviceRejectsTooManyDevices(t *testing.T) {
 	handler := newTestServerWithOptions(t, serverTestOptions{maxDevices: 1})
 	registered := registerOwner(t, handler)
+	other := loginOwnerSession(t, handler)
 
 	performJSONRequest(
 		t,
@@ -1335,7 +1336,7 @@ func TestServerAttachDeviceRejectsTooManyDevices(t *testing.T) {
 			"device_id":    "device-2bbbb",
 			"device_label": "Tablet",
 		},
-		registered.SessionToken,
+		other,
 		http.StatusConflict,
 	)
 

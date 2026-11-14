@@ -914,6 +914,8 @@ func (s *Server) handleAttachDevice(
 			writeError(writer, http.StatusBadRequest, "invalid_device")
 		case errors.Is(err, services.ErrTooManyDevices):
 			writeError(writer, http.StatusConflict, "too_many_devices")
+		case errors.Is(err, services.ErrSessionDeviceBound):
+			writeError(writer, http.StatusConflict, "session_device_bound")
 		default:
 			writeError(writer, http.StatusInternalServerError, "internal_error")
 		}

@@ -99,6 +99,36 @@ func TestRemovingOwnDeviceEndsTheCallingSession(t *testing.T) {
 	performJSONRequest(t, handler, http.MethodGet, "/auth/session", nil, unbound, http.StatusOK)
 }
 
+// TestAttachDeviceIsOneDevicePerSession: a bound session re-attaches its own
+// device but gets 409 session_device_bound for another, which is not created;
+// a different session can still attach that device.
+func TestAttachDeviceIsOneDevicePerSession(t *testing.T) {
+	handler := newTestServer(t)
+	registered := registerOwner(t, handler)
+	other := loginOwnerSession(t, handler)
+
+	attachTestDevice(t, handler, registered.SessionToken, "device-abcd1234", "Pixel 7")
+	attachTestDevice(t, handler, registered.SessionToken, "device-abcd1234", "Pixel 7 renamed")
+
+	response := performJSONRequest(t, handler, http.MethodPost, "/sync/devices",
+		map[string]string{"device_id": "device-efgh5678", "device_label": "Tablet"},
+		registered.SessionToken, http.StatusConflict)
+	var payload map[string]string
+	decodeResponse(t, response.Body.Bytes(), &payload)
+	if payload["error"] != "session_device_bound" {
+		t.Fatalf("unexpected payload: %#v", payload)
+	}
+
+	listResponse := performJSONRequest(t, handler, http.MethodGet, "/sync/devices", nil, other, http.StatusOK)
+	var listed deviceListBody
+	decodeResponse(t, listResponse.Body.Bytes(), &listed)
+	if len(listed.Devices) != 1 || listed.Devices[0].DeviceLabel != "Pixel 7 renamed" {
+		t.Fatalf("unexpected device list: %#v", listed.Devices)
+	}
+
+	attachTestDevice(t, handler, other, "device-efgh5678", "Tablet")
+}
+
 func TestRemoveDeviceUnknownReturns404(t *testing.T) {
 	handler := newTestServer(t)
 	registered := registerOwner(t, handler)

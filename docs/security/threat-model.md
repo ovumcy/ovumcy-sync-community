@@ -84,8 +84,11 @@ the strength of the phrase and the client KDF, which are client concerns and out
   and are revoked on logout. A password change revokes every session except the current one
   (`DeleteSessionsForAccountExcept`). A recovery-based reset revokes sessions. Devices can be listed
   and removed. Expired rows are erased by the sweep.
-- Residual: a stolen token is valid until expiry or revocation; there is no device binding.
-  A holder can read and overwrite that account's blob.
+- Residual: a stolen token is valid until expiry or revocation. A session binds to the first device
+  it attaches and cannot attach another, so removing that device revokes it; but the device id is
+  client-asserted, so a holder replaying the token under the same id is indistinguishable, and a
+  session that never attached is cut off only by a password change. A holder can read and overwrite
+  that account's blob.
 
 ### Other account holder (IDOR)
 

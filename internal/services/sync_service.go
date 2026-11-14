@@ -15,6 +15,7 @@ import (
 
 var ErrInvalidDevice = errors.New("invalid_device")
 var ErrTooManyDevices = errors.New("too_many_devices")
+var ErrSessionDeviceBound = errors.New("session_device_bound")
 var ErrDeviceNotFound = errors.New("device_not_found")
 var ErrInvalidBlob = errors.New("invalid_blob")
 var ErrBlobNotFound = errors.New("blob_not_found")
@@ -126,38 +127,23 @@ func (s *SyncService) AttachDevice(
 	deviceID string,
 	deviceLabel string,
 ) (models.Device, error) {
-	deviceID = strings.TrimSpace(deviceID)
-	deviceLabel = strings.TrimSpace(deviceLabel)
-	if len(deviceID) < 8 || len(deviceLabel) < 2 {
-		return models.Device{}, ErrInvalidDevice
+	device, err := s.newDeviceRow(accountID, deviceID, deviceLabel)
+	if err != nil {
+		return models.Device{}, err
 	}
-
-	now := s.now().UTC()
 	// Atomic ceiling in the repository: the WHERE sub-select rejects an
 	// attach that would exceed maxDevices in the same statement that
 	// inserts, so we don't count-then-write here. Concurrent attaches that
 	// all read the same count would otherwise each add a row and push the
 	// account past its limit.
-	device, err := s.store.UpsertDevice(ctx, models.Device{
-		DeviceID:    deviceID,
-		AccountID:   accountID,
-		DeviceLabel: deviceLabel,
-		CreatedAt:   now,
-		LastSeenAt:  now,
-	}, s.maxDevices)
-	if err != nil {
-		if errors.Is(err, db.ErrDeviceLimitReached) {
-			return models.Device{}, ErrTooManyDevices
-		}
-		return models.Device{}, err
-	}
-
-	return device, nil
+	return mapAttachError(s.store.UpsertDevice(ctx, device, s.maxDevices))
 }
 
 // AttachDeviceForSession attaches the device and binds the calling session to
-// it, so removing the device later revokes that session. A session already
-// bound keeps its first device.
+// it, so removing the device later revokes that session. One device per
+// session: a session already bound to a different device gets
+// ErrSessionDeviceBound and nothing is attached; re-attaching its own device
+// refreshes it.
 func (s *SyncService) AttachDeviceForSession(
 	ctx context.Context,
 	accountID string,
@@ -165,14 +151,40 @@ func (s *SyncService) AttachDeviceForSession(
 	deviceID string,
 	deviceLabel string,
 ) (models.Device, error) {
-	device, err := s.AttachDevice(ctx, accountID, deviceID, deviceLabel)
+	device, err := s.newDeviceRow(accountID, deviceID, deviceLabel)
 	if err != nil {
 		return models.Device{}, err
 	}
-	if err := s.store.BindSessionToDevice(ctx, accountID, sessionTokenHash, device.DeviceID); err != nil {
+	return mapAttachError(s.store.AttachDeviceForSession(ctx, device, s.maxDevices, sessionTokenHash))
+}
+
+func (s *SyncService) newDeviceRow(accountID, deviceID, deviceLabel string) (models.Device, error) {
+	deviceID = strings.TrimSpace(deviceID)
+	deviceLabel = strings.TrimSpace(deviceLabel)
+	if len(deviceID) < 8 || len(deviceLabel) < 2 {
+		return models.Device{}, ErrInvalidDevice
+	}
+	now := s.now().UTC()
+	return models.Device{
+		DeviceID:    deviceID,
+		AccountID:   accountID,
+		DeviceLabel: deviceLabel,
+		CreatedAt:   now,
+		LastSeenAt:  now,
+	}, nil
+}
+
+func mapAttachError(device models.Device, err error) (models.Device, error) {
+	switch {
+	case err == nil:
+		return device, nil
+	case errors.Is(err, db.ErrDeviceLimitReached):
+		return models.Device{}, ErrTooManyDevices
+	case errors.Is(err, db.ErrSessionDeviceBound):
+		return models.Device{}, ErrSessionDeviceBound
+	default:
 		return models.Device{}, err
 	}
-	return device, nil
 }
 
 // ListDevices returns every device attached to the account, account-scoped.
