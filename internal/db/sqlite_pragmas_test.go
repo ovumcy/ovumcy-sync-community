@@ -110,11 +110,14 @@ func TestCreatePlainDBFileLeavesURIAndQueryPathsToSQLite(t *testing.T) {
 
 func TestIsInMemoryPath(t *testing.T) {
 	for path, want := range map[string]bool{
-		":memory:":                        true,
-		"file::memory:?cache=shared":      true,
-		"file:sync?mode=memory":           true,
-		"./data/sync.sqlite":              false,
-		"file:/data/sync.sqlite?mode=rwc": false,
+		":memory:":                           true,
+		":memory:?cache=shared":              true,
+		"file::memory:?cache=shared":         true,
+		"file:sync?mode=memory":              true,
+		"file:sync?cache=shared&mode=memory": true,
+		"./data/sync.sqlite":                 false,
+		"/data/mode=memory/sync.sqlite":      false,
+		"file:/data/sync.sqlite?mode=rwc":    false,
 	} {
 		if got := isInMemoryPath(path); got != want {
 			t.Errorf("isInMemoryPath(%q) = %v, want %v", path, got, want)

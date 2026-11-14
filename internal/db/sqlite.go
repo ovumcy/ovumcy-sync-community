@@ -52,7 +52,11 @@ func Open(path string) (*Store, error) {
 }
 
 func isInMemoryPath(path string) bool {
-	return path == ":memory:" || strings.HasPrefix(path, "file::memory:") || strings.Contains(path, "mode=memory")
+	if strings.HasPrefix(path, ":memory:") || strings.HasPrefix(path, "file::memory:") {
+		return true
+	}
+	_, query, hasQuery := strings.Cut(path, "?")
+	return hasQuery && strings.Contains("&"+query+"&", "&mode=memory&")
 }
 
 // createPlainDBFileOwnerOnly creates a missing database file as 0600 before
