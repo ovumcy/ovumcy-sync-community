@@ -28,13 +28,23 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - traefik-acme:/acme
+    networks:
+      edge:
+        ipv4_address: "${SYNC_PROXY_IP:-172.30.98.10}"
 
   ovumcy-sync-community:
     environment:
-      # Traefik's address on the shared network; use the network subnet.
-      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:?set to the Docker network subnet}
+      # Only Traefik's pinned address is trusted, not the whole subnet: any
+      # other container on it could otherwise pick its own rate-limit key.
+      TRUSTED_PROXY_CIDRS: "${SYNC_PROXY_IP:-172.30.98.10}/32"
+    # Drops the base file's 127.0.0.1:8080 mapping so Traefik is the only way
+    # in (needs Docker Compose 2.24.4 or newer).
+    ports: !reset []
+    networks:
+      - edge
     labels:
       - traefik.enable=true
+      - traefik.docker.network=ovumcy-sync-edge
       - traefik.http.services.ovumcy-sync.loadbalancer.server.port=8080
 
       # Public API.
@@ -58,6 +68,13 @@ services:
       - traefik.http.middlewares.ovumcy-sync-body.buffering.maxrequestbodybytes=33554432
       - traefik.http.middlewares.ovumcy-sync-body.buffering.memrequestbodybytes=1048576
       - traefik.http.middlewares.ovumcy-sync-deny.ipallowlist.sourcerange=192.0.2.1/32
+
+networks:
+  edge:
+    name: ovumcy-sync-edge
+    ipam:
+      config:
+        - subnet: "${SYNC_EDGE_SUBNET:-172.30.98.0/24}"
 
 volumes:
   traefik-acme:

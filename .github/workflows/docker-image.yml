@@ -141,7 +141,10 @@ jobs:
       # rewrite), under a holding tag no consumer pulls, then the signature.
       # Order matters: when signing fails, the run goes red with nothing
       # consumable published — previously the same failure left an unsigned
-      # image behind the real tags.
+      # image behind the real tags. The unsigned digest does stay on the
+      # holding tag until the next run overwrites it; `cosign verify` fails for
+      # it, and deleting it here is not safe — a reproducible build can share
+      # its digest with an already released, signed image.
       - name: Promote the verified digest to GHCR and sign it
         run: |
           set -euo pipefail

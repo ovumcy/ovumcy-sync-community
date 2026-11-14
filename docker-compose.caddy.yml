@@ -4,6 +4,10 @@ services:
     # auth rate limiting keys on real client IPs instead of one shared bucket.
     environment:
       TRUSTED_PROXY_CIDRS: "${SYNC_PROXY_IP:-172.30.99.10}/32"
+    # Drops the base file's 127.0.0.1:8080 mapping, so nothing on the host
+    # reaches the app around Caddy's /metrics and /managed/* block
+    # (needs Docker Compose 2.24.4 or newer).
+    ports: !reset []
     networks:
       - edge
 
