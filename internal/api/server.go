@@ -514,16 +514,14 @@ func (s *Server) handleRegenerateRecoveryCode(
 		return
 	}
 
-	recoveryCode, err := s.auth.RegenerateRecoveryCode(request.Context(), account.ID, payload.CurrentPassword)
+	recoveryCode, err := s.auth.RegenerateRecoveryCode(
+		request.Context(),
+		account.ID,
+		payload.CurrentPassword,
+		payload.Code,
+	)
 	if err != nil {
-		switch {
-		case errors.Is(err, services.ErrInvalidCurrentPassword):
-			writeError(writer, http.StatusUnauthorized, "invalid_current_password")
-		case errors.Is(err, services.ErrUnauthorized):
-			writeError(writer, http.StatusUnauthorized, "unauthorized")
-		default:
-			writeError(writer, http.StatusInternalServerError, "internal_error")
-		}
+		mapTOTPError(writer, err)
 		return
 	}
 
@@ -1480,6 +1478,7 @@ type resetPasswordRequest struct {
 
 type regenerateRecoveryCodeRequest struct {
 	CurrentPassword string `json:"current_password"`
+	Code            string `json:"code"`
 }
 
 type totpEnrollRequest struct {

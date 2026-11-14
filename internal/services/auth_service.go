@@ -28,11 +28,13 @@ var ErrInvalidResetToken = errors.New("invalid_reset_token")
 const PasswordResetTokenTTL = 30 * time.Minute
 
 // TOTPChallengeIssuer is implemented by services that can mint a TOTP login
-// challenge after a successful password verification. AuthService delegates
-// to it instead of importing the TOTPService directly so the dependency
-// graph stays one-directional (totp -> auth -> store).
+// challenge after a successful password verification, and verify a step-up
+// code for an enrolled account. AuthService delegates to it instead of
+// importing the TOTPService directly so the dependency graph stays
+// one-directional (totp -> auth -> store).
 type TOTPChallengeIssuer interface {
 	IssueChallenge(ctx context.Context, accountID string) (challengeID string, expiresAt time.Time, err error)
+	VerifyAccountCode(ctx context.Context, account models.Account, code string) error
 }
 
 type AuthService struct {
@@ -493,10 +495,15 @@ func (s *AuthService) ResetPassword(
 // recovery surface. Pending reset tokens are deleted: one issued against the
 // old code would otherwise outlive the rotation for its whole TTL. Sessions
 // are left untouched.
+//
+// A TOTP-enrolled account must also present a current code: a reset with the
+// new recovery code clears TOTP, so without it the first factor alone could
+// remove the second. No configured TOTP verifier fails closed.
 func (s *AuthService) RegenerateRecoveryCode(
 	ctx context.Context,
 	accountID string,
 	currentPassword string,
+	totpCode string,
 ) (string, error) {
 	account, err := s.store.FindAccountByID(ctx, accountID)
 	if err != nil {
@@ -508,6 +515,15 @@ func (s *AuthService) RegenerateRecoveryCode(
 
 	if err := security.ComparePasswordHash(account.PasswordHash, currentPassword); err != nil {
 		return "", ErrInvalidCurrentPassword
+	}
+
+	if account.TOTPEnabled {
+		if s.totpChallenges == nil {
+			return "", ErrTOTPNotConfigured
+		}
+		if err := s.totpChallenges.VerifyAccountCode(ctx, account, totpCode); err != nil {
+			return "", err
+		}
 	}
 
 	plainRecovery, recoveryHash, err := security.NewRecoveryCode()

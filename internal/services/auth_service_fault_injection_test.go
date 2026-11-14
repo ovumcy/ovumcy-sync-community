@@ -427,7 +427,7 @@ func TestRegenerateRecoveryCodeStoreErrors(t *testing.T) {
 		store := openTestStore(t)
 		service := NewAuthService(store, 24*time.Hour)
 
-		if _, err := service.RegenerateRecoveryCode(context.Background(), "missing-account", "any-password"); err != ErrUnauthorized {
+		if _, err := service.RegenerateRecoveryCode(context.Background(), "missing-account", "any-password", ""); err != ErrUnauthorized {
 			t.Fatalf("expected ErrUnauthorized for an unknown account, got %v", err)
 		}
 	})
@@ -439,7 +439,7 @@ func TestRegenerateRecoveryCodeStoreErrors(t *testing.T) {
 			t.Fatalf("close store: %v", err)
 		}
 
-		_, err := service.RegenerateRecoveryCode(context.Background(), "any-account", "any-password")
+		_, err := service.RegenerateRecoveryCode(context.Background(), "any-account", "any-password", "")
 		if err == nil || errors.Is(err, ErrUnauthorized) {
 			t.Fatalf("expected a store-failure error, not ErrUnauthorized, got %v", err)
 		}
@@ -461,7 +461,7 @@ func TestRegenerateRecoveryCodeStoreErrors(t *testing.T) {
 		}
 		dropTable(t, dbPath, "password_reset_tokens")
 
-		if _, err := service.RegenerateRecoveryCode(ctx, registered.AccountID, password); err == nil {
+		if _, err := service.RegenerateRecoveryCode(ctx, registered.AccountID, password, ""); err == nil {
 			t.Fatal("expected the reset-token cleanup failure to surface")
 		}
 		after, err := store.FindAccountByID(ctx, registered.AccountID)

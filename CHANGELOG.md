@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The password alone could remove TOTP.** On a TOTP-enrolled account, a session plus the password was enough to regenerate the recovery code, and a reset with that fresh code clears TOTP — so whoever held only the first factor could strip the second. `POST /auth/recovery-code/regenerate` now also requires a current TOTP `code` on an enrolled account, checked like `POST /auth/totp/disable` (counted in the per-account TOTP window, single-use). **Client change:** a client that regenerates on an enrolled account must send `code`; without it the request answers 401 `totp_invalid_code`. Accounts without TOTP are unaffected.
+
 - **A login could undo a concurrent password change.** On an account whose password hash predates the current bcrypt cost, a successful login re-hashes the password and saves it. That write replaced the hash unconditionally, so a login racing a password change could put the old password back. The upgrade now saves only while the stored hash is still the one the login verified; otherwise it is skipped.
 
 - **Foreign keys and the busy timeout lapsed after 30 minutes.** `foreign_keys`, `busy_timeout` and `journal_mode` were set by one `Exec` on the first pooled connection, but the pool retires a connection after 30 minutes and the replacement opened with SQLite's defaults: foreign keys off and no busy wait. From then on a write racing an account deletion or a lapsed-account purge could leave orphaned device, blob or recovery rows, and a write contending with the purge failed at once with `SQLITE_BUSY`. The pragmas now travel in the connection string, so the driver applies them to every connection it opens.
