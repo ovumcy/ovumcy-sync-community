@@ -75,6 +75,8 @@ func TestEnableTOTPAndRotateRecoveryCodeRollsBackOnCleanupFailure(t *testing.T) 
 			store, dbPath := newFileBackedTestStore(t)
 			ctx := context.Background()
 			target := seedFaultInjectionAccount(t, store, "account-target")
+			seedPendingResetToken(t, store, target, "target-reset-token-hash")
+			seedBindingSession(t, store, target.ID, "target-token-other")
 
 			dropTable(t, dbPath, tc.table)
 
@@ -93,7 +95,97 @@ func TestEnableTOTPAndRotateRecoveryCodeRollsBackOnCleanupFailure(t *testing.T) 
 			if after.RecoveryCodeHash != target.RecoveryCodeHash {
 				t.Fatalf("expected the recovery hash to roll back, got %q", after.RecoveryCodeHash)
 			}
+			// The table that was not dropped keeps its row: the earlier
+			// delete rolled back with everything else.
+			if tc.table == "sessions" {
+				if _, err := store.ConsumePasswordResetToken(ctx, "target-reset-token-hash", time.Now().UTC()); err != nil {
+					t.Fatalf("expected the reset token to survive the rollback, got %v", err)
+				}
+			} else if _, err := store.FindSessionByTokenHash(ctx, "target-token-other"); err != nil {
+				t.Fatalf("expected the session to survive the rollback, got %v", err)
+			}
 		})
+	}
+}
+
+// A start that read "disabled" before a verify committed must not switch the
+// enabled factor back off or replace its secret.
+func TestStorePendingTOTPSecretRefusesAnEnabledAccount(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	target := seedFaultInjectionAccount(t, store, "account-target")
+
+	if err := store.StorePendingTOTPSecret(ctx, target.ID, "pending-secret"); err != nil {
+		t.Fatalf("store pending secret: %v", err)
+	}
+	if err := store.EnableTOTPAndRotateRecoveryCode(ctx, target.ID, "pending-secret", "rotated-recovery-hash", ""); err != nil {
+		t.Fatalf("enable totp: %v", err)
+	}
+
+	if err := store.StorePendingTOTPSecret(ctx, target.ID, "late-secret"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected ErrConflict on an enabled account, got %v", err)
+	}
+	after, err := store.FindAccountByID(ctx, target.ID)
+	if err != nil {
+		t.Fatalf("find account: %v", err)
+	}
+	if !after.TOTPEnabled || after.TOTPSecretEncrypted != "pending-secret" {
+		t.Fatalf("expected the enabled secret untouched, got enabled=%v secret=%q", after.TOTPEnabled, after.TOTPSecretEncrypted)
+	}
+
+	if err := store.StorePendingTOTPSecret(ctx, "missing-account", "secret"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for a missing account, got %v", err)
+	}
+}
+
+// Discard clears only the pending secret it names, and never an enabled one.
+func TestDiscardPendingTOTPSecretOnlyClearsTheNamedPendingSecret(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	target := seedFaultInjectionAccount(t, store, "account-target")
+
+	if err := store.StorePendingTOTPSecret(ctx, target.ID, "pending-secret"); err != nil {
+		t.Fatalf("store pending secret: %v", err)
+	}
+	if err := store.DiscardPendingTOTPSecret(ctx, target.ID, "other-secret"); err != nil {
+		t.Fatalf("discard other secret: %v", err)
+	}
+	if after, _ := store.FindAccountByID(ctx, target.ID); after.TOTPSecretEncrypted != "pending-secret" {
+		t.Fatalf("expected a mismatched discard to change nothing, got %q", after.TOTPSecretEncrypted)
+	}
+	if err := store.DiscardPendingTOTPSecret(ctx, target.ID, "pending-secret"); err != nil {
+		t.Fatalf("discard pending secret: %v", err)
+	}
+	if after, _ := store.FindAccountByID(ctx, target.ID); after.TOTPSecretEncrypted != "" {
+		t.Fatalf("expected the pending secret cleared, got %q", after.TOTPSecretEncrypted)
+	}
+
+	if err := store.StorePendingTOTPSecret(ctx, target.ID, "enabled-secret"); err != nil {
+		t.Fatalf("store pending secret: %v", err)
+	}
+	if err := store.EnableTOTPAndRotateRecoveryCode(ctx, target.ID, "enabled-secret", "rotated-recovery-hash", ""); err != nil {
+		t.Fatalf("enable totp: %v", err)
+	}
+	if err := store.DiscardPendingTOTPSecret(ctx, target.ID, "enabled-secret"); err != nil {
+		t.Fatalf("discard enabled secret: %v", err)
+	}
+	if after, _ := store.FindAccountByID(ctx, target.ID); !after.TOTPEnabled || after.TOTPSecretEncrypted != "enabled-secret" {
+		t.Fatalf("expected an enabled secret to survive a discard, got %#v", after)
+	}
+}
+
+func TestPendingTOTPSecretWritesFailWhenAccountsTableIsDropped(t *testing.T) {
+	store, dbPath := newFileBackedTestStore(t)
+	ctx := context.Background()
+	target := seedFaultInjectionAccount(t, store, "account-target")
+
+	dropTable(t, dbPath, "accounts")
+
+	if err := store.StorePendingTOTPSecret(ctx, target.ID, "secret"); err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected a store failure storing a pending secret, got %v", err)
+	}
+	if err := store.DiscardPendingTOTPSecret(ctx, target.ID, "secret"); err == nil {
+		t.Fatal("expected a store failure discarding a pending secret")
 	}
 }
 

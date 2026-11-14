@@ -56,7 +56,7 @@ func NewMetrics() *Metrics {
 			Namespace: "ovumcy",
 			Subsystem: "sync_community",
 			Name:      "totp_enrollment_completion_total",
-			Help:      "TOTP enrollment verify outcomes (`ok`, `invalid_code`, `replayed`, `secret_failed`).",
+			Help:      "TOTP enrollment verify outcomes (`ok`, `invalid_code`, `replayed`, `locked`, `secret_failed`).",
 		},
 		[]string{"result"},
 	)
@@ -91,7 +91,7 @@ func NewMetrics() *Metrics {
 
 // ObserveTOTPEnrollmentCompletion records the outcome of a single
 // `POST /auth/totp/verify` call. `result` must be one of: `ok`,
-// `invalid_code`, `replayed`, `secret_failed`. Any other value is
+// `invalid_code`, `replayed`, `locked`, `secret_failed`. Any other value is
 // recorded under the literal label, which surfaces label leakage as a
 // visible metrics anomaly rather than silently dropping the sample.
 func (m *Metrics) ObserveTOTPEnrollmentCompletion(result string) {

@@ -503,8 +503,13 @@ func (s *AuthService) RegenerateRecoveryCode(
 	// the generic case needs a fake driver (same same-table-multi-step
 	// limitation as the RowsAffected/COMMIT deviations in
 	// internal/db/fault_injection_test.go).
-	if err := s.store.UpdateAccountRecoveryCodeHash(ctx, accountID, recoveryHash); err != nil {
-		if errors.Is(err, db.ErrNotFound) {
+	//
+	// ErrConflict: the code was rotated since the read above (a TOTP enable,
+	// a reset, or another regeneration). Each of those revokes the caller's
+	// session unless it was the caller's own, so answer as for a dead session
+	// rather than overwrite a code this request never saw.
+	if err := s.store.UpdateAccountRecoveryCodeHash(ctx, accountID, account.RecoveryCodeHash, recoveryHash); err != nil {
+		if errors.Is(err, db.ErrNotFound) || errors.Is(err, db.ErrConflict) {
 			return "", ErrUnauthorized
 		}
 		return "", err

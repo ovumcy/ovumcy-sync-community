@@ -506,7 +506,7 @@ paths:
                 enabled:
                   value: { status: totp_enabled, recovery_code: 3f9c2a7e1b6d48c0a5e9f3b27d1c6e84 }
         "401":
-          description: Missing/invalid session, wrong/expired code, or a replayed step.
+          description: Missing/invalid session, wrong/expired code, a replayed step, or a pending secret replaced by a newer `POST /auth/totp/enroll` (scan the new one).
           content:
             application/json:
               schema:
@@ -528,7 +528,25 @@ paths:
                 alreadyEnabled:
                   value: { error: totp_already_enabled }
         "429":
-          $ref: "#/components/responses/RateLimited"
+          description: |
+            Request rate limit, or the account's TOTP code window is spent
+            (10 attempts per 15 minutes). A spent window also discards the
+            pending secret: restart with `POST /auth/totp/enroll`, which needs
+            the password and opens a fresh window. `Retry-After` gives the
+            seconds until the window ends.
+          headers:
+            Retry-After:
+              description: Seconds until the caller may retry.
+              schema:
+                type: string
+                example: "60"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                rateLimited:
+                  value: { error: rate_limited }
         "500":
           description: Internal error, including a field-decryption failure while opening the pending secret.
           content:

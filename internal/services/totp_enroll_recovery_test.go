@@ -86,3 +86,132 @@ func TestCompleteEnrollmentRotatesRecoveryCodeIssuedBeforeEnrollment(t *testing.
 		t.Fatalf("expected the enrollment-issued recovery code to work, got %v", err)
 	}
 }
+
+func startPendingEnrollment(t *testing.T, auth *AuthService, totp *TOTPService) (accountID, sessionToken string, secret []byte) {
+	t.Helper()
+
+	ctx := context.Background()
+	registered, err := auth.Register(ctx, "owner@example.com", totpWindowTestPassword)
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	start, err := totp.StartEnrollment(ctx, registered.AccountID, totpWindowTestPassword)
+	if err != nil {
+		t.Fatalf("StartEnrollment: %v", err)
+	}
+	secret, err = security.DecodeTOTPSecretBase32(start.SecretBase32)
+	if err != nil {
+		t.Fatalf("decode secret: %v", err)
+	}
+	return registered.AccountID, registered.SessionToken, secret
+}
+
+// A verify that succeeds hands out a recovery code, so a stolen session must
+// not get unlimited guesses at a pending secret: the account window caps them
+// and, once spent, burns the pending secret so guessing again needs the
+// password (a new StartEnrollment, which opens a fresh window).
+func TestCompleteEnrollmentGuessesAreCappedAndBurnThePendingSecret(t *testing.T) {
+	auth, totp, now := fixedTOTPClock(t)
+	ctx := context.Background()
+	accountID, sessionToken, secret := startPendingEnrollment(t, auth, totp)
+	sessionHash := security.HashToken(sessionToken)
+	good := security.GenerateTOTPCode(secret, now.Unix()/security.TOTPStepSeconds)
+
+	if _, err := totp.CompleteEnrollment(ctx, accountID, sessionHash, ""); !errors.Is(err, ErrTOTPInvalidCode) {
+		t.Fatalf("expected an empty code to be refused, got %v", err)
+	}
+	wrong := wrongTOTPCode(t, secret, now)
+	for i := range maxTOTPAccountFailedAttempts {
+		if _, err := totp.CompleteEnrollment(ctx, accountID, sessionHash, wrong); !errors.Is(err, ErrTOTPInvalidCode) {
+			t.Fatalf("guess %d: expected ErrTOTPInvalidCode, got %v", i+1, err)
+		}
+	}
+	if _, err := totp.CompleteEnrollment(ctx, accountID, sessionHash, good); !errors.Is(err, ErrTOTPLocked) {
+		t.Fatalf("expected the spent window to lock even a correct code, got %v", err)
+	}
+
+	account, err := totp.store.FindAccountByID(ctx, accountID)
+	if err != nil {
+		t.Fatalf("find account: %v", err)
+	}
+	if account.TOTPEnabled || account.TOTPSecretEncrypted != "" {
+		t.Fatalf("expected the pending secret burnt and TOTP off, got enabled=%v secret-set=%v", account.TOTPEnabled, account.TOTPSecretEncrypted != "")
+	}
+
+	start, err := totp.StartEnrollment(ctx, accountID, totpWindowTestPassword)
+	if err != nil {
+		t.Fatalf("restart enrollment: %v", err)
+	}
+	fresh, err := security.DecodeTOTPSecretBase32(start.SecretBase32)
+	if err != nil {
+		t.Fatalf("decode secret: %v", err)
+	}
+	if _, err := totp.CompleteEnrollment(ctx, accountID, sessionHash, security.GenerateTOTPCode(fresh, now.Unix()/security.TOTPStepSeconds)); err != nil {
+		t.Fatalf("expected a restarted enrollment to complete, got %v", err)
+	}
+}
+
+// A StartEnrollment that lands between the code check and the enable swaps in
+// a secret nobody verified; the enable refuses it instead of turning it on.
+func TestCompleteEnrollmentRefusesASecretReplacedMidVerify(t *testing.T) {
+	auth, totp, now := fixedTOTPClock(t)
+	ctx := context.Background()
+	accountID, sessionToken, secret := startPendingEnrollment(t, auth, totp)
+
+	restarted := false
+	totp.now = func() time.Time {
+		if !restarted {
+			restarted = true
+			if _, err := totp.StartEnrollment(ctx, accountID, totpWindowTestPassword); err != nil {
+				t.Fatalf("concurrent StartEnrollment: %v", err)
+			}
+		}
+		return now
+	}
+
+	code := security.GenerateTOTPCode(secret, now.Unix()/security.TOTPStepSeconds)
+	if _, err := totp.CompleteEnrollment(ctx, accountID, security.HashToken(sessionToken), code); !errors.Is(err, ErrTOTPInvalidCode) {
+		t.Fatalf("expected ErrTOTPInvalidCode for a replaced pending secret, got %v", err)
+	}
+	account, err := totp.store.FindAccountByID(ctx, accountID)
+	if err != nil {
+		t.Fatalf("find account: %v", err)
+	}
+	if account.TOTPEnabled {
+		t.Fatal("expected the unverified replacement secret to stay disabled")
+	}
+}
+
+// A concurrent verify that enabled first wins; the loser hands out no code.
+func TestCompleteEnrollmentLosesToAConcurrentEnable(t *testing.T) {
+	auth, totp, now := fixedTOTPClock(t)
+	ctx := context.Background()
+	accountID, sessionToken, secret := startPendingEnrollment(t, auth, totp)
+
+	enabled := false
+	totp.now = func() time.Time {
+		if !enabled {
+			enabled = true
+			account, err := totp.store.FindAccountByID(ctx, accountID)
+			if err != nil {
+				t.Fatalf("find account: %v", err)
+			}
+			if err := totp.store.EnableTOTPAndRotateRecoveryCode(ctx, accountID, account.TOTPSecretEncrypted, "winner-recovery-hash", ""); err != nil {
+				t.Fatalf("concurrent enable: %v", err)
+			}
+		}
+		return now
+	}
+
+	code := security.GenerateTOTPCode(secret, now.Unix()/security.TOTPStepSeconds)
+	if _, err := totp.CompleteEnrollment(ctx, accountID, security.HashToken(sessionToken), code); !errors.Is(err, ErrTOTPAlreadyEnabled) {
+		t.Fatalf("expected ErrTOTPAlreadyEnabled for the losing verify, got %v", err)
+	}
+	account, err := totp.store.FindAccountByID(ctx, accountID)
+	if err != nil {
+		t.Fatalf("find account: %v", err)
+	}
+	if account.RecoveryCodeHash != "winner-recovery-hash" {
+		t.Fatal("expected the winner's recovery code to stand")
+	}
+}
