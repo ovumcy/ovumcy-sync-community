@@ -381,37 +381,60 @@ func (s *TOTPService) Disable(
 	// One transaction: the secret clears only while the password hash and the
 	// secret are still the ones verified above, and the challenges and every
 	// session go with it or not at all.
-	err = s.store.DisableTOTP(ctx, accountID, account.PasswordHash, account.TOTPSecretEncrypted)
-	switch {
-	case err == nil:
-		return nil
-	case errors.Is(err, db.ErrConflict):
-		return s.disableConflictError(ctx, account)
-	case errors.Is(err, db.ErrNotFound):
-		return ErrUnauthorized // codecov:ignore -- the account would have to be deleted between ClaimTOTPStep above and this write within one synchronous call; a TOCTOU, same class as the managed_bridge_service.go precedents.
+	// A login rehash moves the hash without changing the password, so a miss
+	// on a hash the password still matches is retried once.
+	verifiedHash := account.PasswordHash
+	for attempt := 0; ; attempt++ {
+		err = s.store.DisableTOTP(ctx, accountID, verifiedHash, account.TOTPSecretEncrypted)
+		switch {
+		case err == nil:
+			return nil
+		case errors.Is(err, db.ErrNotFound):
+			return ErrUnauthorized // codecov:ignore -- the account would have to be deleted between ClaimTOTPStep above and this write within one synchronous call; a TOCTOU, same class as the managed_bridge_service.go precedents.
+		case !errors.Is(err, db.ErrConflict):
+			return err
+		}
+		current, conflictErr := s.disableConflict(ctx, account, verifiedHash, currentPassword)
+		if conflictErr != nil {
+			return conflictErr
+		}
+		if attempt > 0 {
+			return ErrInvalidCurrentPassword // codecov:ignore -- needs a second hash move the password still matches (another rehash) between the retry's read and its write within one synchronous call.
+		}
+		verifiedHash = current.PasswordHash
 	}
-	return err
 }
 
-// disableConflictError names what moved under a Disable whose CAS missed: a
-// concurrent disable leaves nothing to disable, a password change/reset makes
-// the verified password stale, and a disable-and-re-enroll makes the verified
-// code belong to a secret that no longer exists.
-func (s *TOTPService) disableConflictError(ctx context.Context, verified models.Account) error {
+// disableConflict names what moved under a Disable whose CAS missed: a
+// concurrent disable leaves nothing to disable, a disable-and-re-enroll makes
+// the verified code belong to a secret that no longer exists, and a password
+// change/reset makes the password stale. It returns the fresh row, without
+// an error, when only the hash moved and the password still matches it.
+func (s *TOTPService) disableConflict(
+	ctx context.Context,
+	verified models.Account,
+	verifiedHash string,
+	currentPassword string,
+) (models.Account, error) {
 	current, err := s.store.FindAccountByID(ctx, verified.ID)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			return ErrUnauthorized // codecov:ignore -- the account would have to be deleted between the conflicting DisableTOTP and this read within one synchronous call; a TOCTOU, same class as the managed_bridge_service.go precedents.
+			return models.Account{}, ErrUnauthorized // codecov:ignore -- the account would have to be deleted between the conflicting DisableTOTP and this read within one synchronous call; a TOCTOU, same class as the managed_bridge_service.go precedents.
 		}
-		return err // codecov:ignore -- the DisableTOTP transaction on "accounts" just ran within this same call, so isolating a read failure here needs a fake driver.
+		return models.Account{}, err // codecov:ignore -- the DisableTOTP transaction on "accounts" just ran within this same call, so isolating a read failure here needs a fake driver.
 	}
 	switch {
 	case !current.TOTPEnabled:
-		return ErrTOTPNotConfigured
-	case current.PasswordHash != verified.PasswordHash:
-		return ErrInvalidCurrentPassword
+		return models.Account{}, ErrTOTPNotConfigured
+	case current.TOTPSecretEncrypted != verified.TOTPSecretEncrypted:
+		return models.Account{}, ErrTOTPInvalidCode
+	case current.PasswordHash == verifiedHash:
+		return models.Account{}, ErrInvalidCurrentPassword // codecov:ignore -- the CAS missed, yet hash, flag and secret all read back unchanged: only a change that was reverted between the two statements of this one synchronous call gets here.
 	}
-	return ErrTOTPInvalidCode
+	if security.ComparePasswordHash(current.PasswordHash, currentPassword) != nil {
+		return models.Account{}, ErrInvalidCurrentPassword
+	}
+	return current, nil
 }
 
 // VerifyAccountCode is the step-up check for an enrolled account on a route

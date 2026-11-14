@@ -319,6 +319,16 @@ func TestDisableRollsBackWhenEitherCleanupFails(t *testing.T) {
 			t.Fatalf("decrypt secret: %v", err)
 		}
 
+		// The challenge delete runs before the failing session delete, so the
+		// challenge surviving proves the whole transaction rolled back.
+		if err := totp.store.UpsertTOTPChallenge(context.Background(), models.TOTPChallenge{
+			ChallengeIDHash: "pending-challenge",
+			AccountID:       accountID,
+			CreatedAt:       now,
+			ExpiresAt:       now.Add(TOTPChallengeTTL),
+		}); err != nil {
+			t.Fatalf("seed challenge: %v", err)
+		}
 		dropTable(t, dbPath, "sessions")
 
 		step := now.UTC().Unix() / security.TOTPStepSeconds
@@ -336,6 +346,9 @@ func TestDisableRollsBackWhenEitherCleanupFails(t *testing.T) {
 		}
 		if !after.TOTPEnabled || after.TOTPSecretEncrypted != account.TOTPSecretEncrypted {
 			t.Fatal("expected the disable to roll back with TOTP still enabled")
+		}
+		if _, err := totp.store.FindTOTPChallengeByHash(context.Background(), "pending-challenge"); err != nil {
+			t.Fatalf("expected the challenge delete rolled back, got %v", err)
 		}
 	})
 
@@ -365,7 +378,7 @@ func TestDisableRollsBackWhenEitherCleanupFails(t *testing.T) {
 		if err != nil {
 			t.Fatalf("find account: %v", err)
 		}
-		if !after.TOTPEnabled {
+		if !after.TOTPEnabled || after.TOTPSecretEncrypted != account.TOTPSecretEncrypted {
 			t.Fatal("expected the disable to roll back with TOTP still enabled")
 		}
 		if _, err := totp.auth.Authenticate(context.Background(), token); err != nil {
