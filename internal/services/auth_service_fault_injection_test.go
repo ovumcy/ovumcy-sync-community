@@ -67,7 +67,7 @@ func TestLoginSurfacesTOTPChallengeIssueStoreError(t *testing.T) {
 	}
 	step := time.Now().UTC().Unix() / security.TOTPStepSeconds
 	code := security.GenerateTOTPCode(secret, step)
-	if err := totp.CompleteEnrollment(ctx, registered.AccountID, security.HashToken(registered.SessionToken), code); err != nil {
+	if _, err := totp.CompleteEnrollment(ctx, registered.AccountID, security.HashToken(registered.SessionToken), code); err != nil {
 		t.Fatalf("CompleteEnrollment: %v", err)
 	}
 

@@ -113,7 +113,7 @@ Notes on the table:
 | --- | --- | --- |
 | Change password | all except the caller's current session; pending reset tokens and TOTP challenges are deleted too | `AuthService.ChangePassword` |
 | Reset password (recovery code flow) | all; pending TOTP challenges and reset tokens are deleted too, and the password and recovery code rotate | `AuthService.ResetPassword` |
-| TOTP enrollment verified | all except the caller's current session | `TOTPService.CompleteEnrollment` |
+| TOTP enrollment verified | all except the caller's current session; the recovery code rotates (returned once in the response) and pending reset tokens are deleted, in the transaction that enables TOTP | `TOTPService.CompleteEnrollment`, `Store.EnableTOTPAndRotateRecoveryCode` |
 | TOTP disabled (needs password and current code) | all | `TOTPService.Disable` |
 | Entitlement lapse signal (`active=false`) | all | `ManagedBridgeService.SetAccountLapseSignal` |
 | Logout | the presented session | `AuthService.RevokeSession` |

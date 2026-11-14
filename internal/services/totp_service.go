@@ -206,30 +206,36 @@ func (s *TOTPService) StartEnrollment(
 // CompleteEnrollment finalises a pending enrollment by verifying the user
 // can produce a current TOTP code from the secret stashed by
 // StartEnrollment. On success: totp_enabled=true, the matching step is
-// claimed so it cannot be reused, and every other session of the account
-// is revoked (enabling 2FA is a security-state change).
+// claimed so it cannot be reused, the recovery code is rotated (pending reset
+// tokens die with the old one), and every other session of the account is
+// revoked (enabling 2FA is a security-state change). The new plaintext
+// recovery code is returned for the client to show once.
+//
+// The rotation closes a downgrade: a reset with a recovery code clears TOTP,
+// so a code issued before enrollment would otherwise let a password holder
+// remove the second factor without ever presenting it.
 func (s *TOTPService) CompleteEnrollment(
 	ctx context.Context,
 	accountID string,
 	currentSessionTokenHash string,
 	code string,
-) error {
+) (string, error) {
 	if !s.Configured() {
-		return ErrTOTPNotConfigured
+		return "", ErrTOTPNotConfigured
 	}
 
 	account, err := s.store.FindAccountByID(ctx, accountID)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			return ErrUnauthorized
+			return "", ErrUnauthorized
 		}
-		return err
+		return "", err
 	}
 	if account.TOTPEnabled {
-		return ErrTOTPAlreadyEnabled
+		return "", ErrTOTPAlreadyEnabled
 	}
 	if account.TOTPSecretEncrypted == "" {
-		return ErrTOTPNotConfigured
+		return "", ErrTOTPNotConfigured
 	}
 
 	rawSecret, err := security.DecryptField(
@@ -239,50 +245,59 @@ func (s *TOTPService) CompleteEnrollment(
 	)
 	if err != nil {
 		s.observeEnrollmentCompletion("secret_failed")
-		return fmt.Errorf("%w: %v", ErrTOTPSecretDecrypt, err)
+		return "", fmt.Errorf("%w: %v", ErrTOTPSecretDecrypt, err)
 	}
 
 	step, ok := security.VerifyTOTPCode([]byte(rawSecret), code, s.now().UTC().Unix())
 	if !ok {
 		s.observeEnrollmentCompletion("invalid_code")
-		return ErrTOTPInvalidCode
+		return "", ErrTOTPInvalidCode
 	}
 
 	claimed, err := s.store.ClaimTOTPStep(ctx, accountID, step)
 	if err != nil {
-		return err // codecov:ignore -- FindAccountByID above already touches "accounts" as this function's first store call, so isolating a second, later accounts-table failure here needs a fake driver.
+		return "", err // codecov:ignore -- FindAccountByID above already touches "accounts" as this function's first store call, so isolating a second, later accounts-table failure here needs a fake driver.
 	}
 	if !claimed {
 		s.observeEnrollmentCompletion("replayed")
-		return ErrTOTPReplayed
+		return "", ErrTOTPReplayed
 	}
 
-	// codecov:ignore:start -- both branches below need the account row or the
-	// accounts table to fail specifically for THIS write, after
+	// Generated only after a verified, claimed code: the bcrypt hash is not
+	// spent on wrong or replayed codes.
+	plainRecovery, recoveryHash, err := security.NewRecoveryCode()
+	if err != nil {
+		return "", err // codecov:ignore -- crypto-primitive error that cannot occur in practice (see internal/security/password.go's own codecov:ignore annotation on NewRecoveryCode's internal rand.Read).
+	}
+
+	// codecov:ignore:start -- every branch below needs the account row or the
+	// accounts table to change specifically for THIS write, after
 	// FindAccountByID and ClaimTOTPStep above have already succeeded against
-	// the same table within this one synchronous call: the ErrNotFound case
-	// is a TOCTOU (account deleted mid-call, same class as the
-	// managed_bridge_service.go precedents) and the generic case needs a
-	// fake driver (same same-table-multi-step limitation as the
-	// RowsAffected/COMMIT deviations in internal/db/fault_injection_test.go).
+	// the same table within this one synchronous call: ErrNotFound and
+	// ErrConflict are TOCTOUs (account deleted, or a concurrent enrollment
+	// enabled first, mid-call — same class as the managed_bridge_service.go
+	// precedents) and the generic case needs a fake driver (same
+	// same-table-multi-step limitation as the RowsAffected/COMMIT deviations
+	// in internal/db/fault_injection_test.go).
 	//
-	// Flip to enabled WITHOUT resetting totp_last_used_step: the step just
-	// claimed above must stay consumed, or this same enrollment code would be
-	// accepted again by the login-challenge and disable paths within its
-	// ±1-step skew window. SetTOTPEnabled touches only the flag; the pending
-	// secret stored by StartEnrollment is already the live secret.
-	if err := s.store.SetTOTPEnabled(ctx, accountID, true); err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			return ErrUnauthorized
+	// The enable flip keeps totp_last_used_step: the step just claimed above
+	// must stay consumed, or this same enrollment code would be accepted again
+	// by the login-challenge and disable paths within its ±1-step skew window.
+	if err := s.store.EnableTOTPAndRotateRecoveryCode(ctx, accountID, recoveryHash); err != nil {
+		switch {
+		case errors.Is(err, db.ErrNotFound):
+			return "", ErrUnauthorized
+		case errors.Is(err, db.ErrConflict):
+			return "", ErrTOTPAlreadyEnabled
 		}
-		return err
+		return "", err
 	}
 	// codecov:ignore:end
 
 	// Enabling 2FA changes the account's security posture; invalidate other
 	// sessions. The caller's session stays valid via currentSessionTokenHash.
 	if err := s.store.DeleteSessionsForAccountExcept(ctx, accountID, currentSessionTokenHash); err != nil {
-		return err
+		return "", err
 	}
 
 	// A new secret is a fresh guessing space; a window spent against the
@@ -290,7 +305,7 @@ func (s *TOTPService) CompleteEnrollment(
 	s.clearCodeFailures(ctx, accountID)
 
 	s.observeEnrollmentCompletion("ok")
-	return nil
+	return plainRecovery, nil
 }
 
 // Disable verifies the current password AND a current TOTP code, then

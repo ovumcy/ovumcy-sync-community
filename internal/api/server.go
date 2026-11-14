@@ -575,17 +575,21 @@ func (s *Server) handleTOTPVerifyEnrollment(
 
 	currentSessionTokenHash := security.HashToken(bearerTokenFromRequest(request))
 
-	if err := s.totp.CompleteEnrollment(
+	recoveryCode, err := s.totp.CompleteEnrollment(
 		request.Context(),
 		account.ID,
 		currentSessionTokenHash,
 		payload.Code,
-	); err != nil {
+	)
+	if err != nil {
 		mapTOTPError(writer, err)
 		return
 	}
 
-	writeJSON(writer, http.StatusOK, map[string]string{"status": "totp_enabled"})
+	writeJSON(writer, http.StatusOK, map[string]string{
+		"status":        "totp_enabled",
+		"recovery_code": recoveryCode,
+	})
 }
 
 func (s *Server) handleTOTPDisable(

@@ -63,7 +63,7 @@ func enrollTOTP(
 
 	step := now.UTC().Unix() / security.TOTPStepSeconds
 	enrollCode = security.GenerateTOTPCode(secret, step)
-	if err := totp.CompleteEnrollment(
+	if _, err := totp.CompleteEnrollment(
 		ctx,
 		registered.AccountID,
 		security.HashToken(registered.SessionToken),
@@ -196,7 +196,7 @@ func TestFreshStartEnrollmentResetsStaleStepClaim(t *testing.T) {
 		t.Fatalf("decode new secret: %v", err)
 	}
 	reEnrollStep := reEnrollNow.UTC().Unix() / security.TOTPStepSeconds
-	if err := totp.CompleteEnrollment(
+	if _, err := totp.CompleteEnrollment(
 		ctx,
 		accountID,
 		security.HashToken(sessionToken),

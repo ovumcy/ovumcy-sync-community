@@ -482,8 +482,11 @@ paths:
       description: |
         Verifies a current code from the authenticator app against the
         pending secret from `POST /auth/totp/enroll`. On success, TOTP flips
-        to enabled and every other session for the account is revoked (the
-        caller's own session stays valid).
+        to enabled, the account recovery code is rotated (the previous code
+        and any pending reset token stop working), and every other session
+        for the account is revoked (the caller's own session stays valid).
+        The client must show the returned `recovery_code` to the user: it is
+        the only working recovery code from this point on.
       security:
         - sessionBearerAuth: []
       requestBody:
@@ -494,14 +497,14 @@ paths:
               $ref: "#/components/schemas/TOTPVerifyRequest"
       responses:
         "200":
-          description: TOTP enabled.
+          description: TOTP enabled; a new recovery code is issued.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/StatusResponse"
+                $ref: "#/components/schemas/TOTPEnabledResponse"
               examples:
                 enabled:
-                  value: { status: totp_enabled }
+                  value: { status: totp_enabled, recovery_code: 3f9c2a7e1b6d48c0a5e9f3b27d1c6e84 }
         "401":
           description: Missing/invalid session, wrong/expired code, or a replayed step.
           content:
@@ -1463,7 +1466,7 @@ components:
       properties:
         status:
           type: string
-          description: 'Short status key, e.g. "ok", "password_changed", "totp_enabled", "totp_disabled", "revoked", "account_deleted", "account_purged".'
+          description: 'Short status key, e.g. "ok", "password_changed", "totp_disabled", "revoked", "account_deleted", "account_purged".'
       required: [status]
       additionalProperties: false
 
@@ -1566,6 +1569,18 @@ components:
           type: string
           description: otpauth:// URI for QR-code enrollment, embedding the configured TOTP_ISSUER label.
       required: [secret_base32, provisioning_uri]
+      additionalProperties: false
+
+    TOTPEnabledResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [totp_enabled]
+        recovery_code:
+          type: string
+          description: New plaintext recovery code replacing the previous one. Shown once; store it out of band.
+      required: [status, recovery_code]
       additionalProperties: false
 
     TOTPVerifyRequest:
