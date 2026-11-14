@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -152,32 +153,49 @@ func runServe(cfg config.Config) error {
 	backgroundCtx, stopBackground := context.WithCancel(context.Background())
 	defer stopBackground()
 
+	// ListenAndServe returns as soon as Shutdown starts, while in-flight
+	// handlers still run; the deferred store.Close must wait for them, or a
+	// password change caught mid-way commits its hash and keeps the sessions
+	// it was about to revoke. drained closes once Shutdown has returned and
+	// the sweep loops have stopped.
+	drained := make(chan struct{})
+	var background sync.WaitGroup
 	go func() {
 		<-shutdownSignal()
 		stopBackground()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = server.Shutdown(ctx)
+		background.Wait()
+		close(drained)
 	}()
 
-	go runLapsedAccountSweepLoop(
-		backgroundCtx,
-		services.NewLapsedAccountSweepService(store, cfg.LapsedAccountGracePeriod),
-		cfg.LapsedAccountSweepInterval,
-		cfg.LapsedAccountSweepLimit,
-	)
-	go runExpiredRowsSweepLoop(
-		backgroundCtx,
-		services.NewExpiredRowsSweepService(store),
-		cfg.ExpiredRowsSweepInterval,
-		cfg.ExpiredRowsSweepLimit,
-	)
-	// codecov:ignore:end
+	background.Add(2)
+	go func() {
+		defer background.Done()
+		runLapsedAccountSweepLoop(
+			backgroundCtx,
+			services.NewLapsedAccountSweepService(store, cfg.LapsedAccountGracePeriod),
+			cfg.LapsedAccountSweepInterval,
+			cfg.LapsedAccountSweepLimit,
+		)
+	}()
+	go func() {
+		defer background.Done()
+		runExpiredRowsSweepLoop(
+			backgroundCtx,
+			services.NewExpiredRowsSweepService(store),
+			cfg.ExpiredRowsSweepInterval,
+			cfg.ExpiredRowsSweepLimit,
+		)
+	}()
 
 	log.Printf("ovumcy-sync-community listening on %s", cfg.BindAddr)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("serve: %w", err)
 	}
+	<-drained
+	// codecov:ignore:end
 
 	return nil
 }

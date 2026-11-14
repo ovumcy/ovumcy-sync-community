@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **SIGTERM closed the database under live requests.** `serve` returned as soon as graceful shutdown began, so the database closed while in-flight handlers were still running; a password change or reset caught mid-way could commit its new hash and fail to revoke the old sessions. `serve` now waits for the HTTP drain (up to 10 s) and for the in-process sweeps to stop before closing the database.
+
 - **Account deletion and the recovery-key overwrite ran on a stale password check.** `DELETE /account` and `PUT /sync/recovery-key` verified the current password, then erased or wrote in a separate step, so a password change or reset landing during the check — or a revocation of the caller's session — did not stop them. Both now commit in one transaction only while the password hash is still the one verified (otherwise 401 `invalid_current_password`) and the caller's session still exists (otherwise 401 `unauthorized`).
 
 - **Reverse-proxy examples left side doors open.** Under `docker-compose.caddy.yml` the app still published `127.0.0.1:8080`, so anything on the host reached it around Caddy's `/metrics` and `/managed/*` block; the Caddy and Traefik overrides now drop that mapping (`ports: !reset []`, Docker Compose 2.24.4 or newer). The Traefik example trusted its whole Docker subnet, so any container on it could pick its own rate-limit key; Traefik is now pinned to `SYNC_PROXY_IP` (default `172.30.98.10`) on its own `edge` network and only that address is trusted — `TRUSTED_PROXY_CIDRS` no longer needs to be exported for it.
