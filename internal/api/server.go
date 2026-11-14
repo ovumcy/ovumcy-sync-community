@@ -258,7 +258,9 @@ func panicValueSummary(rec any) string {
 // sanitizeLogValue strips every character a request-derived value (method,
 // path) could steer a log reader with, before it reaches a log call: the C0
 // range below 0x20, which includes CR and LF, 0x7F (DEL), the C1 range
-// 0x80-0x9F, and the Unicode format category (Cf).
+// 0x80-0x9F, the Unicode format category (Cf), and the line and paragraph
+// separators U+2028/U+2029 (Zl, Zp), which JSON and JavaScript log viewers
+// break lines on just like LF.
 //
 // Line breaks are the classic case — they let a caller forge or split entries
 // in the log file (CWE-117 log injection). The rest does the same damage one
@@ -290,7 +292,7 @@ func sanitizeLogValue(value string) string {
 			return -1
 		case r >= 0x80 && r <= 0x9F:
 			return -1
-		case unicode.Is(unicode.Cf, r):
+		case unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp):
 			return -1
 		default:
 			return r
@@ -709,7 +711,13 @@ func (s *Server) handleLogout(writer http.ResponseWriter, request *http.Request)
 	}
 
 	if err := s.auth.RevokeSession(request.Context(), bearerTokenFromRequest(request)); err != nil {
-		writeError(writer, http.StatusUnauthorized, "unauthorized")
+		if errors.Is(err, services.ErrUnauthorized) {
+			writeError(writer, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		// A store failure must not tell the client its session is gone: it
+		// would drop the token while the session stays live server-side.
+		writeError(writer, http.StatusInternalServerError, "internal_error")
 		return
 	}
 
@@ -1196,8 +1204,28 @@ func (s *Server) withAuth(next func(http.ResponseWriter, *http.Request, models.A
 		}
 		s.sessionReadLimiter.Refund(key)
 
-		next(writer, request, account)
+		status := &statusRecorder{ResponseWriter: writer}
+		next(status, request, account)
+		// A handler's own 429 re-charges the slot: the lookup above was spent
+		// anyway, and a caller already over its per-account budget must not
+		// keep paying for it from a fresh bucket.
+		if status.code == http.StatusTooManyRequests {
+			s.sessionReadLimiter.Allow(key)
+		}
 	}
+}
+
+// statusRecorder remembers the status a handler wrote.
+type statusRecorder struct {
+	http.ResponseWriter
+	code int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	if r.code == 0 {
+		r.code = code
+	}
+	r.ResponseWriter.WriteHeader(code)
 }
 
 // requireSyncEnabled gates the device, recovery-key and blob routes (inside
@@ -1372,13 +1400,15 @@ func (s *Server) allowLoginRequestForIdentifier(
 }
 
 // loginIdentifierKey is the one place the identifier bucket's key is derived,
-// so charge, refund and clear always address the same bucket.
+// so charge, refund and clear always address the same bucket. The login is
+// hashed so a key costs the limiter a fixed 81 bytes, not up to the 4 KB body,
+// and the in-memory map holds no login in the clear.
 func loginIdentifierKey(login string) (string, bool) {
 	normalized := security.NormalizeLogin(login)
 	if normalized == "" {
 		return "", false
 	}
-	return "login_identifier:" + normalized, true
+	return "login_identifier:" + security.HashToken(normalized), true
 }
 
 func (s *Server) refundLoginIdentifier(login string) {

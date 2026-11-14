@@ -214,6 +214,13 @@ func TestSanitizeLogValueStripsControlCharacters(t *testing.T) {
 			want:  "/sync/blob",
 		},
 		{
+			// U+2028/U+2029 are not Cf but Zl/Zp: a JSON or JavaScript log
+			// viewer breaks the line on them like on LF.
+			name:  "unicode line and paragraph separators",
+			value: "/sync/blob Injected: forged line",
+			want:  "/sync/blobInjected: forgedline",
+		},
+		{
 			// Legitimate non-ASCII text is not a control character and stays:
 			// a path is text, and mangling it would lose what was requested.
 			name:  "non-ascii text survives",
@@ -232,7 +239,7 @@ func TestSanitizeLogValueStripsControlCharacters(t *testing.T) {
 				t.Fatalf("sanitizeLogValue(%q) = %q, want %q", testCase.value, got, testCase.want)
 			}
 			for _, r := range got {
-				if r < 0x20 || r == 0x7F || (r >= 0x80 && r <= 0x9F) || unicode.Is(unicode.Cf, r) {
+				if r < 0x20 || r == 0x7F || (r >= 0x80 && r <= 0x9F) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
 					t.Fatalf("sanitized value still holds control character %#U: %q", r, got)
 				}
 			}

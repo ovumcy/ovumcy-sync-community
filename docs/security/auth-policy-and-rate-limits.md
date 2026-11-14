@@ -64,8 +64,8 @@ Notes on the table:
 - The 30x read budget covers exactly three routes: `GET /auth/session`, `GET /sync/capabilities`,
   `GET /sync/devices`. `GET /sync/blob` and `GET /sync/recovery-key` are not in that set and use the
   10/min per-account budget.
-- Login carries a second ceiling keyed on the normalized login (`login_identifier:<login>` in the same
-  limiter), so a distributed attacker cannot multiply the budget across source IPs. A slot is reserved
+- Login carries a second ceiling keyed on the normalized login (`login_identifier:<sha256 of login>` in
+  the same limiter, so a key has a fixed size and the limiter holds no login in the clear), so a distributed attacker cannot multiply the budget across source IPs. A slot is reserved
   before the password check and refunded when the login issues a session, so only failures (and
   password successes that stop at a TOTP challenge) stay charged. The cost is that someone can exhaust a
   known login's budget for as long as they keep failing; a successful `POST /auth/forgot-password`
@@ -75,6 +75,8 @@ Notes on the table:
 - Every session-authenticated route first passes a per-client-IP bucket (`unauthenticated:<ip>` in the
   read-state limiter, 30x budget) before the session lookup. A valid session refunds its slot, so only
   failed lookups stay charged and callers sharing an address are not throttled by each other's traffic.
+  A request the handler answers 429 (its per-account budget spent) re-charges the slot, so a session
+  over its budget stops at the IP gate instead of paying for a session lookup on every retry.
 - The body is decoded strictly: unknown fields and trailing data are `400 invalid_json`, as is any body over
   the cap.
 - Raising `AUTH_RATE_LIMIT_COUNT` or `AUTH_RATE_LIMIT_WINDOW` moves every bucket; the read budget has no
