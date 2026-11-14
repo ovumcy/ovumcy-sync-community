@@ -115,7 +115,6 @@ func TestCompleteEnrollmentGuessesAreCappedAndBurnThePendingSecret(t *testing.T)
 	ctx := context.Background()
 	accountID, sessionToken, secret := startPendingEnrollment(t, auth, totp)
 	sessionHash := security.HashToken(sessionToken)
-	good := security.GenerateTOTPCode(secret, now.Unix()/security.TOTPStepSeconds)
 
 	if _, err := totp.CompleteEnrollment(ctx, accountID, sessionHash, ""); !errors.Is(err, ErrTOTPInvalidCode) {
 		t.Fatalf("expected an empty code to be refused, got %v", err)
@@ -126,9 +125,14 @@ func TestCompleteEnrollmentGuessesAreCappedAndBurnThePendingSecret(t *testing.T)
 			t.Fatalf("guess %d: expected ErrTOTPInvalidCode, got %v", i+1, err)
 		}
 	}
-	if _, err := totp.CompleteEnrollment(ctx, accountID, sessionHash, good); !errors.Is(err, ErrTOTPLocked) {
-		t.Fatalf("expected the spent window to lock even a correct code, got %v", err)
+	// Pacing does not help: the budget belongs to the pending secret, not to
+	// a rolling window.
+	paced := now.Add(TOTPFailureWindow + time.Minute)
+	totp.now = func() time.Time { return paced }
+	if _, err := totp.CompleteEnrollment(ctx, accountID, sessionHash, security.GenerateTOTPCode(secret, paced.Unix()/security.TOTPStepSeconds)); !errors.Is(err, ErrTOTPLocked) {
+		t.Fatalf("expected the spent budget to lock even a correct code after a pause, got %v", err)
 	}
+	totp.now = func() time.Time { return now }
 
 	account, err := totp.store.FindAccountByID(ctx, accountID)
 	if err != nil {

@@ -43,6 +43,12 @@ const (
 	maxTOTPAccountFailedAttempts = 10
 )
 
+// pendingEnrollmentAttemptWindow makes the enrollment-verify budget a lifetime
+// budget for one pending secret rather than a rolling one: a window that
+// restarted every 15 minutes would let a stolen session pace its guesses and
+// never reach the burn. StartEnrollment and a completed enrollment clear it.
+const pendingEnrollmentAttemptWindow = 100 * 365 * 24 * time.Hour
+
 // TOTPChallengeTTL is how long a login-second-factor challenge remains
 // usable. 5 minutes is long enough that an owner has time to open their
 // authenticator app and type the code, short enough that a leaked
@@ -256,22 +262,25 @@ func (s *TOTPService) CompleteEnrollment(
 	}
 
 	// A successful verify hands out a recovery code, so a session alone must
-	// not get unlimited guesses at a pending secret: attempts are metered in
-	// the account window, and a spent window burns the pending secret, so
-	// further guesses need the password again (StartEnrollment).
+	// not get unlimited guesses at a pending secret: each pending secret gets
+	// maxTOTPAccountFailedAttempts guesses in total, after which it is burnt
+	// and guessing again needs the password (StartEnrollment).
 	if code == "" {
 		s.observeEnrollmentCompletion("invalid_code")
 		return "", ErrTOTPInvalidCode
 	}
 	now := s.now().UTC()
-	if err := s.reserveCodeAttempt(ctx, accountID, now); err != nil {
-		if errors.Is(err, ErrTOTPLocked) {
-			if discardErr := s.store.DiscardPendingTOTPSecret(ctx, accountID, account.TOTPSecretEncrypted); discardErr != nil {
-				return "", discardErr // codecov:ignore -- ReserveTOTPAttempt just succeeded within this call and the accounts table was read by FindAccountByID above, so failing only this write needs a fake driver (same same-table-multi-step limitation as the RowsAffected/COMMIT deviations in internal/db/fault_injection_test.go).
-			}
-			s.observeEnrollmentCompletion("locked")
-		}
+	reserved, _, err := s.store.ReserveTOTPAttempt(ctx, accountID, now, pendingEnrollmentAttemptWindow, maxTOTPAccountFailedAttempts)
+	if err != nil {
 		return "", err
+	}
+	if !reserved {
+		if err := s.store.DiscardPendingTOTPSecret(ctx, accountID, account.TOTPSecretEncrypted); err != nil {
+			return "", err // codecov:ignore -- ReserveTOTPAttempt just succeeded within this call and the accounts table was read by FindAccountByID above, so failing only this write needs a fake driver (same same-table-multi-step limitation as the RowsAffected/COMMIT deviations in internal/db/fault_injection_test.go).
+		}
+		s.observeEnrollmentCompletion("locked")
+		// No wait makes this secret usable again; the client must restart.
+		return "", &TOTPLockedError{}
 	}
 
 	step, ok := security.VerifyTOTPCode([]byte(rawSecret), code, now.Unix())

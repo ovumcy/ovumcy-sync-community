@@ -529,11 +529,11 @@ paths:
                   value: { error: totp_already_enabled }
         "429":
           description: |
-            Request rate limit, or the account's TOTP code window is spent
-            (10 attempts per 15 minutes). A spent window also discards the
-            pending secret: restart with `POST /auth/totp/enroll`, which needs
-            the password and opens a fresh window. `Retry-After` gives the
-            seconds until the window ends.
+            Request rate limit, or the pending secret's verify budget is spent
+            (10 attempts per pending secret, no window restart). A spent
+            budget discards the pending secret: no wait makes it usable
+            again, so ignore `Retry-After` and restart with
+            `POST /auth/totp/enroll`, which needs the password.
           headers:
             Retry-After:
               description: Seconds until the caller may retry.
