@@ -155,6 +155,38 @@ func TestCompleteEnrollmentGuessesAreCappedAndBurnThePendingSecret(t *testing.T)
 	}
 }
 
+// A failed reservation stops the verify before the code is looked at, and
+// changes nothing.
+func TestCompleteEnrollmentSurfacesReservationStoreError(t *testing.T) {
+	store, dbPath := openFileBackedTestStore(t)
+	auth := NewAuthService(store, 24*time.Hour)
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 1)
+	}
+	totp := NewTOTPService(store, auth, key, "ovumcy-sync-community-test")
+	auth.AttachTOTPChallengeIssuer(totp)
+	now := time.Date(2026, 7, 7, 10, 0, 5, 0, time.UTC)
+	auth.now = func() time.Time { return now }
+	totp.now = func() time.Time { return now }
+	ctx := context.Background()
+	accountID, sessionToken, secret := startPendingEnrollment(t, auth, totp)
+
+	dropTable(t, dbPath, "totp_failure_windows")
+
+	code := security.GenerateTOTPCode(secret, now.Unix()/security.TOTPStepSeconds)
+	if _, err := totp.CompleteEnrollment(ctx, accountID, security.HashToken(sessionToken), code); err == nil || errors.Is(err, ErrTOTPInvalidCode) {
+		t.Fatalf("expected the reservation store error to surface, got %v", err)
+	}
+	account, err := store.FindAccountByID(ctx, accountID)
+	if err != nil {
+		t.Fatalf("find account: %v", err)
+	}
+	if account.TOTPEnabled || account.TOTPSecretEncrypted == "" {
+		t.Fatalf("expected the pending enrollment untouched, got enabled=%v secret-set=%v", account.TOTPEnabled, account.TOTPSecretEncrypted != "")
+	}
+}
+
 // A StartEnrollment that lands between the code check and the enable swaps in
 // a secret nobody verified; the enable refuses it instead of turning it on.
 func TestCompleteEnrollmentRefusesASecretReplacedMidVerify(t *testing.T) {
