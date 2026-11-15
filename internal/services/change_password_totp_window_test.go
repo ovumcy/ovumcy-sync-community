@@ -32,7 +32,7 @@ func TestChangePasswordSharesTheAccountTOTPWindow(t *testing.T) {
 	if _, err := auth.ChangePassword(ctx, accountID, sessionHash, totpWindowTestPassword, changePasswordWindowNewPassword, correct); !errors.Is(err, ErrTOTPLocked) {
 		t.Fatalf("expected the change to be locked, got %v", err)
 	}
-	if _, err := auth.RegenerateRecoveryCode(ctx, accountID, totpWindowTestPassword, correct); !errors.Is(err, ErrTOTPLocked) {
+	if _, err := auth.RegenerateRecoveryCode(ctx, accountID, StepUp{SessionTokenHash: sessionHash, CurrentPassword: totpWindowTestPassword}, correct); !errors.Is(err, ErrTOTPLocked) {
 		t.Fatalf("expected regeneration to share the lock, got %v", err)
 	}
 }
@@ -67,7 +67,7 @@ func TestChangePasswordRefusesAReplayedCode(t *testing.T) {
 	later := now.Add(security.TOTPStepSeconds * time.Second)
 	setTOTPClock(auth, totp, later)
 	code := security.GenerateTOTPCode(secret, later.Unix()/security.TOTPStepSeconds)
-	if _, err := auth.RegenerateRecoveryCode(ctx, accountID, totpWindowTestPassword, code); err != nil {
+	if _, err := auth.RegenerateRecoveryCode(ctx, accountID, StepUp{SessionTokenHash: security.HashToken(token), CurrentPassword: totpWindowTestPassword}, code); err != nil {
 		t.Fatalf("regenerate: %v", err)
 	}
 	if _, err := auth.ChangePassword(ctx, accountID, security.HashToken(token), totpWindowTestPassword, changePasswordWindowNewPassword, code); !errors.Is(err, ErrTOTPReplayed) {
