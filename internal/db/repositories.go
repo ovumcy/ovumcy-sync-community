@@ -1106,11 +1106,15 @@ func (s *Store) DisableTOTP(
 // totp_last_used_step resets to 0) only while TOTP is still off: an enrollment
 // start that read "disabled" before a concurrent verify committed must not
 // switch the just-enabled factor back off. It also needs the caller's session
-// (requireLiveSession). ErrConflict when TOTP is enabled, ErrSessionRevoked
-// when the session is gone, ErrNotFound when the account is.
+// and the password hash the start verified (requireStepUpState): a start
+// verified against the old password must not leave a secret behind a password
+// change, which discards pending secrets. ErrConflict when TOTP is enabled,
+// ErrPasswordChanged when the hash moved on, ErrSessionRevoked when the
+// session is gone, ErrNotFound when the account is.
 func (s *Store) StorePendingTOTPSecret(
 	ctx context.Context,
 	accountID string,
+	verifiedPasswordHash string,
 	sessionTokenHash string,
 	encryptedSecret string,
 ) error {
@@ -1122,7 +1126,10 @@ func (s *Store) StorePendingTOTPSecret(
 		_ = tx.Rollback()
 	}()
 
-	if err := requireLiveSession(ctx, tx, accountID, sessionTokenHash); err != nil {
+	if err := requireStepUpState(ctx, tx, accountID, verifiedPasswordHash, sessionTokenHash); err != nil {
+		if errors.Is(err, ErrConflict) {
+			return ErrPasswordChanged
+		}
 		return err
 	}
 	result, err := tx.ExecContext(

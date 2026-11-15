@@ -30,7 +30,7 @@ func lateBodyWrites(store *Store, accountID string) map[string]func(ctx context.
 			return store.UpdateAccountRecoveryCodeHash(ctx, accountID, tokenHash, "", "verified-hash", "new-recovery-hash")
 		},
 		"pending totp secret": func(ctx context.Context, tokenHash string) error {
-			return store.StorePendingTOTPSecret(ctx, accountID, tokenHash, "pending-secret")
+			return store.StorePendingTOTPSecret(ctx, accountID, "verified-hash", tokenHash, "pending-secret")
 		},
 		"device delete": func(ctx context.Context, tokenHash string) error {
 			return store.DeleteDevice(ctx, accountID, tokenHash, "device-a")
@@ -100,7 +100,7 @@ func TestEnableTOTPNeedsTheCallersSession(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 	seedLateBodyAccount(t, store, "late-account")
-	if err := store.StorePendingTOTPSecret(ctx, "late-account", "late-account-live", "pending-secret"); err != nil {
+	if err := store.StorePendingTOTPSecret(ctx, "late-account", "verified-hash", "late-account-live", "pending-secret"); err != nil {
 		t.Fatalf("store pending secret: %v", err)
 	}
 
@@ -127,7 +127,7 @@ func TestLateBodyWritesSurfaceStoreFailures(t *testing.T) {
 			t.Fatalf("close store: %v", err)
 		}
 		ctx := context.Background()
-		if err := store.StorePendingTOTPSecret(ctx, "account", "token", "secret"); err == nil || !strings.Contains(err.Error(), "begin store pending totp secret") {
+		if err := store.StorePendingTOTPSecret(ctx, "account", "hash", "token", "secret"); err == nil || !strings.Contains(err.Error(), "begin store pending totp secret") {
 			t.Fatalf("expected the begin error, got %v", err)
 		}
 		if _, err := store.UpsertEncryptedBlob(ctx, "token", lateBodyBlob("account")); err == nil || !strings.Contains(err.Error(), "begin upsert blob") {
@@ -139,9 +139,9 @@ func TestLateBodyWritesSurfaceStoreFailures(t *testing.T) {
 		store, dbPath := newFileBackedTestStore(t)
 		seedGuardAccount(t, store, "late-account")
 		dropTable(t, dbPath, "sessions")
-		err := store.StorePendingTOTPSecret(context.Background(), "late-account", "token", "secret")
-		if err == nil || !strings.Contains(err.Error(), "session lookup") {
-			t.Fatalf("expected the session lookup error, got %v", err)
+		err := store.StorePendingTOTPSecret(context.Background(), "late-account", "verified-hash", "token", "secret")
+		if err == nil || !strings.Contains(err.Error(), "step-up state lookup") {
+			t.Fatalf("expected the step-up state lookup error, got %v", err)
 		}
 	})
 }

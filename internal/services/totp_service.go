@@ -184,11 +184,14 @@ func (s *TOTPService) StartEnrollment(
 	// new secret starts from a clean step. (The enable in CompleteEnrollment,
 	// by contrast, preserves the step — see EnableTOTPAndRotateRecoveryCode.)
 	// A caller whose session was revoked while the body was in flight writes
-	// nothing (ErrSessionRevoked → 401).
-	if err := s.store.StorePendingTOTPSecret(ctx, accountID, stepUp.SessionTokenHash, encrypted); err != nil {
+	// nothing (ErrSessionRevoked → 401), and one verified against a password
+	// changed meanwhile writes nothing either.
+	if err := s.store.StorePendingTOTPSecret(ctx, accountID, account.PasswordHash, stepUp.SessionTokenHash, encrypted); err != nil {
 		switch {
 		case errors.Is(err, db.ErrSessionRevoked):
 			return TOTPEnrollmentStart{}, ErrUnauthorized
+		case errors.Is(err, db.ErrPasswordChanged):
+			return TOTPEnrollmentStart{}, ErrInvalidCurrentPassword
 		// codecov:ignore:start -- the branches below need the account row to
 		// change specifically for THIS write, after the FindAccountByID lookup
 		// above within this one synchronous call: ErrNotFound and ErrConflict
