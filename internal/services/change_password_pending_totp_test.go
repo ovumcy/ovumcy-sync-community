@@ -45,8 +45,8 @@ func TestChangePasswordDiscardsAPendingEnrollment(t *testing.T) {
 		t.Fatalf("later login: %v", err)
 	}
 	code := security.GenerateTOTPCode(secret, now.Unix()/security.TOTPStepSeconds)
-	if _, err := totp.CompleteEnrollment(ctx, owner.AccountID, security.HashToken(later.SessionToken), code); !errors.Is(err, ErrTOTPNotConfigured) {
-		t.Fatalf("expected the planted secret gone (ErrTOTPNotConfigured), got %v", err)
+	if _, err := totp.CompleteEnrollment(ctx, owner.AccountID, security.HashToken(later.SessionToken), code); !errors.Is(err, ErrTOTPEnrollmentNotStarted) {
+		t.Fatalf("expected the planted secret gone (ErrTOTPEnrollmentNotStarted), got %v", err)
 	}
 	account, err := auth.store.FindAccountByID(ctx, owner.AccountID)
 	if err != nil {

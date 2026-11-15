@@ -572,13 +572,13 @@ func TestTOTPMetricsExposeChallengeAndEnrollmentResults(t *testing.T) {
 	}
 }
 
-func TestTOTPVerifyWithoutPendingEnrollmentReturnsNotConfigured(t *testing.T) {
+func TestTOTPVerifyWithoutPendingEnrollmentReturnsEnrollmentNotStarted(t *testing.T) {
 	handler := newTestServerWithOptions(t, serverTestOptions{enableTOTP: true})
 	token := registerOwnerWithTOTP(t, handler)
 
 	// No StartEnrollment happened, so there is no stashed secret to verify
-	// against; the endpoint reports the not-configured state instead of a
-	// misleading invalid-code error.
+	// against; the endpoint reports that state, not an invalid code and not
+	// a server without a field key.
 	resp := performJSONRequest(
 		t,
 		handler,
@@ -586,16 +586,16 @@ func TestTOTPVerifyWithoutPendingEnrollmentReturnsNotConfigured(t *testing.T) {
 		"/auth/totp/verify",
 		map[string]string{"code": "000000"},
 		token,
-		http.StatusServiceUnavailable,
+		http.StatusConflict,
 	)
 	var body map[string]string
 	decodeResponse(t, resp.Body.Bytes(), &body)
-	if body["error"] != "totp_not_configured" {
+	if body["error"] != "totp_enrollment_not_started" {
 		t.Fatalf("unexpected verify-without-enrollment payload: %#v", body)
 	}
 }
 
-func TestTOTPDisableWhenNotEnabledReturnsNotConfigured(t *testing.T) {
+func TestTOTPDisableWhenNotEnabledReturnsNotEnabled(t *testing.T) {
 	handler := newTestServerWithOptions(t, serverTestOptions{enableTOTP: true})
 	token := registerOwnerWithTOTP(t, handler)
 
@@ -609,11 +609,11 @@ func TestTOTPDisableWhenNotEnabledReturnsNotConfigured(t *testing.T) {
 			"code":             "000000",
 		},
 		token,
-		http.StatusServiceUnavailable,
+		http.StatusConflict,
 	)
 	var body map[string]string
 	decodeResponse(t, resp.Body.Bytes(), &body)
-	if body["error"] != "totp_not_configured" {
+	if body["error"] != "totp_not_enabled" {
 		t.Fatalf("unexpected disable-when-not-enabled payload: %#v", body)
 	}
 }

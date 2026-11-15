@@ -532,7 +532,7 @@ paths:
                 unauthorized:
                   value: { error: unauthorized }
         "409":
-          description: TOTP is already enabled on this account.
+          description: TOTP is already enabled on this account, or there is no pending secret to confirm (call `POST /auth/totp/enroll` first).
           content:
             application/json:
               schema:
@@ -540,6 +540,8 @@ paths:
               examples:
                 alreadyEnabled:
                   value: { error: totp_already_enabled }
+                enrollmentNotStarted:
+                  value: { error: totp_enrollment_not_started }
         "429":
           description: |
             Request rate limit; the enrollment TOTP budget is spent (5 code
@@ -574,7 +576,7 @@ paths:
                 secretFailed:
                   value: { error: totp_secret_failed }
         "503":
-          description: Server has no FIELD_ENCRYPTION_KEY configured, or there is no pending secret to confirm.
+          description: Server has no FIELD_ENCRYPTION_KEY configured.
           content:
             application/json:
               schema:
@@ -628,6 +630,15 @@ paths:
                   value: { error: totp_replayed }
                 unauthorized:
                   value: { error: unauthorized }
+        "409":
+          description: TOTP is not enabled on this account, including when a concurrent disable already turned it off.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                notEnabled:
+                  value: { error: totp_not_enabled }
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
@@ -642,7 +653,7 @@ paths:
                 secretFailed:
                   value: { error: totp_secret_failed }
         "503":
-          description: Server has no FIELD_ENCRYPTION_KEY configured, or TOTP is not enabled on this account.
+          description: Server has no FIELD_ENCRYPTION_KEY configured.
           content:
             application/json:
               schema:
