@@ -190,10 +190,23 @@ if [[ "${device1_token}" == "${device2_token}" ]]; then
 fi
 
 NEW_PASSWORD="updated runtime smoke password"
-curl -fsS -X POST "${BASE_URL}/auth/change-password" \
+change_response="$(curl -fsS -X POST "${BASE_URL}/auth/change-password" \
   -H "Authorization: Bearer ${device1_token}" \
   -H 'Content-Type: application/json' \
-  -d "{\"current_password\":\"${PASSWORD}\",\"new_password\":\"${NEW_PASSWORD}\"}" >/dev/null
+  -d "{\"current_password\":\"${PASSWORD}\",\"new_password\":\"${NEW_PASSWORD}\"}")"
+changed_recovery_code="$("${PYTHON}" -c 'import json,sys; print(json.load(sys.stdin).get("recovery_code") or "")' <<<"${change_response}")"
+if [[ -z "${changed_recovery_code}" ]] || [[ "${changed_recovery_code}" == "${recovery_code}" ]]; then
+  echo "expected change-password to rotate the recovery code" >&2
+  exit 1
+fi
+register_recovery_status="$(curl -s -o /dev/null -w '%{http_code}' -X POST "${BASE_URL}/auth/forgot-password" \
+  -H 'Content-Type: application/json' \
+  -d "{\"login\":\"${LOGIN}\",\"recovery_code\":\"${recovery_code}\"}")"
+if [[ "${register_recovery_status}" != "401" ]]; then
+  echo "expected the register recovery code to fail after change-password, got ${register_recovery_status}" >&2
+  exit 1
+fi
+recovery_code="${changed_recovery_code}"
 
 curl -fsS "${BASE_URL}/sync/capabilities" \
   -H "Authorization: Bearer ${device1_token}" >/dev/null
