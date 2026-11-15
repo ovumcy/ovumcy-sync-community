@@ -15,8 +15,9 @@ import (
 // password/secret read and its write (via the clock hook verifyAccountCode
 // calls). A change that moved the credentials must leave the account exactly
 // as the race left it — TOTP, secret, session and pending challenge — and the
-// error names what moved; a login rehash, which moves only the hash, must
-// still let the disable through.
+// error names what moved (a moved secret already loses the step claim, which
+// is bound to the verified secret); a login rehash, which moves only the hash,
+// must still let the disable through.
 func TestDisableRacingAStateChange(t *testing.T) {
 	const password = "correct horse battery staple"
 	ctx := context.Background()
@@ -45,7 +46,7 @@ func TestDisableRacingAStateChange(t *testing.T) {
 					t.Fatalf("concurrent disable: %v", err)
 				}
 			},
-			want: ErrTOTPNotConfigured,
+			want: ErrTOTPReplayed,
 		},
 		{
 			name: "re-enrolled with a new secret",
@@ -54,7 +55,7 @@ func TestDisableRacingAStateChange(t *testing.T) {
 					t.Fatalf("concurrent re-enroll: %v", err)
 				}
 			},
-			want: ErrTOTPInvalidCode,
+			want: ErrTOTPReplayed,
 		},
 		{
 			name: "login rehash",
