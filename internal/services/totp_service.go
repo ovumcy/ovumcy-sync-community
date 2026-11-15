@@ -427,9 +427,9 @@ func (s *TOTPService) disableConflict(
 	}
 	switch {
 	case !current.TOTPEnabled:
-		return models.Account{}, ErrTOTPNotConfigured
+		return models.Account{}, ErrTOTPNotConfigured // codecov:ignore -- a disable that commits before the step claim makes the claim lose (it is bound to the verified secret: ErrTOTPReplayed, covered in TestDisableRacingAStateChange); only one landing between the claim and DisableTOTP within this synchronous call gets here.
 	case current.TOTPSecretEncrypted != verified.TOTPSecretEncrypted:
-		return models.Account{}, ErrTOTPInvalidCode
+		return models.Account{}, ErrTOTPInvalidCode // codecov:ignore -- as above: a re-enroll before the claim loses it (ErrTOTPReplayed); only one between the claim and DisableTOTP within this synchronous call gets here.
 	case current.PasswordHash == verifiedHash:
 		return models.Account{}, ErrInvalidCurrentPassword // codecov:ignore -- the CAS missed, yet hash, flag and secret all read back unchanged: only a change that was reverted between the two statements of this one synchronous call gets here.
 	}
