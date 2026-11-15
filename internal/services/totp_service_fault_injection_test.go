@@ -278,10 +278,12 @@ func TestDisableRejectsWrongPasswordAndWrongCode(t *testing.T) {
 	}
 }
 
-// TestDisableRollsBackWhenEitherCleanupFails drops "sessions" or
-// "totp_challenges" (each with its own store) so the disable transaction's
-// cleanup fails: the error surfaces, TOTP stays enabled and the caller's
-// session survives, so a retry redoes the whole disable.
+// TestDisableRollsBackWhenEitherCleanupFails drops "totp_challenges" so the
+// disable transaction's cleanup fails after the clear: the error surfaces,
+// TOTP stays enabled and the caller's session survives, so a retry redoes the
+// whole disable. Dropping "sessions" fails the caller-session check before
+// anything is written; the session delete failing on its own needs a fake
+// driver, since that check already read the table in the same transaction.
 func TestDisableRollsBackWhenEitherCleanupFails(t *testing.T) {
 	setup := func(t *testing.T) (totp *TOTPService, accountID, sessionToken string, dbPath string, now time.Time) {
 		t.Helper()
