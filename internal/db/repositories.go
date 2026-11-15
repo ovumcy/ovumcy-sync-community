@@ -353,6 +353,11 @@ func (s *Store) UpdateAccountRecoveryCodeHash(
 // must not set a password and then delete the owner's sessions. ErrNotFound
 // when the account or the caller's session is gone; ErrConflict when either
 // hash moved on (a reset, another change, a regeneration, a TOTP enable).
+//
+// A pending enrollment secret (TOTP still off) is cleared too: enrollment
+// completion needs only a session, so a secret started under the old password
+// would otherwise let any later session enable TOTP and take the recovery
+// code it hands out.
 func (s *Store) ChangeAccountPassword(
 	ctx context.Context,
 	accountID string,
@@ -372,7 +377,9 @@ func (s *Store) ChangeAccountPassword(
 
 	result, err := tx.ExecContext(
 		ctx,
-		`UPDATE accounts SET password_hash = ?, recovery_code_hash = ?
+		`UPDATE accounts SET password_hash = ?, recovery_code_hash = ?,
+		     totp_secret_encrypted = CASE WHEN totp_enabled = 0 THEN '' ELSE totp_secret_encrypted END,
+		     totp_last_used_step = CASE WHEN totp_enabled = 0 THEN 0 ELSE totp_last_used_step END
 		 WHERE id = ? AND password_hash = ? AND recovery_code_hash = ?
 		   AND EXISTS (SELECT 1 FROM sessions WHERE account_id = accounts.id AND token_hash = ?)`,
 		newHash,

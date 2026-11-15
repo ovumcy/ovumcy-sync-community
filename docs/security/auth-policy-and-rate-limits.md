@@ -113,7 +113,7 @@ Notes on the table:
 
 | Event | Sessions revoked | Code |
 | --- | --- | --- |
-| Change password (needs password, plus a current code on an enrolled account) | all except the caller's current session; the recovery code rotates (returned once in the response), and pending reset tokens and TOTP challenges are deleted, in one transaction | `AuthService.ChangePassword`, `Store.ChangeAccountPassword` |
+| Change password (needs password, plus a current code on an enrolled account) | all except the caller's current session; the recovery code rotates (returned once in the response), pending reset tokens and TOTP challenges are deleted, and a pending enrollment secret is discarded, in one transaction | `AuthService.ChangePassword`, `Store.ChangeAccountPassword` |
 | Reset password (recovery code flow) | all; pending TOTP challenges and reset tokens are deleted too, and the password and recovery code rotate | `AuthService.ResetPassword` |
 | TOTP enrollment verified | all except the caller's current session; the recovery code rotates (returned once in the response) and pending reset tokens are deleted, in the transaction that enables TOTP | `TOTPService.CompleteEnrollment`, `Store.EnableTOTPAndRotateRecoveryCode` |
 | TOTP disabled (needs password and current code) | all | `TOTPService.Disable` |
