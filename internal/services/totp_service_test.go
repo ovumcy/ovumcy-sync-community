@@ -119,7 +119,7 @@ func TestCompleteEnrollmentStepSurvivesEnableSoDisableCannotReplay(t *testing.T)
 
 	accountID, _, _, enrollCode := enrollTOTP(t, auth, totp, now)
 
-	if err := totp.Disable(ctx, accountID, password, enrollCode); err != ErrTOTPReplayed {
+	if err := totp.Disable(ctx, accountID, StepUp{CurrentPassword: password, TOTPCode: enrollCode}); err != ErrTOTPReplayed {
 		t.Fatalf("expected ErrTOTPReplayed for reused enrollment code on disable, got %v", err)
 	}
 
@@ -168,15 +168,13 @@ func TestFreshStartEnrollmentResetsStaleStepClaim(t *testing.T) {
 		t.Fatalf("decrypt secret: %v", err)
 	}
 	disableStep := disableNow.UTC().Unix() / security.TOTPStepSeconds
-	if err := totp.Disable(
-		ctx,
-		accountID,
-		password,
-		security.GenerateTOTPCode([]byte(secret), disableStep),
-	); err != nil {
+	if err := totp.Disable(ctx, accountID, StepUp{
+		SessionTokenHash: security.HashToken(sessionToken),
+		CurrentPassword:  password,
+		TOTPCode:         security.GenerateTOTPCode([]byte(secret), disableStep),
+	}); err != nil {
 		t.Fatalf("Disable: %v", err)
 	}
-	_ = sessionToken
 
 	// Re-enroll at a step EARLIER than the one the first enrollment claimed, to
 	// prove the stale high claim was reset by StartEnrollment. Without the

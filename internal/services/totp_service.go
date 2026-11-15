@@ -351,13 +351,15 @@ func (s *TOTPService) CompleteEnrollment(
 // clears the encrypted secret, resets last-used-step, and revokes every
 // session of the account. Requiring the password on top of the TOTP code
 // keeps a temporarily-borrowed authenticator from being able to remove 2FA
-// on its own.
+// on its own. The write also needs the caller's session (stepUp's
+// SessionTokenHash): a session revoked during the checks disables nothing.
 func (s *TOTPService) Disable(
 	ctx context.Context,
 	accountID string,
-	currentPassword string,
-	code string,
+	stepUp StepUp,
 ) error {
+	currentPassword, code := stepUp.CurrentPassword, stepUp.TOTPCode
+
 	if !s.Configured() {
 		return ErrTOTPNotConfigured
 	}
@@ -388,10 +390,12 @@ func (s *TOTPService) Disable(
 	// on a hash the password still matches is retried once.
 	verifiedHash := account.PasswordHash
 	for attempt := 0; ; attempt++ {
-		err = s.store.DisableTOTP(ctx, accountID, verifiedHash, account.TOTPSecretEncrypted)
+		err = s.store.DisableTOTP(ctx, accountID, stepUp.SessionTokenHash, verifiedHash, account.TOTPSecretEncrypted)
 		switch {
 		case err == nil:
 			return nil
+		case errors.Is(err, db.ErrSessionRevoked):
+			return ErrUnauthorized
 		case errors.Is(err, db.ErrNotFound):
 			return ErrUnauthorized // codecov:ignore -- the account would have to be deleted between ClaimTOTPStep above and this write within one synchronous call; a TOCTOU, same class as the managed_bridge_service.go precedents.
 		case !errors.Is(err, db.ErrConflict):
