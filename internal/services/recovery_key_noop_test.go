@@ -94,7 +94,7 @@ func TestPutRecoveryKeyDifferingPackageStillNeedsStepUp(t *testing.T) {
 }
 
 // On a TOTP-enrolled account the identical re-put needs neither the password
-// nor a code, and spends no code step; a differing package still needs both.
+// nor a code; a differing package still needs both.
 func TestPutRecoveryKeyIdenticalRePutOnTOTPAccountNeedsNoCode(t *testing.T) {
 	f := newStepUpCodeFixture(t)
 	ctx := context.Background()
@@ -129,7 +129,11 @@ func TestPutRecoveryKeySurfacesStoreErrorReadingStoredPackage(t *testing.T) {
 
 	dropTable(t, dbPath, "recovery_key_packages")
 
-	_, err = syncService.PutRecoveryKeyPackage(ctx, registered.AccountID, ownerStepUp(registered), validRecoveryKeyPackageInput())
+	// Without a password: only the read before the step-up can answer with
+	// anything but ErrInvalidCurrentPassword.
+	noPassword := ownerStepUp(registered)
+	noPassword.CurrentPassword = ""
+	_, err = syncService.PutRecoveryKeyPackage(ctx, registered.AccountID, noPassword, validRecoveryKeyPackageInput())
 	if err == nil || errors.Is(err, ErrInvalidCurrentPassword) || errors.Is(err, ErrInvalidRecoveryPackage) {
 		t.Fatalf("expected the store error, got %v", err)
 	}
