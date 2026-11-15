@@ -604,8 +604,15 @@ func (s *AuthService) RevokeSession(ctx context.Context, sessionToken string) er
 // Idempotent: an account already gone is a no-op success, since the end state
 // the caller wants ("this account's data does not exist on the server") is
 // already true.
+//
+// A TOTP-enrolled account must also present a current code, so a session and
+// password holder alone cannot erase the account. No configured TOTP verifier
+// fails closed.
 func (s *AuthService) DeleteAccount(ctx context.Context, accountID string, stepUp StepUp) error {
 	account, err := verifyStepUp(ctx, s.store, accountID, stepUp.CurrentPassword)
+	if err == nil {
+		err = verifyStepUpCode(ctx, s.totpChallenges, account, stepUp.TOTPCode)
+	}
 	if err == nil {
 		err = s.store.DeleteAccountForSession(ctx, accountID, account.PasswordHash, stepUp.SessionTokenHash)
 	}

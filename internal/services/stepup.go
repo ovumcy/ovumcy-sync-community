@@ -11,10 +11,32 @@ import (
 
 // StepUp is the re-authentication a write a stolen session must not be able
 // to make alone carries (account deletion, the recovery-key overwrite): the
-// caller's session, by token hash, and the password it re-entered.
+// caller's session, by token hash, the password it re-entered, and on a
+// TOTP-enrolled account a current code (verifyStepUpCode).
 type StepUp struct {
 	SessionTokenHash string
 	CurrentPassword  string
+	TOTPCode         string
+}
+
+// TOTPCodeVerifier checks a current TOTP code for an enrolled account,
+// meters it in the account's failure window and claims its step
+// (TOTPService.VerifyAccountCode).
+type TOTPCodeVerifier interface {
+	VerifyAccountCode(ctx context.Context, account models.Account, code string) error
+}
+
+// verifyStepUpCode asks a TOTP-enrolled account for a current code; an
+// account without TOTP passes. No configured verifier fails closed rather than
+// letting the first factor alone through.
+func verifyStepUpCode(ctx context.Context, verifier TOTPCodeVerifier, account models.Account, code string) error {
+	if !account.TOTPEnabled {
+		return nil
+	}
+	if verifier == nil {
+		return ErrTOTPNotConfigured
+	}
+	return verifier.VerifyAccountCode(ctx, account, code)
 }
 
 // verifyStepUp re-checks the session owner's password and returns the account

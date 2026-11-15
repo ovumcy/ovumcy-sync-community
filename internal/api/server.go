@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/base64"
@@ -758,10 +759,12 @@ func (s *Server) handleDeleteAccount(
 	if !s.allowStepUpAttempt(writer, account.ID) {
 		return
 	}
-	err := s.auth.DeleteAccount(request.Context(), account.ID, stepUpFromRequest(request, payload.CurrentPassword))
+	stepUp := stepUpFromRequest(request, payload.CurrentPassword)
+	stepUp.TOTPCode = payload.Code
+	err := s.auth.DeleteAccount(request.Context(), account.ID, stepUp)
 	s.settleStepUpAttempt(account.ID, err)
 	if err != nil {
-		writeStepUpError(writer, err)
+		mapTOTPError(writer, err)
 		return
 	}
 
@@ -795,19 +798,6 @@ func (s *Server) allowStepUpAttempt(writer http.ResponseWriter, accountID string
 func (s *Server) settleStepUpAttempt(accountID string, err error) {
 	if !errors.Is(err, services.ErrInvalidCurrentPassword) {
 		s.authLimiter.Refund(stepUpFailureKey(accountID))
-	}
-}
-
-// writeStepUpError answers a step-up write's refusal: a wrong (or stale)
-// password, a caller whose session was revoked meanwhile, or a server error.
-func writeStepUpError(writer http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, services.ErrInvalidCurrentPassword):
-		writeError(writer, http.StatusUnauthorized, "invalid_current_password")
-	case errors.Is(err, services.ErrUnauthorized):
-		writeError(writer, http.StatusUnauthorized, "unauthorized")
-	default:
-		writeError(writer, http.StatusInternalServerError, "internal_error")
 	}
 }
 
@@ -1011,24 +1001,30 @@ func (s *Server) handleRemoveDevice(
 		return
 	}
 
+	// The body is optional: only a TOTP-enrolled account needs one, to carry
+	// the password and the code.
+	var payload deviceRemoveRequest
+	if !decodeOptionalJSON(writer, request, &payload, 4<<10) {
+		return
+	}
+
+	if !s.allowStepUpAttempt(writer, account.ID) {
+		return
+	}
+	stepUp := stepUpFromRequest(request, payload.CurrentPassword)
+	stepUp.TOTPCode = payload.Code
 	// device_id comes from the path; the delete is scoped to the authenticated
 	// account in the query, so a caller can only remove its own devices.
-	err := s.sync.RemoveDevice(
-		request.Context(),
-		account.ID,
-		security.HashToken(bearerTokenFromRequest(request)),
-		request.PathValue("device_id"),
-	)
+	err := s.sync.RemoveDevice(request.Context(), account.ID, stepUp, request.PathValue("device_id"))
+	s.settleStepUpAttempt(account.ID, err)
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrInvalidDevice):
 			writeError(writer, http.StatusBadRequest, "invalid_device")
 		case errors.Is(err, services.ErrDeviceNotFound):
 			writeError(writer, http.StatusNotFound, "device_not_found")
-		case errors.Is(err, services.ErrUnauthorized):
-			writeError(writer, http.StatusUnauthorized, "unauthorized") // codecov:ignore -- needs the session revoked between withAuth and this bodiless request's write, with no read in between to hook; the service refusal is covered in TestLateBodyWritesFromARevokedSessionChangeNothing, and the HTTP 401 for a mid-body revocation on the body-carrying routes in late_body_session_test.go.
 		default:
-			writeError(writer, http.StatusInternalServerError, "internal_error")
+			mapTOTPError(writer, err)
 		}
 		return
 	}
@@ -1101,10 +1097,12 @@ func (s *Server) handlePutRecoveryKey(
 	if !s.allowStepUpAttempt(writer, account.ID) {
 		return
 	}
+	stepUp := stepUpFromRequest(request, payload.CurrentPassword)
+	stepUp.TOTPCode = payload.Code
 	recoveryKeyPackage, err := s.sync.PutRecoveryKeyPackage(
 		request.Context(),
 		account.ID,
-		stepUpFromRequest(request, payload.CurrentPassword),
+		stepUp,
 		services.PutRecoveryKeyPackageInput{
 			Algorithm:            payload.Algorithm,
 			KDF:                  payload.KDF,
@@ -1120,7 +1118,7 @@ func (s *Server) handlePutRecoveryKey(
 		case errors.Is(err, services.ErrInvalidRecoveryPackage):
 			writeError(writer, http.StatusBadRequest, "invalid_recovery_package")
 		default:
-			writeStepUpError(writer, err)
+			mapTOTPError(writer, err)
 		}
 		return
 	}
@@ -1297,6 +1295,22 @@ func decodeJSON(writer http.ResponseWriter, request *http.Request, target any, m
 		return false
 	}
 	return true
+}
+
+// decodeOptionalJSON is decodeJSON for a route whose body may be absent: an
+// empty (or all-whitespace) body leaves target at its zero value.
+func decodeOptionalJSON(writer http.ResponseWriter, request *http.Request, target any, maxBytes int64) bool {
+	raw, err := io.ReadAll(http.MaxBytesReader(writer, request.Body, maxBytes))
+	_ = request.Body.Close()
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, "invalid_json")
+		return false
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return true
+	}
+	request.Body = io.NopCloser(bytes.NewReader(raw))
+	return decodeJSON(writer, request, target, maxBytes)
 }
 
 func (s *Server) allowAuthRequest(writer http.ResponseWriter, request *http.Request) bool {
@@ -1648,10 +1662,17 @@ type recoveryKeyPackageRequest struct {
 	WrappedMasterKeyHex  string `json:"wrapped_master_key_hex"`
 	PhraseFingerprintHex string `json:"phrase_fingerprint_hex"`
 	CurrentPassword      string `json:"current_password"`
+	Code                 string `json:"code"`
 }
 
 type accountDeleteRequest struct {
 	CurrentPassword string `json:"current_password"`
+	Code            string `json:"code"`
+}
+
+type deviceRemoveRequest struct {
+	CurrentPassword string `json:"current_password"`
+	Code            string `json:"code"`
 }
 
 type recoveryKeyPackageResponse struct {

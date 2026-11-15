@@ -44,13 +44,13 @@ authenticated account id; **login** is the lowercased, trimmed login from the re
 | `POST /auth/totp/verify` | session | auth, account | 10/min | 4 KiB |
 | `POST /auth/totp/disable` | session | auth, account | 10/min | 4 KiB |
 | `GET /auth/session` | session | read, account | 300/min | none |
-| `DELETE /account` | session + current password | auth, account | 10/min | 4 KiB |
+| `DELETE /account` | session + current password (+ TOTP code if enrolled) | auth, account | 10/min | 4 KiB |
 | `GET /sync/capabilities` | session | read, account | 300/min | none |
 | `GET /sync/devices` | session | read, account | 300/min | none |
 | `POST /sync/devices` | session | auth, account | 10/min | 4 KiB |
-| `DELETE /sync/devices/{device_id}` | session | auth, account (stable key `sync_devices_remove:<account>`, not the path) | 10/min | none |
+| `DELETE /sync/devices/{device_id}` | session (+ current password and TOTP code if enrolled) | auth, account (stable key `sync_devices_remove:<account>`, not the path) | 10/min | 4 KiB, optional |
 | `GET /sync/recovery-key` | session | auth, account | 10/min | none |
-| `PUT /sync/recovery-key` | session + current password | auth, account | 10/min | 8 KiB |
+| `PUT /sync/recovery-key` | session + current password (+ TOTP code if enrolled) | auth, account | 10/min | 8 KiB |
 | `GET /sync/blob` | session | auth, account | 10/min | none |
 | `PUT /sync/blob` | session | auth, account | 10/min | base64 of `MAX_BLOB_BYTES` plus 8 KiB: 22377816 bytes at the default (`encodedBlobRequestLimit`) |
 | `POST /managed/session` | `MANAGED_BRIDGE_TOKEN` bearer; 503 if unset | none (deliberate) | unlimited | 4 KiB |
@@ -105,7 +105,7 @@ Notes on the table:
 | Password-reset token lifetime | 30 minutes, single use (`PasswordResetTokenTTL`) | `internal/services/auth_service.go` |
 | TOTP login challenge lifetime | 5 minutes, single use (`TOTPChallengeTTL`) | `internal/services/totp_service.go` |
 | TOTP failed attempts per challenge | 5, after which the challenge is burnt (`maxTOTPChallengeFailedAttempts`) | `internal/services/totp_service.go` |
-| TOTP code attempts per account | 10 per fixed 15-minute window across all challenges, disable, recovery-code regeneration and password change on an enrolled account (`maxTOTPAccountFailedAttempts`, `TOTPFailureWindow`); past it 429 `rate_limited` until the window ends; a new login does not reset it, a successful verify or completed enrollment does. Enrollment verify instead gets 10 attempts per pending secret in total, with no window restart (a successful verify hands out a recovery code, so pacing must not help): the 11th answers 429 and discards the pending secret, and only an enrollment start, which needs the password, opens a new budget. A session holder without the password can therefore spend an owner's pending enrollment; changing the password revokes that session. Trade-off: only someone who already holds the password can spend the window (a challenge is issued only after it), and while it is spent the owner's own correct code also gets 429 — including on a password change, so someone holding the password can hold off the owner's password change while the window stays spent; the way out is the window ending or a recovery-code reset | `internal/services/totp_service.go`, `Store.ReserveTOTPAttempt` |
+| TOTP code attempts per account | 10 per fixed 15-minute window across all challenges, disable, recovery-code regeneration, password change, account deletion, the recovery-key overwrite and device removal on an enrolled account (`maxTOTPAccountFailedAttempts`, `TOTPFailureWindow`); past it 429 `rate_limited` until the window ends; a new login does not reset it, a successful verify or completed enrollment does. Enrollment verify instead gets 10 attempts per pending secret in total, with no window restart (a successful verify hands out a recovery code, so pacing must not help): the 11th answers 429 and discards the pending secret, and only an enrollment start, which needs the password, opens a new budget. A session holder without the password can therefore spend an owner's pending enrollment; changing the password revokes that session. Trade-off: only someone who already holds the password can spend the window (a challenge is issued only after it), and while it is spent the owner's own correct code also gets 429 — including on a password change, account deletion, the recovery-key overwrite and device removal, so someone holding the password can hold off the owner's password change (or device removal) while the window stays spent; the way out is the window ending or a recovery-code reset | `internal/services/totp_service.go`, `Store.ReserveTOTPAttempt` |
 | TOTP code | 6 digits, 30 s step; a used step cannot be replayed | `internal/security/totp.go`, `totp_replayed` |
 | TOTP secret at rest | AES-256-GCM under `FIELD_ENCRYPTION_KEY` | `internal/security/field_crypto.go` |
 

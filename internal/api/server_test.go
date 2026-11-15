@@ -1798,6 +1798,7 @@ func newTestServerWithOptions(t *testing.T, options serverTestOptions) http.Hand
 			"ovumcy-sync-community-test",
 		)
 		authService.AttachTOTPChallengeIssuer(totpService)
+		syncService.AttachTOTPCodeVerifier(totpService)
 	}
 
 	return NewServer(

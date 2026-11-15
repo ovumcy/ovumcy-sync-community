@@ -20,7 +20,7 @@ func TestRemoveDeviceRevokesTheSessionThatAttachedIt(t *testing.T) {
 	if _, err := sync.AttachDeviceForSession(ctx, registered.AccountID, security.HashToken(registered.SessionToken), "device-abcd1234", "Pixel 7"); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
-	if err := sync.RemoveDevice(ctx, registered.AccountID, security.HashToken(registered.SessionToken), "device-abcd1234"); err != nil {
+	if err := sync.RemoveDevice(ctx, registered.AccountID, StepUp{SessionTokenHash: security.HashToken(registered.SessionToken)}, "device-abcd1234"); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
 	if _, err := auth.Authenticate(ctx, registered.SessionToken); !errors.Is(err, ErrUnauthorized) {
