@@ -321,22 +321,41 @@ func (s *SyncService) GetBlob(ctx context.Context, accountID string) (models.Enc
 // validated, so a wrong password answers as such whatever the body holds. A
 // TOTP-enrolled account must also present a current code: an overwrite
 // replaces the owner's phrase-recovery path.
+//
+// A package equal to the stored one after normalization is answered with the
+// stored row and needs no step-up: it writes nothing and discloses nothing
+// GET /sync/recovery-key does not. Clients re-put the package on every upload.
 func (s *SyncService) PutRecoveryKeyPackage(
 	ctx context.Context,
 	accountID string,
 	stepUp StepUp,
 	input PutRecoveryKeyPackageInput,
 ) (models.RecoveryKeyPackage, error) {
-	account, err := verifyStepUp(ctx, s.store, accountID, stepUp.CurrentPassword)
-	if err != nil {
-		return models.RecoveryKeyPackage{}, err
-	}
-
 	algorithm := strings.TrimSpace(strings.ToLower(input.Algorithm))
 	kdf := strings.TrimSpace(strings.ToLower(input.KDF))
 	wrapNonceHex := strings.TrimSpace(strings.ToLower(input.WrapNonceHex))
 	wrappedMasterKeyHex := strings.TrimSpace(strings.ToLower(input.WrappedMasterKeyHex))
 	phraseFingerprintHex := strings.TrimSpace(strings.ToLower(input.PhraseFingerprintHex))
+
+	existing, err := s.store.GetRecoveryKeyPackage(ctx, accountID)
+	switch {
+	case err == nil:
+		if existing.Algorithm == algorithm &&
+			existing.KDF == kdf &&
+			existing.MnemonicWordCount == input.MnemonicWordCount &&
+			existing.WrapNonceHex == wrapNonceHex &&
+			existing.WrappedMasterKeyHex == wrappedMasterKeyHex &&
+			existing.PhraseFingerprintHex == phraseFingerprintHex {
+			return existing, nil
+		}
+	case !errors.Is(err, db.ErrNotFound):
+		return models.RecoveryKeyPackage{}, err
+	}
+
+	account, err := verifyStepUp(ctx, s.store, accountID, stepUp.CurrentPassword)
+	if err != nil {
+		return models.RecoveryKeyPackage{}, err
+	}
 
 	if algorithm != "xchacha20poly1305" || kdf != "bip39_seed_hkdf_sha256" {
 		return models.RecoveryKeyPackage{}, ErrInvalidRecoveryPackage

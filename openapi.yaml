@@ -1333,6 +1333,11 @@ paths:
         toward the per-account TOTP window; a missing code is not counted), so
         a stolen session alone cannot overwrite the owner's recovery path;
         managed accounts (no password) are exempt.
+
+        A package equal to the stored one (after the same trim + lowercase
+        normalization, same `mnemonic_word_count`) is a no-op: it needs no
+        `current_password` or `code`, writes nothing (`updated_at` is
+        unchanged) and returns the stored package with 200.
       security:
         - sessionBearerAuth: []
       requestBody:
@@ -1343,7 +1348,7 @@ paths:
               $ref: "#/components/schemas/RecoveryKeyPackageRequest"
       responses:
         "200":
-          description: Recovery-key package stored.
+          description: Recovery-key package stored, or the identical stored package returned unchanged.
           content:
             application/json:
               schema:
@@ -1991,10 +1996,10 @@ components:
         current_password:
           type: string
           format: password
-          description: Required for self-hosted accounts; ignored for managed accounts. Never stored or echoed.
+          description: Required for self-hosted accounts unless the package equals the stored one; ignored for managed accounts. Never stored or echoed.
         code:
           type: string
-          description: Current 6-digit TOTP code. Required when the account has TOTP enabled; ignored otherwise.
+          description: Current 6-digit TOTP code. Required when the account has TOTP enabled, unless the package equals the stored one; ignored otherwise.
       required:
         - algorithm
         - kdf
