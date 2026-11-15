@@ -524,7 +524,7 @@ func (s *Server) handleRegenerateRecoveryCode(
 	recoveryCode, err := s.auth.RegenerateRecoveryCode(
 		request.Context(),
 		account.ID,
-		payload.CurrentPassword,
+		stepUpFromRequest(request, payload.CurrentPassword),
 		payload.Code,
 	)
 	s.settleStepUpAttempt(account.ID, err)
@@ -557,7 +557,7 @@ func (s *Server) handleTOTPEnroll(
 	if !s.allowStepUpAttempt(writer, account.ID) {
 		return
 	}
-	result, err := s.totp.StartEnrollment(request.Context(), account.ID, payload.CurrentPassword)
+	result, err := s.totp.StartEnrollment(request.Context(), account.ID, stepUpFromRequest(request, payload.CurrentPassword))
 	s.settleStepUpAttempt(account.ID, err)
 	if err != nil {
 		mapTOTPError(writer, err)
@@ -995,13 +995,20 @@ func (s *Server) handleRemoveDevice(
 
 	// device_id comes from the path; the delete is scoped to the authenticated
 	// account in the query, so a caller can only remove its own devices.
-	err := s.sync.RemoveDevice(request.Context(), account.ID, request.PathValue("device_id"))
+	err := s.sync.RemoveDevice(
+		request.Context(),
+		account.ID,
+		security.HashToken(bearerTokenFromRequest(request)),
+		request.PathValue("device_id"),
+	)
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrInvalidDevice):
 			writeError(writer, http.StatusBadRequest, "invalid_device")
 		case errors.Is(err, services.ErrDeviceNotFound):
 			writeError(writer, http.StatusNotFound, "device_not_found")
+		case errors.Is(err, services.ErrUnauthorized):
+			writeError(writer, http.StatusUnauthorized, "unauthorized") // codecov:ignore -- needs the session revoked between withAuth and this bodiless request's write, with no read in between to hook; the store refusal is covered in TestLateBodyWritesFromARevokedSessionChangeNothing and the same mapping over HTTP in TestPutBlobWhoseSessionIsRevokedMidBodyWritesNothing.
 		default:
 			writeError(writer, http.StatusInternalServerError, "internal_error")
 		}
@@ -1035,7 +1042,7 @@ func (s *Server) handlePutBlob(
 		return
 	}
 
-	blob, err := s.sync.PutBlob(request.Context(), account.ID, services.PutBlobInput{
+	blob, err := s.sync.PutBlob(request.Context(), account.ID, security.HashToken(bearerTokenFromRequest(request)), services.PutBlobInput{
 		SchemaVersion:  payload.SchemaVersion,
 		Generation:     payload.Generation,
 		ChecksumSHA256: payload.ChecksumSHA256,
@@ -1047,6 +1054,8 @@ func (s *Server) handlePutBlob(
 			writeError(writer, http.StatusBadRequest, "invalid_blob")
 		case errors.Is(err, services.ErrStaleGeneration):
 			writeError(writer, http.StatusConflict, "stale_generation")
+		case errors.Is(err, services.ErrUnauthorized):
+			writeError(writer, http.StatusUnauthorized, "unauthorized")
 		default:
 			writeError(writer, http.StatusInternalServerError, "internal_error")
 		}

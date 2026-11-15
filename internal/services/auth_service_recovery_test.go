@@ -268,7 +268,7 @@ func TestChangePasswordInvalidatesPendingTOTPChallenge(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	start, err := totpService.StartEnrollment(ctx, registered.AccountID, "correct horse battery staple")
+	start, err := totpService.StartEnrollment(ctx, registered.AccountID, StepUp{SessionTokenHash: security.HashToken(registered.SessionToken), CurrentPassword: "correct horse battery staple"})
 	if err != nil {
 		t.Fatalf("StartEnrollment: %v", err)
 	}
@@ -319,7 +319,7 @@ func TestRegenerateRecoveryCodeRotatesCode(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	newRecovery, err := service.RegenerateRecoveryCode(ctx, registerResult.AccountID, "correct horse battery staple", "")
+	newRecovery, err := service.RegenerateRecoveryCode(ctx, registerResult.AccountID, StepUp{SessionTokenHash: security.HashToken(registerResult.SessionToken), CurrentPassword: "correct horse battery staple"}, "")
 	if err != nil {
 		t.Fatalf("regenerate: %v", err)
 	}
@@ -352,7 +352,7 @@ func TestRegenerateRecoveryCodeInvalidatesPendingResetToken(t *testing.T) {
 		t.Fatalf("forgot password: %v", err)
 	}
 
-	if _, err := service.RegenerateRecoveryCode(ctx, registerResult.AccountID, "correct horse battery staple", ""); err != nil {
+	if _, err := service.RegenerateRecoveryCode(ctx, registerResult.AccountID, StepUp{SessionTokenHash: security.HashToken(registerResult.SessionToken), CurrentPassword: "correct horse battery staple"}, ""); err != nil {
 		t.Fatalf("regenerate: %v", err)
 	}
 
@@ -374,7 +374,7 @@ func TestRegenerateRecoveryCodeRejectsWrongPassword(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	_, err = service.RegenerateRecoveryCode(ctx, registerResult.AccountID, "wrong password", "")
+	_, err = service.RegenerateRecoveryCode(ctx, registerResult.AccountID, StepUp{SessionTokenHash: security.HashToken(registerResult.SessionToken), CurrentPassword: "wrong password"}, "")
 	if err != ErrInvalidCurrentPassword {
 		t.Fatalf("expected ErrInvalidCurrentPassword, got %v", err)
 	}
@@ -398,7 +398,7 @@ func TestResetPasswordClearsTOTPAndPendingChallenges(t *testing.T) {
 	}
 
 	// Enable TOTP.
-	start, err := totpService.StartEnrollment(ctx, registered.AccountID, "correct horse battery staple")
+	start, err := totpService.StartEnrollment(ctx, registered.AccountID, StepUp{SessionTokenHash: security.HashToken(registered.SessionToken), CurrentPassword: "correct horse battery staple"})
 	if err != nil {
 		t.Fatalf("StartEnrollment: %v", err)
 	}

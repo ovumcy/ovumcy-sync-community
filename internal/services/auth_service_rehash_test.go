@@ -95,7 +95,7 @@ func TestLoginRehashesLegacyHashOnTOTPChallengePath(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	start, err := totpService.StartEnrollment(ctx, registered.AccountID, password)
+	start, err := totpService.StartEnrollment(ctx, registered.AccountID, StepUp{SessionTokenHash: security.HashToken(registered.SessionToken), CurrentPassword: password})
 	if err != nil {
 		t.Fatalf("StartEnrollment: %v", err)
 	}

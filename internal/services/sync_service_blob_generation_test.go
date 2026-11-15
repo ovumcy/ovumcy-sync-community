@@ -8,9 +8,11 @@ import (
 	"math"
 	"testing"
 	"time"
+
+	"github.com/ovumcy/ovumcy-sync-community/internal/security"
 )
 
-func newBlobGenerationFixture(t *testing.T) (*SyncService, string, PutBlobInput) {
+func newBlobGenerationFixture(t *testing.T) (*SyncService, string, string, PutBlobInput) {
 	t.Helper()
 
 	store := openTestStore(t)
@@ -24,7 +26,7 @@ func newBlobGenerationFixture(t *testing.T) (*SyncService, string, PutBlobInput)
 
 	ciphertext := []byte("ciphertext-only-payload")
 	sum := sha256.Sum256(ciphertext)
-	return sync, reg.AccountID, PutBlobInput{
+	return sync, reg.AccountID, security.HashToken(reg.SessionToken), PutBlobInput{
 		SchemaVersion:  1,
 		ChecksumSHA256: hex.EncodeToString(sum[:]),
 		Ciphertext:     ciphertext,
@@ -32,7 +34,7 @@ func newBlobGenerationFixture(t *testing.T) (*SyncService, string, PutBlobInput)
 }
 
 func TestPutBlobRejectsGenerationFarAheadOfServerTime(t *testing.T) {
-	sync, accountID, input := newBlobGenerationFixture(t)
+	sync, accountID, sessionHash, input := newBlobGenerationFixture(t)
 
 	for _, generation := range []int64{
 		math.MaxInt64,
@@ -43,14 +45,14 @@ func TestPutBlobRejectsGenerationFarAheadOfServerTime(t *testing.T) {
 		time.Now().UTC().Add(blobGenerationSkew + time.Hour).UnixMilli(),
 	} {
 		input.Generation = generation
-		if _, err := sync.PutBlob(context.Background(), accountID, input); !errors.Is(err, ErrInvalidBlob) {
+		if _, err := sync.PutBlob(context.Background(), accountID, sessionHash, input); !errors.Is(err, ErrInvalidBlob) {
 			t.Fatalf("generation %d: expected ErrInvalidBlob, got %v", generation, err)
 		}
 	}
 
 	// None of the rejected writes may have left the account unwritable.
 	input.Generation = time.Now().UTC().UnixMilli()
-	if _, err := sync.PutBlob(context.Background(), accountID, input); err != nil {
+	if _, err := sync.PutBlob(context.Background(), accountID, sessionHash, input); err != nil {
 		t.Fatalf("legitimate ms-timestamp generation must be accepted, got %v", err)
 	}
 }
@@ -59,27 +61,27 @@ func TestPutBlobRejectsGenerationFarAheadOfServerTime(t *testing.T) {
 // a later write still beats it once the clock has moved on. Without this there
 // is always some value that ends the blob's life.
 func TestPutBlobHasNoTerminalGeneration(t *testing.T) {
-	sync, accountID, input := newBlobGenerationFixture(t)
+	sync, accountID, sessionHash, input := newBlobGenerationFixture(t)
 
 	base := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
 	sync.now = func() time.Time { return base }
 
 	ceiling := maxAcceptableBlobGeneration(base)
 	input.Generation = ceiling
-	if _, err := sync.PutBlob(context.Background(), accountID, input); err != nil {
+	if _, err := sync.PutBlob(context.Background(), accountID, sessionHash, input); err != nil {
 		t.Fatalf("generation at the ceiling must be accepted, got %v", err)
 	}
 
 	// Still at the same instant, one past the ceiling is refused.
 	input.Generation = ceiling + 1
-	if _, err := sync.PutBlob(context.Background(), accountID, input); !errors.Is(err, ErrInvalidBlob) {
+	if _, err := sync.PutBlob(context.Background(), accountID, sessionHash, input); !errors.Is(err, ErrInvalidBlob) {
 		t.Fatalf("expected ErrInvalidBlob one past the ceiling, got %v", err)
 	}
 
 	// Move the clock a day on. The same value is now inside the bound, so the
 	// blob written at the old ceiling is replaceable rather than frozen.
 	sync.now = func() time.Time { return base.Add(24 * time.Hour) }
-	if _, err := sync.PutBlob(context.Background(), accountID, input); err != nil {
+	if _, err := sync.PutBlob(context.Background(), accountID, sessionHash, input); err != nil {
 		t.Fatalf("blob must be replaceable once the clock passes the old ceiling, got %v", err)
 	}
 }
@@ -88,18 +90,18 @@ func TestPutBlobHasNoTerminalGeneration(t *testing.T) {
 // the owner's writes stale until the clock passes it; the skew is that
 // lock-out's length, so it must stay short.
 func TestPutBlobParkedGenerationLockOutIsBounded(t *testing.T) {
-	sync, accountID, input := newBlobGenerationFixture(t)
+	sync, accountID, sessionHash, input := newBlobGenerationFixture(t)
 
 	base := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
 	sync.now = func() time.Time { return base }
 	input.Generation = maxAcceptableBlobGeneration(base)
-	if _, err := sync.PutBlob(context.Background(), accountID, input); err != nil {
+	if _, err := sync.PutBlob(context.Background(), accountID, sessionHash, input); err != nil {
 		t.Fatalf("parking write: %v", err)
 	}
 
 	sync.now = func() time.Time { return base.Add(15*time.Minute + time.Millisecond) }
 	input.Generation = sync.now().UnixMilli()
-	if _, err := sync.PutBlob(context.Background(), accountID, input); err != nil {
+	if _, err := sync.PutBlob(context.Background(), accountID, sessionHash, input); err != nil {
 		t.Fatalf("owner's clock-derived write must win once the skew has passed, got %v", err)
 	}
 }
@@ -107,33 +109,33 @@ func TestPutBlobParkedGenerationLockOutIsBounded(t *testing.T) {
 // Pins the bound itself in wall-clock terms, so a change to blobGenerationSkew
 // in either direction fails here.
 func TestPutBlobGenerationCeilingIsFifteenMinutes(t *testing.T) {
-	sync, accountID, input := newBlobGenerationFixture(t)
+	sync, accountID, sessionHash, input := newBlobGenerationFixture(t)
 
 	base := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
 	sync.now = func() time.Time { return base }
 
 	input.Generation = base.Add(15*time.Minute).UnixMilli() + 1
-	if _, err := sync.PutBlob(context.Background(), accountID, input); !errors.Is(err, ErrInvalidBlob) {
+	if _, err := sync.PutBlob(context.Background(), accountID, sessionHash, input); !errors.Is(err, ErrInvalidBlob) {
 		t.Fatalf("1ms past now+15min must be rejected, got %v", err)
 	}
 
 	input.Generation = base.Add(15 * time.Minute).UnixMilli()
-	if _, err := sync.PutBlob(context.Background(), accountID, input); err != nil {
+	if _, err := sync.PutBlob(context.Background(), accountID, sessionHash, input); err != nil {
 		t.Fatalf("exactly now+15min must be accepted, got %v", err)
 	}
 }
 
 func TestPutBlobStillRejectsStaleGenerationWithinTheBound(t *testing.T) {
-	sync, accountID, input := newBlobGenerationFixture(t)
+	sync, accountID, sessionHash, input := newBlobGenerationFixture(t)
 
 	input.Generation = time.Now().UTC().UnixMilli()
-	if _, err := sync.PutBlob(context.Background(), accountID, input); err != nil {
+	if _, err := sync.PutBlob(context.Background(), accountID, sessionHash, input); err != nil {
 		t.Fatalf("first write: %v", err)
 	}
 
 	// Widening the upper bound must not have loosened the CAS underneath it.
 	input.Generation--
-	if _, err := sync.PutBlob(context.Background(), accountID, input); !errors.Is(err, ErrStaleGeneration) {
+	if _, err := sync.PutBlob(context.Background(), accountID, sessionHash, input); !errors.Is(err, ErrStaleGeneration) {
 		t.Fatalf("expected ErrStaleGeneration for a regressing write, got %v", err)
 	}
 }

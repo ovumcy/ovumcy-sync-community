@@ -7,6 +7,8 @@ import (
 	gosync "sync"
 	"testing"
 	"time"
+
+	"github.com/ovumcy/ovumcy-sync-community/internal/security"
 )
 
 func newDeviceTestServices(t *testing.T, maxDevices int) (*AuthService, *SyncService) {
@@ -24,6 +26,18 @@ func registerDeviceTestAccount(t *testing.T, auth *AuthService, login string) st
 		t.Fatalf("register %s: %v", login, err)
 	}
 	return result.AccountID
+}
+
+// deviceTestSessionHash opens a session for an account registered by
+// registerDeviceTestAccount and returns its token hash, the caller session the
+// store-level writes require.
+func deviceTestSessionHash(t *testing.T, auth *AuthService, login string) string {
+	t.Helper()
+	result, err := auth.Login(context.Background(), login, "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("login %s: %v", login, err)
+	}
+	return security.HashToken(result.SessionToken)
 }
 
 func TestListDevicesReturnsAttachedDevices(t *testing.T) {
@@ -83,7 +97,7 @@ func TestRemoveDeviceFreesSlotForReuse(t *testing.T) {
 	}
 
 	// Removing the first device frees the slot.
-	if err := sync.RemoveDevice(context.Background(), accountID, "device-first111"); err != nil {
+	if err := sync.RemoveDevice(context.Background(), accountID, deviceTestSessionHash(t, auth, "owner@example.com"), "device-first111"); err != nil {
 		t.Fatalf("remove first: %v", err)
 	}
 	if _, err := sync.AttachDevice(context.Background(), accountID, "device-second22", "Second"); err != nil {
@@ -95,7 +109,7 @@ func TestRemoveDeviceRejectsUnknownDevice(t *testing.T) {
 	auth, sync := newDeviceTestServices(t, 5)
 	accountID := registerDeviceTestAccount(t, auth, "owner@example.com")
 
-	if err := sync.RemoveDevice(context.Background(), accountID, "device-missing1"); !errors.Is(err, ErrDeviceNotFound) {
+	if err := sync.RemoveDevice(context.Background(), accountID, deviceTestSessionHash(t, auth, "owner@example.com"), "device-missing1"); !errors.Is(err, ErrDeviceNotFound) {
 		t.Fatalf("expected ErrDeviceNotFound, got %v", err)
 	}
 }
@@ -104,7 +118,7 @@ func TestRemoveDeviceRejectsEmptyID(t *testing.T) {
 	auth, sync := newDeviceTestServices(t, 5)
 	accountID := registerDeviceTestAccount(t, auth, "owner@example.com")
 
-	if err := sync.RemoveDevice(context.Background(), accountID, "   "); !errors.Is(err, ErrInvalidDevice) {
+	if err := sync.RemoveDevice(context.Background(), accountID, deviceTestSessionHash(t, auth, "owner@example.com"), "   "); !errors.Is(err, ErrInvalidDevice) {
 		t.Fatalf("expected ErrInvalidDevice, got %v", err)
 	}
 }
@@ -210,7 +224,7 @@ func TestRemoveDeviceIsAccountScopedNoIDOR(t *testing.T) {
 
 	// Account B tries to remove account A's device id — must not succeed and
 	// must not delete A's row.
-	if err := sync.RemoveDevice(context.Background(), accountB, "device-aaaa1111"); !errors.Is(err, ErrDeviceNotFound) {
+	if err := sync.RemoveDevice(context.Background(), accountB, deviceTestSessionHash(t, auth, "b@example.com"), "device-aaaa1111"); !errors.Is(err, ErrDeviceNotFound) {
 		t.Fatalf("cross-account removal must be ErrDeviceNotFound, got %v", err)
 	}
 

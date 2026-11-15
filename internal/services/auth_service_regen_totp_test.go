@@ -15,6 +15,7 @@ type regenTOTPFixture struct {
 	auth         *AuthService
 	totp         *TOTPService
 	accountID    string
+	sessionHash  string
 	recovery     string
 	secret       []byte
 	enrollStep   int64
@@ -38,7 +39,7 @@ func newRegenTOTPFixture(t *testing.T) regenTOTPFixture {
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	start, err := totpService.StartEnrollment(ctx, registered.AccountID, regenTOTPPassword)
+	start, err := totpService.StartEnrollment(ctx, registered.AccountID, StepUp{SessionTokenHash: security.HashToken(registered.SessionToken), CurrentPassword: regenTOTPPassword})
 	if err != nil {
 		t.Fatalf("StartEnrollment: %v", err)
 	}
@@ -65,6 +66,7 @@ func newRegenTOTPFixture(t *testing.T) regenTOTPFixture {
 		auth:         authService,
 		totp:         totpService,
 		accountID:    registered.AccountID,
+		sessionHash:  security.HashToken(registered.SessionToken),
 		recovery:     enrolledRecovery,
 		secret:       secret,
 		enrollStep:   enrollStep,
@@ -80,7 +82,7 @@ func TestRegenerateRecoveryCodeOnTOTPAccountRequiresCode(t *testing.T) {
 	ctx := context.Background()
 
 	for _, code := range []string{"", "000000"} {
-		if _, err := fixture.auth.RegenerateRecoveryCode(ctx, fixture.accountID, regenTOTPPassword, code); !errors.Is(err, ErrTOTPInvalidCode) {
+		if _, err := fixture.auth.RegenerateRecoveryCode(ctx, fixture.accountID, StepUp{SessionTokenHash: fixture.sessionHash, CurrentPassword: regenTOTPPassword}, code); !errors.Is(err, ErrTOTPInvalidCode) {
 			t.Fatalf("code %q: expected ErrTOTPInvalidCode, got %v", code, err)
 		}
 	}
@@ -105,7 +107,7 @@ func TestRegenerateRecoveryCodeOnTOTPAccountAcceptsCurrentCodeOnce(t *testing.T)
 	ctx := context.Background()
 	code := security.GenerateTOTPCode(fixture.secret, fixture.enrollStep+1)
 
-	newRecovery, err := fixture.auth.RegenerateRecoveryCode(ctx, fixture.accountID, regenTOTPPassword, code)
+	newRecovery, err := fixture.auth.RegenerateRecoveryCode(ctx, fixture.accountID, StepUp{SessionTokenHash: fixture.sessionHash, CurrentPassword: regenTOTPPassword}, code)
 	if err != nil {
 		t.Fatalf("regenerate with a current code: %v", err)
 	}
@@ -126,10 +128,10 @@ func TestRegenerateRecoveryCodeOnTOTPAccountChecksPasswordFirst(t *testing.T) {
 	ctx := context.Background()
 	code := security.GenerateTOTPCode(fixture.secret, fixture.enrollStep+1)
 
-	if _, err := fixture.auth.RegenerateRecoveryCode(ctx, fixture.accountID, "wrong password", code); !errors.Is(err, ErrInvalidCurrentPassword) {
+	if _, err := fixture.auth.RegenerateRecoveryCode(ctx, fixture.accountID, StepUp{SessionTokenHash: fixture.sessionHash, CurrentPassword: "wrong password"}, code); !errors.Is(err, ErrInvalidCurrentPassword) {
 		t.Fatalf("expected ErrInvalidCurrentPassword, got %v", err)
 	}
-	if _, err := fixture.auth.RegenerateRecoveryCode(ctx, fixture.accountID, regenTOTPPassword, code); err != nil {
+	if _, err := fixture.auth.RegenerateRecoveryCode(ctx, fixture.accountID, StepUp{SessionTokenHash: fixture.sessionHash, CurrentPassword: regenTOTPPassword}, code); err != nil {
 		t.Fatalf("the code must still be usable after a wrong-password attempt: %v", err)
 	}
 }
@@ -141,13 +143,13 @@ func TestRegenerateRecoveryCodeOnTOTPAccountFailsClosedWithoutVerifier(t *testin
 	ctx := context.Background()
 
 	bare := NewAuthService(fixture.auth.store, 24*time.Hour)
-	if _, err := bare.RegenerateRecoveryCode(ctx, fixture.accountID, regenTOTPPassword, "123456"); !errors.Is(err, ErrTOTPNotConfigured) {
+	if _, err := bare.RegenerateRecoveryCode(ctx, fixture.accountID, StepUp{SessionTokenHash: fixture.sessionHash, CurrentPassword: regenTOTPPassword}, "123456"); !errors.Is(err, ErrTOTPNotConfigured) {
 		t.Fatalf("expected ErrTOTPNotConfigured, got %v", err)
 	}
 
 	unkeyed := NewTOTPService(fixture.auth.store, bare, nil, "ovumcy-sync-community-test")
 	bare.AttachTOTPChallengeIssuer(unkeyed)
-	if _, err := bare.RegenerateRecoveryCode(ctx, fixture.accountID, regenTOTPPassword, "123456"); !errors.Is(err, ErrTOTPNotConfigured) {
+	if _, err := bare.RegenerateRecoveryCode(ctx, fixture.accountID, StepUp{SessionTokenHash: fixture.sessionHash, CurrentPassword: regenTOTPPassword}, "123456"); !errors.Is(err, ErrTOTPNotConfigured) {
 		t.Fatalf("expected ErrTOTPNotConfigured from an unkeyed verifier, got %v", err)
 	}
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/ovumcy/ovumcy-sync-community/internal/db"
 	"github.com/ovumcy/ovumcy-sync-community/internal/models"
+	"github.com/ovumcy/ovumcy-sync-community/internal/security"
 )
 
 func TestSyncServiceAttachDeviceAndBlobRoundTrip(t *testing.T) {
@@ -45,7 +46,7 @@ func TestSyncServiceAttachDeviceAndBlobRoundTrip(t *testing.T) {
 	ciphertext := []byte("ciphertext-only-payload")
 	sum := sha256.Sum256(ciphertext)
 
-	storedBlob, err := syncService.PutBlob(context.Background(), result.AccountID, PutBlobInput{
+	storedBlob, err := syncService.PutBlob(context.Background(), result.AccountID, security.HashToken(result.SessionToken), PutBlobInput{
 		SchemaVersion:  1,
 		Generation:     1,
 		ChecksumSHA256: hex.EncodeToString(sum[:]),
@@ -183,7 +184,7 @@ func TestSyncServiceRejectsChecksumMismatchAndStaleGeneration(t *testing.T) {
 	ciphertext := []byte("ciphertext-only-payload")
 	sum := sha256.Sum256(ciphertext)
 
-	if _, err := syncService.PutBlob(context.Background(), result.AccountID, PutBlobInput{
+	if _, err := syncService.PutBlob(context.Background(), result.AccountID, security.HashToken(result.SessionToken), PutBlobInput{
 		SchemaVersion:  1,
 		Generation:     1,
 		ChecksumSHA256: hex.EncodeToString(sum[:]),
@@ -192,7 +193,7 @@ func TestSyncServiceRejectsChecksumMismatchAndStaleGeneration(t *testing.T) {
 		t.Fatalf("seed put blob: %v", err)
 	}
 
-	if _, err := syncService.PutBlob(context.Background(), result.AccountID, PutBlobInput{
+	if _, err := syncService.PutBlob(context.Background(), result.AccountID, security.HashToken(result.SessionToken), PutBlobInput{
 		SchemaVersion:  1,
 		Generation:     2,
 		ChecksumSHA256: strings.Repeat("a", 64),
@@ -201,7 +202,7 @@ func TestSyncServiceRejectsChecksumMismatchAndStaleGeneration(t *testing.T) {
 		t.Fatalf("expected ErrInvalidBlob for checksum mismatch, got %v", err)
 	}
 
-	if _, err := syncService.PutBlob(context.Background(), result.AccountID, PutBlobInput{
+	if _, err := syncService.PutBlob(context.Background(), result.AccountID, security.HashToken(result.SessionToken), PutBlobInput{
 		SchemaVersion:  1,
 		Generation:     1,
 		ChecksumSHA256: hex.EncodeToString(sum[:]),
@@ -231,7 +232,7 @@ func TestSyncServicePutBlobRejectsMalformedChecksumFormat(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	if _, err := syncService.PutBlob(context.Background(), result.AccountID, PutBlobInput{
+	if _, err := syncService.PutBlob(context.Background(), result.AccountID, security.HashToken(result.SessionToken), PutBlobInput{
 		SchemaVersion:  1,
 		Generation:     1,
 		ChecksumSHA256: "not-a-valid-checksum",
@@ -289,7 +290,7 @@ func TestSyncServicePutBlobRejectsMalformedInput(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := syncService.PutBlob(context.Background(), result.AccountID, input); !errors.Is(err, ErrInvalidBlob) {
+			if _, err := syncService.PutBlob(context.Background(), result.AccountID, security.HashToken(result.SessionToken), input); !errors.Is(err, ErrInvalidBlob) {
 				t.Fatalf("expected ErrInvalidBlob, got %v", err)
 			}
 		})
@@ -316,7 +317,7 @@ func TestSyncServiceRemoveDeviceSurfacesStoreError(t *testing.T) {
 
 	dropTable(t, dbPath, "devices")
 
-	err = syncService.RemoveDevice(context.Background(), result.AccountID, "device-12345678")
+	err = syncService.RemoveDevice(context.Background(), result.AccountID, security.HashToken(result.SessionToken), "device-12345678")
 	if err == nil || errors.Is(err, ErrDeviceNotFound) {
 		t.Fatalf("expected a store error removing a device after the devices table is dropped, got %v", err)
 	}
@@ -484,7 +485,7 @@ func TestSyncServiceRejectsOversizedBlob(t *testing.T) {
 	ciphertext := []byte("ciphertext-too-large")
 	sum := sha256.Sum256(ciphertext)
 
-	if _, err := syncService.PutBlob(context.Background(), result.AccountID, PutBlobInput{
+	if _, err := syncService.PutBlob(context.Background(), result.AccountID, security.HashToken(result.SessionToken), PutBlobInput{
 		SchemaVersion:  1,
 		Generation:     1,
 		ChecksumSHA256: hex.EncodeToString(sum[:]),
@@ -561,7 +562,7 @@ func TestSyncServicePutBlobConcurrentEqualGenerationCollapsesToOneWinner(t *test
 	// share the same baseline and must compete for generation 2.
 	seedCiphertext := []byte("seed-ciphertext-payload")
 	seedSum := sha256.Sum256(seedCiphertext)
-	if _, err := syncService.PutBlob(context.Background(), result.AccountID, PutBlobInput{
+	if _, err := syncService.PutBlob(context.Background(), result.AccountID, security.HashToken(result.SessionToken), PutBlobInput{
 		SchemaVersion:  1,
 		Generation:     1,
 		ChecksumSHA256: hex.EncodeToString(seedSum[:]),
@@ -584,7 +585,7 @@ func TestSyncServicePutBlobConcurrentEqualGenerationCollapsesToOneWinner(t *test
 			racerCiphertext := []byte(fmt.Sprintf("racer-%d-ciphertext-payload", i))
 			racerSum := sha256.Sum256(racerCiphertext)
 			<-start
-			_, err := syncService.PutBlob(context.Background(), result.AccountID, PutBlobInput{
+			_, err := syncService.PutBlob(context.Background(), result.AccountID, security.HashToken(result.SessionToken), PutBlobInput{
 				SchemaVersion:  1,
 				Generation:     2,
 				ChecksumSHA256: hex.EncodeToString(racerSum[:]),
@@ -622,7 +623,7 @@ func TestSyncServicePutBlobConcurrentEqualGenerationCollapsesToOneWinner(t *test
 
 	// A subsequent stale-generation write must also be rejected, proving
 	// the CAS survives beyond the race window.
-	if _, err := syncService.PutBlob(context.Background(), result.AccountID, PutBlobInput{
+	if _, err := syncService.PutBlob(context.Background(), result.AccountID, security.HashToken(result.SessionToken), PutBlobInput{
 		SchemaVersion:  1,
 		Generation:     2,
 		ChecksumSHA256: hex.EncodeToString(seedSum[:]),
@@ -652,7 +653,7 @@ func TestSyncServicePutBlobFirstWriteSucceeds(t *testing.T) {
 
 	ciphertext := []byte("first-write-payload")
 	sum := sha256.Sum256(ciphertext)
-	stored, err := syncService.PutBlob(context.Background(), result.AccountID, PutBlobInput{
+	stored, err := syncService.PutBlob(context.Background(), result.AccountID, security.HashToken(result.SessionToken), PutBlobInput{
 		SchemaVersion:  1,
 		Generation:     1,
 		ChecksumSHA256: hex.EncodeToString(sum[:]),

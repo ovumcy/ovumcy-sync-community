@@ -89,7 +89,7 @@ func TestDeleteDeviceRevokesOnlySessionsBoundToIt(t *testing.T) {
 		}
 	}
 
-	if err := store.DeleteDevice(ctx, "acct-a", "device-shared1"); err != nil {
+	if err := store.DeleteDevice(ctx, "acct-a", "a-unbound", "device-shared1"); err != nil {
 		t.Fatalf("delete device: %v", err)
 	}
 
@@ -110,6 +110,8 @@ func TestAttachDeviceForSessionIsOneDevicePerSession(t *testing.T) {
 	createWindowTestAccount(t, store, "acct-a")
 	createWindowTestAccount(t, store, "acct-b")
 	seedBindingSession(t, store, "acct-a", "a-session")
+	seedBindingSession(t, store, "acct-a", "a-caller")
+	seedBindingSession(t, store, "acct-b", "b-caller")
 
 	if err := attachForSession(store, "acct-b", "a-session", "device-cross11", 10); err != nil {
 		t.Fatalf("cross-account attach: %v", err)
@@ -127,13 +129,13 @@ func TestAttachDeviceForSessionIsOneDevicePerSession(t *testing.T) {
 		t.Fatalf("a refused attach must not create its device, count=%d", got)
 	}
 
-	if err := store.DeleteDevice(ctx, "acct-b", "device-cross11"); err != nil {
+	if err := store.DeleteDevice(ctx, "acct-b", "b-caller", "device-cross11"); err != nil {
 		t.Fatalf("delete cross-account device: %v", err)
 	}
 	if !sessionExists(t, store, "a-session") {
 		t.Fatal("a cross-account attach must not bind the session")
 	}
-	if err := store.DeleteDevice(ctx, "acct-a", "device-first11"); err != nil {
+	if err := store.DeleteDevice(ctx, "acct-a", "a-caller", "device-first11"); err != nil {
 		t.Fatalf("delete first device: %v", err)
 	}
 	if sessionExists(t, store, "a-session") {
@@ -149,6 +151,7 @@ func TestAttachDeviceForSessionCeilingRollsBackTheBind(t *testing.T) {
 	createWindowTestAccount(t, store, "acct-a")
 	seedBindingDevice(t, store, "acct-a", "device-owned11")
 	seedBindingSession(t, store, "acct-a", "a-session")
+	seedBindingSession(t, store, "acct-a", "a-caller")
 
 	if err := attachForSession(store, "acct-a", "a-session", "device-new2222", 1); !errors.Is(err, ErrDeviceLimitReached) {
 		t.Fatalf("expected ErrDeviceLimitReached, got %v", err)
@@ -156,7 +159,7 @@ func TestAttachDeviceForSessionCeilingRollsBackTheBind(t *testing.T) {
 	if err := attachForSession(store, "acct-a", "a-session", "device-owned11", 1); err != nil {
 		t.Fatalf("attach of an owned device at the ceiling: %v", err)
 	}
-	if err := store.DeleteDevice(ctx, "acct-a", "device-owned11"); err != nil {
+	if err := store.DeleteDevice(ctx, "acct-a", "a-caller", "device-owned11"); err != nil {
 		t.Fatalf("delete owned device: %v", err)
 	}
 	if sessionExists(t, store, "a-session") {
@@ -223,14 +226,20 @@ func TestDeleteDeviceRollsBackWhenSessionRevocationFails(t *testing.T) {
 	ctx := context.Background()
 	createWindowTestAccount(t, store, "acct-a")
 	seedBindingDevice(t, store, "acct-a", "device-kept111")
-	dropTable(t, dbPath, "sessions")
+	seedBindingSession(t, store, "acct-a", "a-caller")
+	seedBindingSession(t, store, "acct-a", "a-bound")
+	if err := attachForSession(store, "acct-a", "a-bound", "device-kept111", 10); err != nil {
+		t.Fatalf("bind the session to the device: %v", err)
+	}
+	failDeletesOn(t, dbPath, "sessions")
 
-	if err := store.DeleteDevice(ctx, "acct-a", "device-kept111"); err == nil {
-		t.Fatal("expected an error once the sessions table is gone")
+	if err := store.DeleteDevice(ctx, "acct-a", "a-caller", "device-kept111"); err == nil {
+		t.Fatal("expected an error once session deletes fail")
 	}
 	if got := deviceCount(t, store, "acct-a"); got != 1 {
 		t.Fatalf("device must survive the rolled-back delete, count=%d", got)
 	}
+	dropTable(t, dbPath, "sessions")
 	if err := attachForSession(store, "acct-a", "any", "device-new1111", 10); err == nil {
 		t.Fatal("expected a bind error once the sessions table is gone")
 	}
@@ -253,7 +262,7 @@ func TestAttachDeviceForSessionSurfacesUpsertErrors(t *testing.T) {
 func TestDeleteDeviceFailsOnAClosedStore(t *testing.T) {
 	store := openTestStore(t)
 	_ = store.Close()
-	if err := store.DeleteDevice(context.Background(), "acct-a", "device-abcd1234"); err == nil {
+	if err := store.DeleteDevice(context.Background(), "acct-a", "any-session", "device-abcd1234"); err == nil {
 		t.Fatal("expected an error from a closed store")
 	}
 	if err := attachForSession(store, "acct-a", "any", "device-abcd1234", 10); err == nil {

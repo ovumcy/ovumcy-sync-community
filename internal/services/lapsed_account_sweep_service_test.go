@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ovumcy/ovumcy-sync-community/internal/db"
+	"github.com/ovumcy/ovumcy-sync-community/internal/security"
 )
 
 const lapsedSweepGracePeriod = 60 * 24 * time.Hour
@@ -42,7 +43,7 @@ func seedLapsedCandidateWithFullData(
 	}
 	ciphertext := []byte(accountID + "-ciphertext")
 	sum := sha256.Sum256(ciphertext)
-	if _, err := syncService.PutBlob(ctx, accountID, PutBlobInput{
+	if _, err := syncService.PutBlob(ctx, accountID, security.HashToken(session.SessionToken), PutBlobInput{
 		SchemaVersion:  1,
 		Generation:     1,
 		ChecksumSHA256: hex.EncodeToString(sum[:]),
@@ -95,7 +96,7 @@ func TestLapsedAccountSweepServiceDeletesPastGraceSurvivesWithinGraceAndSkipsCom
 	}
 	selfHostedCiphertext := []byte("self-hosted-ciphertext")
 	selfHostedSum := sha256.Sum256(selfHostedCiphertext)
-	if _, err := syncService.PutBlob(ctx, selfHostedRegistered.AccountID, PutBlobInput{
+	if _, err := syncService.PutBlob(ctx, selfHostedRegistered.AccountID, security.HashToken(selfHostedRegistered.SessionToken), PutBlobInput{
 		SchemaVersion:  1,
 		Generation:     1,
 		ChecksumSHA256: hex.EncodeToString(selfHostedSum[:]),

@@ -77,6 +77,7 @@ func TestAccountFieldUpdatesHappyPathAndNotFound(t *testing.T) {
 	ctx := context.Background()
 
 	target := seedFaultInjectionAccount(t, store, "account-target")
+	seedBindingSession(t, store, target.ID, "target-session")
 	bystander := seedFaultInjectionAccount(t, store, "account-bystander")
 
 	if err := store.UpdateAccountPasswordHash(ctx, target.ID, "rotated-hash"); err != nil {
@@ -97,15 +98,15 @@ func TestAccountFieldUpdatesHappyPathAndNotFound(t *testing.T) {
 		t.Fatalf("expected bystander password hash untouched, got %#v", untouched)
 	}
 
-	if err := store.UpdateAccountRecoveryCodeHash(ctx, target.ID, "stale-recovery-hash", "rotated-hash", "rotated-recovery-hash-2"); !errors.Is(err, ErrConflict) {
+	if err := store.UpdateAccountRecoveryCodeHash(ctx, target.ID, "target-session", "stale-recovery-hash", "rotated-hash", "rotated-recovery-hash-2"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("expected ErrConflict when the stored recovery hash moved, got %v", err)
 	}
 	// The password was rotated above: a regeneration verified against the
 	// old one must not land.
-	if err := store.UpdateAccountRecoveryCodeHash(ctx, target.ID, target.RecoveryCodeHash, target.PasswordHash, "rotated-recovery-hash-2"); !errors.Is(err, ErrConflict) {
+	if err := store.UpdateAccountRecoveryCodeHash(ctx, target.ID, "target-session", target.RecoveryCodeHash, target.PasswordHash, "rotated-recovery-hash-2"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("expected ErrConflict when the stored password hash moved, got %v", err)
 	}
-	if err := store.UpdateAccountRecoveryCodeHash(ctx, target.ID, target.RecoveryCodeHash, "rotated-hash", "rotated-recovery-hash-2"); err != nil {
+	if err := store.UpdateAccountRecoveryCodeHash(ctx, target.ID, "target-session", target.RecoveryCodeHash, "rotated-hash", "rotated-recovery-hash-2"); err != nil {
 		t.Fatalf("update account recovery code hash: %v", err)
 	}
 	updated, err = store.FindAccountByID(ctx, target.ID)
@@ -119,7 +120,7 @@ func TestAccountFieldUpdatesHappyPathAndNotFound(t *testing.T) {
 	if err := store.UpdateAccountPasswordHash(ctx, "missing-account", "any-hash"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for missing account password update, got %v", err)
 	}
-	if err := store.UpdateAccountRecoveryCodeHash(ctx, "missing-account", "", "", "any-recovery-hash"); !errors.Is(err, ErrNotFound) {
+	if err := store.UpdateAccountRecoveryCodeHash(ctx, "missing-account", "any-session", "", "", "any-recovery-hash"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for missing account recovery update, got %v", err)
 	}
 }
@@ -165,7 +166,7 @@ func TestAccountFieldUpdatesReturnErrorWhenAccountsTableIsDropped(t *testing.T) 
 		t.Fatalf("expected a store-failure error, not ErrNotFound, got %v", err)
 	}
 
-	if err := store.UpdateAccountRecoveryCodeHash(ctx, target.ID, target.RecoveryCodeHash, target.PasswordHash, "any-recovery-hash"); err == nil {
+	if err := store.UpdateAccountRecoveryCodeHash(ctx, target.ID, "target-session", target.RecoveryCodeHash, target.PasswordHash, "any-recovery-hash"); err == nil {
 		t.Fatal("expected error updating recovery hash after accounts table is dropped")
 	} else if errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected a store-failure error, not ErrNotFound, got %v", err)
@@ -182,6 +183,7 @@ func TestTOTPAccountFieldMethodsHappyPathAndNotFound(t *testing.T) {
 	ctx := context.Background()
 
 	target := seedFaultInjectionAccount(t, store, "account-target")
+	seedBindingSession(t, store, target.ID, "target-session")
 	bystander := seedFaultInjectionAccount(t, store, "account-bystander")
 
 	if err := store.UpdateTOTPSecretAndEnabled(ctx, target.ID, "encrypted-secret-placeholder", false); err != nil {
@@ -230,14 +232,14 @@ func TestTOTPAccountFieldMethodsHappyPathAndNotFound(t *testing.T) {
 
 	// A secret other than the pending one is refused: a concurrent
 	// StartEnrollment must not get its fresh secret enabled unverified.
-	if err := store.EnableTOTPAndRotateRecoveryCode(ctx, target.ID, "superseded-secret", "rotated-recovery-hash", ""); !errors.Is(err, ErrTOTPPendingSecretChanged) {
+	if err := store.EnableTOTPAndRotateRecoveryCode(ctx, target.ID, "superseded-secret", "rotated-recovery-hash", "target-session"); !errors.Is(err, ErrTOTPPendingSecretChanged) {
 		t.Fatalf("expected ErrTOTPPendingSecretChanged for a superseded secret, got %v", err)
 	}
 	if pending, err := store.FindAccountByID(ctx, target.ID); err != nil || pending.TOTPEnabled || pending.RecoveryCodeHash != target.RecoveryCodeHash {
 		t.Fatalf("expected the refused enable to change nothing, got %#v err=%v", pending, err)
 	}
 
-	if err := store.EnableTOTPAndRotateRecoveryCode(ctx, target.ID, "encrypted-secret-placeholder", "rotated-recovery-hash", ""); err != nil {
+	if err := store.EnableTOTPAndRotateRecoveryCode(ctx, target.ID, "encrypted-secret-placeholder", "rotated-recovery-hash", "target-session"); err != nil {
 		t.Fatalf("enable totp: %v", err)
 	}
 	afterEnable, err := store.FindAccountByID(ctx, target.ID)
@@ -256,7 +258,7 @@ func TestTOTPAccountFieldMethodsHappyPathAndNotFound(t *testing.T) {
 		t.Fatalf("expected claimed step to survive the enable, got %d", afterEnable.TOTPLastUsedStep)
 	}
 	// A second enable loses the totp_enabled = 0 guard and leaves the hash alone.
-	if err := store.EnableTOTPAndRotateRecoveryCode(ctx, target.ID, "encrypted-secret-placeholder", "second-hash", ""); !errors.Is(err, ErrConflict) {
+	if err := store.EnableTOTPAndRotateRecoveryCode(ctx, target.ID, "encrypted-secret-placeholder", "second-hash", "target-session"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("expected ErrConflict for an already-enabled account, got %v", err)
 	}
 	if again, err := store.FindAccountByID(ctx, target.ID); err != nil || again.RecoveryCodeHash != "rotated-recovery-hash" {
@@ -560,8 +562,9 @@ func TestUpsertPasswordResetTokenRequiresVerifiedRecoveryHash(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 	target := seedFaultInjectionAccount(t, store, "account-target")
+	seedBindingSession(t, store, target.ID, "target-session")
 
-	if err := store.UpdateAccountRecoveryCodeHash(ctx, target.ID, target.RecoveryCodeHash, target.PasswordHash, "rotated-recovery-hash"); err != nil {
+	if err := store.UpdateAccountRecoveryCodeHash(ctx, target.ID, "target-session", target.RecoveryCodeHash, target.PasswordHash, "rotated-recovery-hash"); err != nil {
 		t.Fatalf("rotate recovery hash: %v", err)
 	}
 
@@ -798,9 +801,10 @@ func TestUpsertEncryptedBlobRejectsStaleGeneration(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 	target := seedFaultInjectionAccount(t, store, "account-target")
+	seedBindingSession(t, store, target.ID, "target-session")
 	now := time.Now().UTC()
 
-	if _, err := store.UpsertEncryptedBlob(ctx, models.EncryptedBlob{
+	if _, err := store.UpsertEncryptedBlob(ctx, "target-session", models.EncryptedBlob{
 		AccountID:      target.ID,
 		SchemaVersion:  1,
 		Generation:     5,
@@ -813,7 +817,7 @@ func TestUpsertEncryptedBlobRejectsStaleGeneration(t *testing.T) {
 	}
 
 	// Equal generation is rejected (not strictly greater).
-	if _, err := store.UpsertEncryptedBlob(ctx, models.EncryptedBlob{
+	if _, err := store.UpsertEncryptedBlob(ctx, "target-session", models.EncryptedBlob{
 		AccountID:      target.ID,
 		SchemaVersion:  1,
 		Generation:     5,
@@ -826,7 +830,7 @@ func TestUpsertEncryptedBlobRejectsStaleGeneration(t *testing.T) {
 	}
 
 	// Lower generation (a concurrent loser) is rejected too.
-	if _, err := store.UpsertEncryptedBlob(ctx, models.EncryptedBlob{
+	if _, err := store.UpsertEncryptedBlob(ctx, "target-session", models.EncryptedBlob{
 		AccountID:      target.ID,
 		SchemaVersion:  1,
 		Generation:     3,
@@ -849,7 +853,7 @@ func TestUpsertEncryptedBlobRejectsStaleGeneration(t *testing.T) {
 	}
 
 	// A strictly greater generation succeeds and replaces the row.
-	if _, err := store.UpsertEncryptedBlob(ctx, models.EncryptedBlob{
+	if _, err := store.UpsertEncryptedBlob(ctx, "target-session", models.EncryptedBlob{
 		AccountID:      target.ID,
 		SchemaVersion:  1,
 		Generation:     6,
@@ -879,11 +883,12 @@ func TestBlobAndRecoveryUpsertsReturnErrorWhenTablesAreDropped(t *testing.T) {
 	store, dbPath := newFileBackedTestStore(t)
 	ctx := context.Background()
 	target := seedFaultInjectionAccount(t, store, "account-target")
+	seedBindingSession(t, store, target.ID, "target-session")
 	now := time.Now().UTC()
 
 	dropTable(t, dbPath, "encrypted_blobs")
 
-	if _, err := store.UpsertEncryptedBlob(ctx, models.EncryptedBlob{
+	if _, err := store.UpsertEncryptedBlob(ctx, "target-session", models.EncryptedBlob{
 		AccountID:      target.ID,
 		SchemaVersion:  1,
 		Generation:     1,
@@ -933,6 +938,7 @@ func TestDeviceAndSessionQueriesReturnErrorWhenTablesAreDropped(t *testing.T) {
 	store, dbPath := newFileBackedTestStore(t)
 	ctx := context.Background()
 	target := seedFaultInjectionAccount(t, store, "account-target")
+	seedBindingSession(t, store, target.ID, "target-session")
 	now := time.Now().UTC()
 
 	dropTable(t, dbPath, "devices")
@@ -957,7 +963,7 @@ func TestDeviceAndSessionQueriesReturnErrorWhenTablesAreDropped(t *testing.T) {
 	if _, err := store.ListDevicesForAccount(ctx, target.ID); err == nil {
 		t.Fatal("expected error listing devices after devices table is dropped")
 	}
-	if err := store.DeleteDevice(ctx, target.ID, "device-1"); err == nil {
+	if err := store.DeleteDevice(ctx, target.ID, "target-session", "device-1"); err == nil {
 		t.Fatal("expected error deleting device after devices table is dropped")
 	} else if errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected a store-failure error, not ErrNotFound, got %v", err)
@@ -1322,7 +1328,7 @@ func TestUpdateAccountRecoveryCodeHashFailsAtBeginTransactionOnClosedStore(t *te
 		t.Fatalf("close store: %v", err)
 	}
 
-	err := store.UpdateAccountRecoveryCodeHash(context.Background(), "account-target", "", "", "any-recovery-hash")
+	err := store.UpdateAccountRecoveryCodeHash(context.Background(), "account-target", "any-session", "", "", "any-recovery-hash")
 	if err == nil || !strings.Contains(err.Error(), "begin update account recovery code") {
 		t.Fatalf("expected the begin-transaction error to surface, got %v", err)
 	}

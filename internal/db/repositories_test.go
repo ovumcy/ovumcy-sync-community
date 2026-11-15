@@ -195,7 +195,7 @@ func TestDeleteAccountErasesEveryChildRowAndIsIdempotent(t *testing.T) {
 			t.Fatalf("create device for %s: %v", accountID, err)
 		}
 
-		if _, err := store.UpsertEncryptedBlob(ctx, models.EncryptedBlob{
+		if _, err := store.UpsertEncryptedBlob(ctx, accountID+"-token-hash", models.EncryptedBlob{
 			AccountID:      accountID,
 			SchemaVersion:  1,
 			Generation:     1,

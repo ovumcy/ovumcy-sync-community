@@ -80,3 +80,26 @@ func failAccountsUpdates(t *testing.T, dbPath string) {
 		t.Fatalf("install accounts update trigger: %v", err)
 	}
 }
+
+// failSessionsDeletes installs, through a second connection, a trigger that
+// aborts every row DELETE on sessions while reads keep working. A flow that
+// first looks the caller's session up reaches its revocation-delete error
+// branch this way, where dropping the table would fail the lookup earlier.
+func failSessionsDeletes(t *testing.T, dbPath string) {
+	t.Helper()
+
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw sqlite: %v", err)
+	}
+	defer func() {
+		_ = raw.Close()
+	}()
+
+	if _, err := raw.Exec(`PRAGMA busy_timeout = 5000;`); err != nil {
+		t.Fatalf("configure raw sqlite: %v", err)
+	}
+	if _, err := raw.Exec(`CREATE TRIGGER fail_sessions_delete BEFORE DELETE ON sessions BEGIN SELECT RAISE(ABORT, 'injected sessions delete failure'); END`); err != nil {
+		t.Fatalf("install sessions delete trigger: %v", err)
+	}
+}

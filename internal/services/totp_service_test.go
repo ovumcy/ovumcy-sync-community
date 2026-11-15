@@ -52,7 +52,7 @@ func enrollTOTP(
 		t.Fatalf("register: %v", err)
 	}
 
-	start, err := totp.StartEnrollment(ctx, registered.AccountID, password)
+	start, err := totp.StartEnrollment(ctx, registered.AccountID, StepUp{SessionTokenHash: security.HashToken(registered.SessionToken), CurrentPassword: password})
 	if err != nil {
 		t.Fatalf("StartEnrollment: %v", err)
 	}
@@ -187,7 +187,12 @@ func TestFreshStartEnrollmentResetsStaleStepClaim(t *testing.T) {
 	auth.now = func() time.Time { return reEnrollNow }
 	totp.now = func() time.Time { return reEnrollNow }
 
-	start, err := totp.StartEnrollment(ctx, accountID, password)
+	// Disable revoked every session, so re-enrolling needs a fresh one.
+	reLogin, err := auth.Login(ctx, "owner@example.com", password)
+	if err != nil {
+		t.Fatalf("login after disable: %v", err)
+	}
+	start, err := totp.StartEnrollment(ctx, accountID, StepUp{SessionTokenHash: security.HashToken(reLogin.SessionToken), CurrentPassword: password})
 	if err != nil {
 		t.Fatalf("second StartEnrollment: %v", err)
 	}
@@ -199,7 +204,7 @@ func TestFreshStartEnrollmentResetsStaleStepClaim(t *testing.T) {
 	if _, err := totp.CompleteEnrollment(
 		ctx,
 		accountID,
-		security.HashToken(sessionToken),
+		security.HashToken(reLogin.SessionToken),
 		security.GenerateTOTPCode(newSecret, reEnrollStep),
 	); err != nil {
 		t.Fatalf("second CompleteEnrollment should accept the first code of a fresh secret, got %v", err)
