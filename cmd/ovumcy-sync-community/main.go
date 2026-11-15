@@ -112,7 +112,7 @@ func runServe(cfg config.Config) error {
 			cfg.TOTPIssuer,
 		)
 		authService.AttachTOTPChallengeIssuer(totpService)
-		syncService.AttachTOTPCodeVerifier(totpService)
+		syncService.AttachTOTPCodeVerifier(totpService) // codecov:ignore -- process wiring with FIELD_ENCRYPTION_KEY set, reached only by a full serve; the same wiring is exercised by newTestServerWithOptions(enableTOTP) in internal/api.
 	}
 
 	server := &http.Server{

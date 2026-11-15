@@ -110,12 +110,31 @@ func TestRemoveDeviceOnTOTPAccountRequiresPassword(t *testing.T) {
 	}
 }
 
-// An account without TOTP removes a device with no body at all, as before.
+// An enrolled account's removal draws on the shared wrong-password bucket.
+func TestRemoveDeviceOnTOTPAccountSharesTheStepUpBucket(t *testing.T) {
+	handler := newTestServerWithOptions(t, serverTestOptions{enableTOTP: true, authRateLimitCount: 2})
+	token, secret, nextStep := enrollOwnerOverHTTP(t, handler)
+	for range 2 {
+		performJSONRequest(t, handler, http.MethodDelete, "/account",
+			map[string]string{"current_password": "not the password at all"}, token, http.StatusUnauthorized)
+	}
+
+	performJSONRequest(t, handler, http.MethodDelete, "/sync/devices/device-totp1111",
+		map[string]string{"current_password": totpTestPassword, "code": security.GenerateTOTPCode(secret, nextStep)},
+		token, http.StatusTooManyRequests)
+}
+
+// An account without TOTP removes a device with no body at all, as before,
+// and a spent step-up bucket does not block it.
 func TestRemoveDeviceWithoutTOTPNeedsNoBody(t *testing.T) {
-	handler := newTestServerWithOptions(t, serverTestOptions{enableTOTP: true})
+	handler := newTestServerWithOptions(t, serverTestOptions{enableTOTP: true, authRateLimitCount: 2})
 	token := registerOwnerWithTOTP(t, handler)
 	performJSONRequest(t, handler, http.MethodPost, "/sync/devices",
 		map[string]string{"device_id": "device-plain111", "device_label": "phone"}, token, http.StatusOK)
+	for range 2 {
+		performJSONRequest(t, handler, http.MethodDelete, "/account",
+			map[string]string{"current_password": "not the password at all"}, token, http.StatusUnauthorized)
+	}
 
 	performJSONRequest(t, handler, http.MethodDelete, "/sync/devices/device-plain111", nil, token, http.StatusOK)
 }

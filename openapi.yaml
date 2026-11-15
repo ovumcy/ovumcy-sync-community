@@ -1210,7 +1210,7 @@ paths:
       description: |
         Detaches a device from the caller's account, freeing a slot. The delete is scoped to the authenticated account in the query, so a caller can only ever remove its own devices. Every session bound to the device is revoked in the same transaction — removing the caller's own device ends the calling session too. Sessions never bound (no `POST /sync/devices` yet) are unaffected.
 
-        On a TOTP-enrolled account removal is a step-up: the body must carry the current password and a current TOTP `code` (password checked first; the code is single-use and counted toward the per-account TOTP window, a missing code is not), so a stolen session alone can neither evict the owner's devices nor spend the TOTP window. Every removal draws on the shared step-up bucket (refunded unless the password was wrong), so it can answer 429 while wrong passwords on other step-up routes have spent it. An account without TOTP may omit the body.
+        On a TOTP-enrolled account removal is a step-up: the body must carry the current password and a current TOTP `code` (password checked first; the code is single-use and counted toward the per-account TOTP window, a missing code is not), so a stolen session alone can neither evict the owner's devices nor spend the TOTP window. On an enrolled account wrong passwords draw on the shared step-up bucket (429 once it is spent). An account without TOTP may omit the body and never touches that bucket.
       security:
         - sessionBearerAuth: []
       parameters:

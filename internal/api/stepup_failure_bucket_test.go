@@ -29,7 +29,6 @@ func stepUpCalls(password string) map[string]stepUpCall {
 			"wrap_nonce_hex": "", "wrapped_master_key_hex": "", "phrase_fingerprint_hex": "",
 			"current_password": password,
 		}},
-		"device_remove": {http.MethodDelete, "/sync/devices/device-none1111", map[string]any{"current_password": password}},
 	}
 }
 
@@ -56,7 +55,7 @@ func TestStepUpRoutesShareOneWrongPasswordBucket(t *testing.T) {
 
 	// Each route's own bucket still has room; the shared one is spent.
 	right := stepUpCalls(stepUpOwnerPassword)
-	for _, route := range []string{"disable", "change", "regen", "enroll", "delete", "recovery_key", "device_remove"} {
+	for _, route := range []string{"disable", "change", "regen", "enroll", "delete", "recovery_key"} {
 		call := right[route]
 		response := performJSONRequest(t, handler, call.method, call.path, call.body, token, http.StatusTooManyRequests)
 		if response.Header().Get("Retry-After") == "" {
