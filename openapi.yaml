@@ -1510,7 +1510,7 @@ components:
       properties:
         status:
           type: string
-          description: 'Short status key, e.g. "ok", "password_changed", "totp_disabled", "revoked", "account_deleted", "account_purged".'
+          description: 'Short status key, e.g. "ok", "totp_disabled", "revoked", "account_deleted", "account_purged".'
       required: [status]
       additionalProperties: false
 
