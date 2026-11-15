@@ -324,36 +324,20 @@ func (s *SyncService) GetBlob(ctx context.Context, accountID string) (models.Enc
 // owner's phrase-recovery path.
 //
 // A package equal to the stored one after normalization is answered with the
-// stored row and needs no step-up: it writes nothing and discloses nothing
-// GET /sync/recovery-key does not. Clients re-put the package on every upload.
+// stored row and needs no step-up (UnchangedRecoveryKeyPackage).
 func (s *SyncService) PutRecoveryKeyPackage(
 	ctx context.Context,
 	accountID string,
 	stepUp StepUp,
 	input PutRecoveryKeyPackageInput,
 ) (models.RecoveryKeyPackage, error) {
-	recoveryKeyPackage := models.RecoveryKeyPackage{
-		AccountID:            accountID,
-		Algorithm:            strings.TrimSpace(strings.ToLower(input.Algorithm)),
-		KDF:                  strings.TrimSpace(strings.ToLower(input.KDF)),
-		MnemonicWordCount:    input.MnemonicWordCount,
-		WrapNonceHex:         strings.TrimSpace(strings.ToLower(input.WrapNonceHex)),
-		WrappedMasterKeyHex:  strings.TrimSpace(strings.ToLower(input.WrappedMasterKeyHex)),
-		PhraseFingerprintHex: strings.TrimSpace(strings.ToLower(input.PhraseFingerprintHex)),
-	}
-
-	existing, err := s.store.GetRecoveryKeyPackage(ctx, accountID)
-	switch {
-	case err == nil:
-		// Compared whole, so a field added to the package can never be
-		// skipped by the no-op check.
-		content := existing
-		content.UpdatedAt = time.Time{}
-		if content == recoveryKeyPackage {
-			return existing, nil
-		}
-	case !errors.Is(err, db.ErrNotFound):
+	recoveryKeyPackage := normalizeRecoveryKeyPackage(accountID, input)
+	existing, unchanged, err := s.matchStoredRecoveryKeyPackage(ctx, recoveryKeyPackage)
+	if err != nil {
 		return models.RecoveryKeyPackage{}, err
+	}
+	if unchanged {
+		return existing, nil
 	}
 
 	account, err := verifyStepUp(ctx, s.store, accountID, stepUp.CurrentPassword)
@@ -398,6 +382,52 @@ func (s *SyncService) PutRecoveryKeyPackage(
 		return models.RecoveryKeyPackage{}, stepUpWriteError(err)
 	}
 	return stored, nil
+}
+
+// UnchangedRecoveryKeyPackage reports whether input, normalized as
+// PutRecoveryKeyPackage normalizes it, equals the stored package, and returns
+// the stored row if so. Such a re-put needs no step-up: it writes nothing and
+// discloses nothing GET /sync/recovery-key does not, and clients send it with
+// every upload. The transport answers it before charging the step-up bucket.
+func (s *SyncService) UnchangedRecoveryKeyPackage(
+	ctx context.Context,
+	accountID string,
+	input PutRecoveryKeyPackageInput,
+) (models.RecoveryKeyPackage, bool, error) {
+	return s.matchStoredRecoveryKeyPackage(ctx, normalizeRecoveryKeyPackage(accountID, input))
+}
+
+func normalizeRecoveryKeyPackage(accountID string, input PutRecoveryKeyPackageInput) models.RecoveryKeyPackage {
+	return models.RecoveryKeyPackage{
+		AccountID:            accountID,
+		Algorithm:            strings.TrimSpace(strings.ToLower(input.Algorithm)),
+		KDF:                  strings.TrimSpace(strings.ToLower(input.KDF)),
+		MnemonicWordCount:    input.MnemonicWordCount,
+		WrapNonceHex:         strings.TrimSpace(strings.ToLower(input.WrapNonceHex)),
+		WrappedMasterKeyHex:  strings.TrimSpace(strings.ToLower(input.WrappedMasterKeyHex)),
+		PhraseFingerprintHex: strings.TrimSpace(strings.ToLower(input.PhraseFingerprintHex)),
+	}
+}
+
+func (s *SyncService) matchStoredRecoveryKeyPackage(
+	ctx context.Context,
+	candidate models.RecoveryKeyPackage,
+) (models.RecoveryKeyPackage, bool, error) {
+	existing, err := s.store.GetRecoveryKeyPackage(ctx, candidate.AccountID)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return models.RecoveryKeyPackage{}, false, nil
+		}
+		return models.RecoveryKeyPackage{}, false, err
+	}
+	// Compared whole, so a field added to the package can never be skipped by
+	// the no-op check.
+	content := existing
+	content.UpdatedAt = time.Time{}
+	if content != candidate {
+		return models.RecoveryKeyPackage{}, false, nil
+	}
+	return existing, true, nil
 }
 
 func (s *SyncService) GetRecoveryKeyPackage(

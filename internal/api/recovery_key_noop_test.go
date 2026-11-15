@@ -52,6 +52,26 @@ func TestPutRecoveryKeyIdenticalRePutNeedsNoPassword(t *testing.T) {
 	}
 }
 
+// A spent wrong-password bucket refuses overwrites but not the identical
+// re-put, which clients send with every upload.
+func TestPutRecoveryKeyIdenticalRePutIgnoresASpentStepUpBucket(t *testing.T) {
+	handler := newTestServerWithOptions(t, serverTestOptions{authRateLimitCount: 3})
+	token := registerStepUpOwner(t, handler)
+	fingerprint := strings.Repeat("c", 16)
+	performJSONRequest(t, handler, http.MethodPut, "/sync/recovery-key",
+		recoveryKeyBody(fingerprint, map[string]string{"current_password": stepUpOwnerPassword}), token, http.StatusOK)
+
+	wrongDelete := stepUpCalls("wrong password entirely")["delete"]
+	for range 3 {
+		performJSONRequest(t, handler, wrongDelete.method, wrongDelete.path, wrongDelete.body, token, http.StatusUnauthorized)
+	}
+
+	performJSONRequest(t, handler, http.MethodPut, "/sync/recovery-key", recoveryKeyBody(fingerprint, nil), token, http.StatusOK)
+	performJSONRequest(t, handler, http.MethodPut, "/sync/recovery-key",
+		recoveryKeyBody(strings.Repeat("d", 16), map[string]string{"current_password": stepUpOwnerPassword}),
+		token, http.StatusTooManyRequests)
+}
+
 func TestPutRecoveryKeyIdenticalRePutOnTOTPAccountNeedsNoCode(t *testing.T) {
 	handler := newTestServerWithOptions(t, serverTestOptions{enableTOTP: true})
 	token, secret, nextStep := enrollOwnerOverHTTP(t, handler)

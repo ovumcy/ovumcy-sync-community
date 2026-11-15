@@ -1097,24 +1097,31 @@ func (s *Server) handlePutRecoveryKey(
 	if !decodeJSON(writer, request, &payload, 8<<10) {
 		return
 	}
+	input := services.PutRecoveryKeyPackageInput{
+		Algorithm:            payload.Algorithm,
+		KDF:                  payload.KDF,
+		MnemonicWordCount:    payload.MnemonicWordCount,
+		WrapNonceHex:         payload.WrapNonceHex,
+		WrappedMasterKeyHex:  payload.WrappedMasterKeyHex,
+		PhraseFingerprintHex: payload.PhraseFingerprintHex,
+	}
+	// Ahead of the step-up bucket: clients re-put on every upload and abort it
+	// on a refusal, so a spent bucket must not stall sync.
+	unchanged, isUnchanged, err := s.sync.UnchangedRecoveryKeyPackage(request.Context(), account.ID, input)
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, "internal_error")
+		return
+	}
+	if isUnchanged {
+		writeJSON(writer, http.StatusOK, recoveryKeyPackageResponseFromModel(unchanged))
+		return
+	}
 	if !s.allowStepUpAttempt(writer, account.ID) {
 		return
 	}
 	stepUp := stepUpFromRequest(request, payload.CurrentPassword)
 	stepUp.TOTPCode = payload.Code
-	recoveryKeyPackage, err := s.sync.PutRecoveryKeyPackage(
-		request.Context(),
-		account.ID,
-		stepUp,
-		services.PutRecoveryKeyPackageInput{
-			Algorithm:            payload.Algorithm,
-			KDF:                  payload.KDF,
-			MnemonicWordCount:    payload.MnemonicWordCount,
-			WrapNonceHex:         payload.WrapNonceHex,
-			WrappedMasterKeyHex:  payload.WrappedMasterKeyHex,
-			PhraseFingerprintHex: payload.PhraseFingerprintHex,
-		},
-	)
+	recoveryKeyPackage, err := s.sync.PutRecoveryKeyPackage(request.Context(), account.ID, stepUp, input)
 	s.settleStepUpAttempt(account.ID, err)
 	if err != nil {
 		switch {
