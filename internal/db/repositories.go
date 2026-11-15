@@ -343,20 +343,23 @@ func (s *Store) UpdateAccountRecoveryCodeHash(
 	return nil
 }
 
-// ChangeAccountPassword sets the new password hash while the stored hash still
-// equals verifiedHash, then deletes the account's TOTP challenges, every
-// session except keepTokenHash, and pending reset tokens — all in one
-// transaction, so a failure leaves the old password and its sessions intact
-// rather than a new password beside surviving sessions. The write also needs
-// the caller's session (keepTokenHash) to still exist: a session revoked
-// during the step-up — by a TOTP enrollment, say — must not set a password
-// and then delete the owner's sessions. ErrNotFound when the account or the
-// caller's session is gone; ErrConflict when the hash moved on.
+// ChangeAccountPassword sets the new password hash and recovery code hash
+// while the stored ones still equal verifiedHash and verifiedRecoveryHash,
+// then deletes the account's TOTP challenges, every session except
+// keepTokenHash, and pending reset tokens — all in one transaction, so a
+// failure leaves the old password, the old recovery code and their sessions
+// intact. The write also needs the caller's session (keepTokenHash) to still
+// exist: a session revoked during the step-up — by a TOTP enrollment, say —
+// must not set a password and then delete the owner's sessions. ErrNotFound
+// when the account or the caller's session is gone; ErrConflict when either
+// hash moved on (a reset, another change, a regeneration, a TOTP enable).
 func (s *Store) ChangeAccountPassword(
 	ctx context.Context,
 	accountID string,
 	verifiedHash string,
+	verifiedRecoveryHash string,
 	newHash string,
+	newRecoveryHash string,
 	keepTokenHash string,
 ) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -369,12 +372,14 @@ func (s *Store) ChangeAccountPassword(
 
 	result, err := tx.ExecContext(
 		ctx,
-		`UPDATE accounts SET password_hash = ?
-		 WHERE id = ? AND password_hash = ?
+		`UPDATE accounts SET password_hash = ?, recovery_code_hash = ?
+		 WHERE id = ? AND password_hash = ? AND recovery_code_hash = ?
 		   AND EXISTS (SELECT 1 FROM sessions WHERE account_id = accounts.id AND token_hash = ?)`,
 		newHash,
+		newRecoveryHash,
 		accountID,
 		verifiedHash,
+		verifiedRecoveryHash,
 		keepTokenHash,
 	)
 	if err != nil {

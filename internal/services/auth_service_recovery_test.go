@@ -234,12 +234,13 @@ func TestChangePasswordInvalidatesPendingResetToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
-	if err := service.ChangePassword(
+	if _, err := service.ChangePassword(
 		ctx,
 		loginResult.AccountID,
 		security.HashToken(loginResult.SessionToken),
 		"correct horse battery staple",
 		"replacement password phrase",
+		"",
 	); err != nil {
 		t.Fatalf("change password: %v", err)
 	}
@@ -291,12 +292,13 @@ func TestChangePasswordInvalidatesPendingTOTPChallenge(t *testing.T) {
 		t.Fatalf("IssueChallenge: %v", err)
 	}
 
-	if err := authService.ChangePassword(
+	if _, err := authService.ChangePassword(
 		ctx,
 		registered.AccountID,
 		security.HashToken(registered.SessionToken),
 		"correct horse battery staple",
 		"replacement password phrase",
+		security.GenerateTOTPCode(secret, enrollStep+1),
 	); err != nil {
 		t.Fatalf("change password: %v", err)
 	}

@@ -169,7 +169,7 @@ func TestChangePasswordStoreErrors(t *testing.T) {
 			t.Fatalf("close store: %v", err)
 		}
 
-		err := service.ChangePassword(context.Background(), "any-account", "any-hash", "any-password", "any-new-password")
+		_, err := service.ChangePassword(context.Background(), "any-account", "any-hash", "any-password", "any-new-password", "")
 		if err == nil || errors.Is(err, ErrUnauthorized) {
 			t.Fatalf("expected a store-failure error, not ErrUnauthorized, got %v", err)
 		}
@@ -199,7 +199,7 @@ func TestChangePasswordStoreErrors(t *testing.T) {
 
 			dropTable(t, dbPath, tc.table)
 
-			err = service.ChangePassword(ctx, result.AccountID, security.HashToken(result.SessionToken), password, "a brand new password")
+			_, err = service.ChangePassword(ctx, result.AccountID, security.HashToken(result.SessionToken), password, "a brand new password", "")
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("expected %q to surface, got %v", tc.wantErr, err)
 			}
@@ -240,7 +240,7 @@ func TestChangePasswordRefusesAfterTheCallersSessionWasRevoked(t *testing.T) {
 		return security.HashPassword(p)
 	}
 
-	err = service.ChangePassword(ctx, attacker.AccountID, security.HashToken(attacker.SessionToken), password, "a brand new password")
+	_, err = service.ChangePassword(ctx, attacker.AccountID, security.HashToken(attacker.SessionToken), password, "a brand new password", "")
 	if !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("expected ErrUnauthorized for a revoked caller session, got %v", err)
 	}
@@ -276,7 +276,7 @@ func TestChangePasswordRefusesAStaleVerifiedHash(t *testing.T) {
 		return security.HashPassword(p)
 	}
 
-	err = service.ChangePassword(ctx, first.AccountID, security.HashToken(first.SessionToken), password, "a brand new password")
+	_, err = service.ChangePassword(ctx, first.AccountID, security.HashToken(first.SessionToken), password, "a brand new password", "")
 	if !errors.Is(err, ErrInvalidCurrentPassword) {
 		t.Fatalf("expected ErrInvalidCurrentPassword for a stale verify, got %v", err)
 	}
