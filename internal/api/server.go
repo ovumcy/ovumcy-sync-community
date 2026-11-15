@@ -955,6 +955,8 @@ func (s *Server) handleAttachDevice(
 			writeError(writer, http.StatusConflict, "too_many_devices")
 		case errors.Is(err, services.ErrSessionDeviceBound):
 			writeError(writer, http.StatusConflict, "session_device_bound")
+		case errors.Is(err, services.ErrUnauthorized):
+			writeError(writer, http.StatusUnauthorized, "unauthorized")
 		default:
 			writeError(writer, http.StatusInternalServerError, "internal_error")
 		}
@@ -1008,7 +1010,7 @@ func (s *Server) handleRemoveDevice(
 		case errors.Is(err, services.ErrDeviceNotFound):
 			writeError(writer, http.StatusNotFound, "device_not_found")
 		case errors.Is(err, services.ErrUnauthorized):
-			writeError(writer, http.StatusUnauthorized, "unauthorized") // codecov:ignore -- needs the session revoked between withAuth and this bodiless request's write, with no read in between to hook; the store refusal is covered in TestLateBodyWritesFromARevokedSessionChangeNothing and the same mapping over HTTP in TestPutBlobWhoseSessionIsRevokedMidBodyWritesNothing.
+			writeError(writer, http.StatusUnauthorized, "unauthorized") // codecov:ignore -- needs the session revoked between withAuth and this bodiless request's write, with no read in between to hook; the service refusal is covered in TestLateBodyWritesFromARevokedSessionChangeNothing, and the HTTP 401 for a mid-body revocation on the body-carrying routes in late_body_session_test.go.
 		default:
 			writeError(writer, http.StatusInternalServerError, "internal_error")
 		}

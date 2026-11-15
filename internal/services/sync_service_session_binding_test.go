@@ -47,7 +47,11 @@ func TestAttachDeviceForSessionRefusesASecondDevice(t *testing.T) {
 	if _, err := sync.AttachDeviceForSession(ctx, registered.AccountID, tokenHash, "device-efgh5678", "Tablet"); !errors.Is(err, ErrSessionDeviceBound) {
 		t.Fatalf("expected ErrSessionDeviceBound, got %v", err)
 	}
-	if _, err := sync.AttachDeviceForSession(ctx, registered.AccountID, "unbound-hash", "device-efgh5678", "Tablet"); !errors.Is(err, ErrTooManyDevices) {
+	unbound, err := auth.Login(ctx, "owner@example.com", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	if _, err := sync.AttachDeviceForSession(ctx, registered.AccountID, security.HashToken(unbound.SessionToken), "device-efgh5678", "Tablet"); !errors.Is(err, ErrTooManyDevices) {
 		t.Fatalf("expected ErrTooManyDevices, got %v", err)
 	}
 }
