@@ -223,9 +223,8 @@ type lapsedAccountSweeper interface {
 // triggers are therefore idempotent and safe to run together — an operator
 // with an existing cron loses nothing.
 //
-// The first run happens one interval after boot, not at startup. A crash-loop
-// must not turn into a purge-loop, and there is nothing so urgent about a
-// 60-day grace period that it cannot wait one more tick.
+// The first run happens firstSweepDelay after boot, not at startup: a
+// crash-loop must not turn into a purge-loop.
 //
 // A non-positive interval disables the loop entirely, leaving the subcommand
 // as the only trigger. That is the rollback lever: it takes effect on restart,
@@ -246,14 +245,14 @@ func runLapsedAccountSweepLoop(
 		return
 	}
 
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	next := time.NewTimer(firstSweepDelay(interval))
+	defer next.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-next.C:
 			result, err := sweeper.Run(ctx, limit, false)
 			// A run can both delete and fail partway, so report the counts
 			// before the error rather than instead of it. Account ids only —
@@ -270,8 +269,19 @@ func runLapsedAccountSweepLoop(
 			if err != nil {
 				log.Printf("lapsed-account sweep: %v", err)
 			}
+			next.Reset(interval)
 		}
 	}
+}
+
+// maxFirstSweepDelay caps how long a sweep loop waits after boot. Waiting a
+// full interval meant a server restarted more often than its interval (a daily
+// deploy under the 24h default) never swept at all; ten minutes still keeps a
+// crash-looping process from sweeping on every start.
+const maxFirstSweepDelay = 10 * time.Minute
+
+func firstSweepDelay(interval time.Duration) time.Duration {
+	return min(interval, maxFirstSweepDelay)
 }
 
 // expiredRowsSweeper is the narrow surface runExpiredRowsSweepLoop needs,
@@ -292,7 +302,7 @@ type expiredRowsSweeper interface {
 // themselves, and since expiry is monotonic there is no race with valid use
 // by construction.
 //
-// The first run happens one interval after boot, not at startup — same
+// The first run happens firstSweepDelay after boot, not at startup — same
 // crash-loop reasoning as the lapsed-account sweep. A non-positive interval
 // disables the loop entirely; that is the rollback lever, effective on
 // restart with no new image.
@@ -307,14 +317,14 @@ func runExpiredRowsSweepLoop(
 		return
 	}
 
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	next := time.NewTimer(firstSweepDelay(interval))
+	defer next.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-next.C:
 			result, err := sweeper.Run(ctx, limit)
 			// A run can both delete and fail partway, so report the counts
 			// before the error rather than instead of it. Counts only —
@@ -328,6 +338,7 @@ func runExpiredRowsSweepLoop(
 			if err != nil {
 				log.Printf("expired-rows sweep: %v", err)
 			}
+			next.Reset(interval)
 		}
 	}
 }

@@ -275,7 +275,7 @@ From then on `POST /managed/session` answers `409 managed_account_lapsed`: a del
 
 The retained data is erased only after `LAPSED_ACCOUNT_GRACE_PERIOD` (default 60 days) has elapsed.
 
-`serve` does this itself, every `LAPSED_ACCOUNT_SWEEP_INTERVAL` (default `24h`), starting one interval after boot. Nothing to schedule: the retention window the paragraph above promises is enforced by the running server, not by an operator remembering to wire a timer. `LAPSED_ACCOUNT_SWEEP_LIMIT` caps how many candidates one run examines (unset uses the store's default page size), and `LAPSED_ACCOUNT_SWEEP_INTERVAL=0` turns the in-process sweep off entirely — which is also the rollback lever, effective on restart with no new image.
+`serve` does this itself, every `LAPSED_ACCOUNT_SWEEP_INTERVAL` (default `24h`), starting ten minutes after boot (or one interval, if shorter), so a server restarted more often than the interval still sweeps. Nothing to schedule: the retention window the paragraph above promises is enforced by the running server, not by an operator remembering to wire a timer. `LAPSED_ACCOUNT_SWEEP_LIMIT` caps how many candidates one run examines (unset uses the store's default page size), and `LAPSED_ACCOUNT_SWEEP_INTERVAL=0` turns the in-process sweep off entirely — which is also the rollback lever, effective on restart with no new image.
 
 The same work is available on demand as a subcommand, for a one-off run, a dry-run audit, or as the sole trigger on a deployment that keeps the interval at `0`:
 

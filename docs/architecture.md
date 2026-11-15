@@ -89,7 +89,7 @@ All loops run inside `serve` and stop with the server's shutdown signal (`runSer
 | Expired-rows sweep: deletes expired sessions, password-reset tokens and TOTP challenges | `runExpiredRowsSweepLoop`, `services.ExpiredRowsSweepService` | `EXPIRED_ROWS_SWEEP_INTERVAL` (default 24h), per-run cap `EXPIRED_ROWS_SWEEP_LIMIT` |
 | Rate-limiter sweep: drops fully elapsed entries | `maybeSweepLocked` in `internal/security/rate_limiter.go` | Not a goroutine: amortized inside `Allow`, once every 1024 calls |
 
-The first run of each loop happens one interval after boot, and a non-positive interval disables the loop.
+The first run of each loop happens ten minutes after boot (or one interval, if shorter), and a non-positive interval disables the loop.
 Expiry is enforced at read time regardless, so the sweeps only bound table growth.
 
 ## CLI subcommands
