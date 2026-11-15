@@ -56,3 +56,37 @@ func TestChangePasswordDiscardsAPendingEnrollment(t *testing.T) {
 		t.Fatal("expected TOTP to stay off")
 	}
 }
+
+// A start whose password check passed just before a change committed must not
+// write its secret after the change, or the discard above is undone.
+func TestStartEnrollmentRacingAPasswordChangeWritesNothing(t *testing.T) {
+	const (
+		password    = "correct horse battery staple"
+		newPassword = "new staple battery horse correct"
+	)
+	auth, totp, _ := fixedTOTPClock(t)
+	ctx := context.Background()
+
+	owner, err := auth.Register(ctx, "owner@example.com", password)
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	caller := security.HashToken(owner.SessionToken)
+	totp.newSecret = func() ([]byte, error) {
+		if _, err := auth.ChangePassword(ctx, owner.AccountID, caller, password, newPassword, ""); err != nil {
+			t.Fatalf("change password mid-start: %v", err)
+		}
+		return security.NewTOTPSecret()
+	}
+
+	if _, err := totp.StartEnrollment(ctx, owner.AccountID, StepUp{SessionTokenHash: caller, CurrentPassword: password}); !errors.Is(err, ErrInvalidCurrentPassword) {
+		t.Fatalf("expected ErrInvalidCurrentPassword, got %v", err)
+	}
+	account, err := auth.store.FindAccountByID(ctx, owner.AccountID)
+	if err != nil {
+		t.Fatalf("find account: %v", err)
+	}
+	if account.TOTPSecretEncrypted != "" {
+		t.Fatal("expected no pending secret after the change")
+	}
+}

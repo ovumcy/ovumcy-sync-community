@@ -124,14 +124,14 @@ func TestStorePendingTOTPSecretRefusesAnEnabledAccount(t *testing.T) {
 	target := seedFaultInjectionAccount(t, store, "account-target")
 	seedBindingSession(t, store, target.ID, "target-session")
 
-	if err := store.StorePendingTOTPSecret(ctx, target.ID, "target-session", "pending-secret"); err != nil {
+	if err := store.StorePendingTOTPSecret(ctx, target.ID, target.PasswordHash, "target-session", "pending-secret"); err != nil {
 		t.Fatalf("store pending secret: %v", err)
 	}
 	if err := store.EnableTOTPAndRotateRecoveryCode(ctx, target.ID, "pending-secret", "rotated-recovery-hash", "target-session"); err != nil {
 		t.Fatalf("enable totp: %v", err)
 	}
 
-	if err := store.StorePendingTOTPSecret(ctx, target.ID, "target-session", "late-secret"); !errors.Is(err, ErrConflict) {
+	if err := store.StorePendingTOTPSecret(ctx, target.ID, target.PasswordHash, "target-session", "late-secret"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("expected ErrConflict on an enabled account, got %v", err)
 	}
 	after, err := store.FindAccountByID(ctx, target.ID)
@@ -142,7 +142,7 @@ func TestStorePendingTOTPSecretRefusesAnEnabledAccount(t *testing.T) {
 		t.Fatalf("expected the enabled secret untouched, got enabled=%v secret=%q", after.TOTPEnabled, after.TOTPSecretEncrypted)
 	}
 
-	if err := store.StorePendingTOTPSecret(ctx, "missing-account", "any-session", "secret"); !errors.Is(err, ErrNotFound) {
+	if err := store.StorePendingTOTPSecret(ctx, "missing-account", "hash", "any-session", "secret"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for a missing account, got %v", err)
 	}
 }
@@ -154,7 +154,7 @@ func TestDiscardPendingTOTPSecretOnlyClearsTheNamedPendingSecret(t *testing.T) {
 	target := seedFaultInjectionAccount(t, store, "account-target")
 	seedBindingSession(t, store, target.ID, "target-session")
 
-	if err := store.StorePendingTOTPSecret(ctx, target.ID, "target-session", "pending-secret"); err != nil {
+	if err := store.StorePendingTOTPSecret(ctx, target.ID, target.PasswordHash, "target-session", "pending-secret"); err != nil {
 		t.Fatalf("store pending secret: %v", err)
 	}
 	if err := store.DiscardPendingTOTPSecret(ctx, target.ID, "other-secret"); err != nil {
@@ -170,7 +170,7 @@ func TestDiscardPendingTOTPSecretOnlyClearsTheNamedPendingSecret(t *testing.T) {
 		t.Fatalf("expected the pending secret cleared, got %q", after.TOTPSecretEncrypted)
 	}
 
-	if err := store.StorePendingTOTPSecret(ctx, target.ID, "target-session", "enabled-secret"); err != nil {
+	if err := store.StorePendingTOTPSecret(ctx, target.ID, target.PasswordHash, "target-session", "enabled-secret"); err != nil {
 		t.Fatalf("store pending secret: %v", err)
 	}
 	if err := store.EnableTOTPAndRotateRecoveryCode(ctx, target.ID, "enabled-secret", "rotated-recovery-hash", "target-session"); err != nil {
@@ -192,7 +192,7 @@ func TestPendingTOTPSecretWritesFailWhenAccountsTableIsDropped(t *testing.T) {
 
 	dropTable(t, dbPath, "accounts")
 
-	if err := store.StorePendingTOTPSecret(ctx, target.ID, "target-session", "secret"); err == nil || errors.Is(err, ErrNotFound) {
+	if err := store.StorePendingTOTPSecret(ctx, target.ID, target.PasswordHash, "target-session", "secret"); err == nil || errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected a store failure storing a pending secret, got %v", err)
 	}
 	if err := store.DiscardPendingTOTPSecret(ctx, target.ID, "secret"); err == nil {

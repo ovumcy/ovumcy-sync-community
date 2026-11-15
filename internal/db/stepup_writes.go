@@ -13,6 +13,11 @@ import (
 // no longer exists, while the account itself does.
 var ErrSessionRevoked = errors.New("session_revoked")
 
+// ErrPasswordChanged is returned by a step-up write whose ErrConflict is
+// already taken by another refusal, when the password hash moved on since it
+// was verified.
+var ErrPasswordChanged = errors.New("password_changed")
+
 // requireStepUpState holds a step-up write to the state its re-authentication
 // saw: the caller's session still exists and the password hash is still the one
 // the password was verified against. A password change or reset, or a session

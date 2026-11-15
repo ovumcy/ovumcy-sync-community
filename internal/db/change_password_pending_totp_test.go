@@ -2,8 +2,32 @@ package db
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
+
+// An enrollment start verified against a password that has since changed
+// leaves no pending secret behind the change.
+func TestStorePendingTOTPSecretRefusesAStaleVerifiedHash(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	seedFaultInjectionAccount(t, store, "stale-account")
+	seedChangePasswordSession(t, store, "stale-account", "stale-caller")
+	if err := store.ChangeAccountPassword(ctx, "stale-account", "hash", "", "new-hash", "new-recovery", "stale-caller"); err != nil {
+		t.Fatalf("change password: %v", err)
+	}
+
+	if err := store.StorePendingTOTPSecret(ctx, "stale-account", "hash", "stale-caller", "late-secret"); !errors.Is(err, ErrPasswordChanged) {
+		t.Fatalf("expected ErrPasswordChanged, got %v", err)
+	}
+	account, err := store.FindAccountByID(ctx, "stale-account")
+	if err != nil {
+		t.Fatalf("find account: %v", err)
+	}
+	if account.TOTPSecretEncrypted != "" {
+		t.Fatal("expected no pending secret written")
+	}
+}
 
 // A password change clears a pending enrollment secret but leaves an enabled
 // factor exactly as it was.
