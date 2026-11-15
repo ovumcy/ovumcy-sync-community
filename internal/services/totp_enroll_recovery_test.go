@@ -32,11 +32,11 @@ func TestCompleteEnrollmentRotatesRecoveryCodeIssuedBeforeEnrollment(t *testing.
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	preEnrollRecovery, err := authService.RegenerateRecoveryCode(ctx, registered.AccountID, StepUp{SessionTokenHash: security.HashToken(registered.SessionToken), CurrentPassword: password}, "")
-	if err != nil {
+	if _, err := authService.RegenerateRecoveryCode(ctx, registered.AccountID, StepUp{SessionTokenHash: security.HashToken(registered.SessionToken), CurrentPassword: password}, ""); err != nil {
 		t.Fatalf("regenerate: %v", err)
 	}
-	if err := authService.ChangePassword(ctx, registered.AccountID, security.HashToken(registered.SessionToken), password, newPassword); err != nil {
+	preEnrollRecovery, err := authService.ChangePassword(ctx, registered.AccountID, security.HashToken(registered.SessionToken), password, newPassword, "")
+	if err != nil {
 		t.Fatalf("change password: %v", err)
 	}
 	pendingReset, err := authService.ForgotPassword(ctx, login, preEnrollRecovery)

@@ -423,31 +423,28 @@ func (s *Server) handleChangePassword(
 	if !s.allowStepUpAttempt(writer, account.ID) {
 		return
 	}
-	err := s.auth.ChangePassword(
+	recoveryCode, err := s.auth.ChangePassword(
 		request.Context(),
 		account.ID,
 		currentSessionTokenHash,
 		payload.CurrentPassword,
 		payload.NewPassword,
+		payload.Code,
 	)
 	s.settleStepUpAttempt(account.ID, err)
 	if err != nil {
 		switch {
-		case errors.Is(err, services.ErrInvalidCurrentPassword):
-			writeError(writer, http.StatusUnauthorized, "invalid_current_password")
 		case errors.Is(err, services.ErrNewPasswordMustDiffer):
 			writeError(writer, http.StatusBadRequest, "new_password_must_differ")
 		case errors.Is(err, services.ErrWeakNewPassword):
 			writeError(writer, http.StatusBadRequest, "weak_new_password")
-		case errors.Is(err, services.ErrUnauthorized):
-			writeError(writer, http.StatusUnauthorized, "unauthorized")
 		default:
-			writeError(writer, http.StatusInternalServerError, "internal_error")
+			mapTOTPError(writer, err)
 		}
 		return
 	}
 
-	writeJSON(writer, http.StatusOK, map[string]string{"status": "password_changed"})
+	writeJSON(writer, http.StatusOK, map[string]string{"status": "password_changed", "recovery_code": recoveryCode})
 }
 
 func (s *Server) handleForgotPassword(writer http.ResponseWriter, request *http.Request) {
@@ -1530,6 +1527,7 @@ type credentialsRequest struct {
 type changePasswordRequest struct {
 	CurrentPassword string `json:"current_password"`
 	NewPassword     string `json:"new_password"`
+	Code            string `json:"code"`
 }
 
 type forgotPasswordRequest struct {

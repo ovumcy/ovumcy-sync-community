@@ -33,7 +33,7 @@ func TestChangePasswordRejectsNewPasswordOverByteLimit(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	err = service.ChangePassword(ctx, registered.AccountID, security.HashToken(registered.SessionToken), lengthTestPassword, overlongPassword)
+	_, err = service.ChangePassword(ctx, registered.AccountID, security.HashToken(registered.SessionToken), lengthTestPassword, overlongPassword, "")
 	if err != ErrWeakNewPassword {
 		t.Fatalf("expected ErrWeakNewPassword, got %v", err)
 	}

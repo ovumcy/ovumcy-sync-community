@@ -296,8 +296,14 @@ func (s *AuthService) Authenticate(ctx context.Context, sessionToken string) (mo
 }
 
 // ChangePassword verifies the caller's current password, rehashes the new
-// password, and revokes every session belonging to the account except the one
-// used for this request. The caller-side session remains active.
+// password, rotates the recovery code, and revokes every session belonging to
+// the account except the one used for this request. It returns the new
+// recovery code; the previous one stops working.
+//
+// A TOTP-enrolled account must also present a current code: the new recovery
+// code can reset the password and clear TOTP, so without it the first factor
+// alone could remove the second (as on RegenerateRecoveryCode). No configured
+// TOTP verifier fails closed.
 //
 // currentSessionTokenHash is the SHA256(token) of the caller's bearer token;
 // it is preserved while every other session for the account is deleted. This
@@ -309,52 +315,72 @@ func (s *AuthService) ChangePassword(
 	currentSessionTokenHash string,
 	currentPassword string,
 	newPassword string,
-) error {
+	totpCode string,
+) (string, error) {
 	account, err := s.store.FindAccountByID(ctx, accountID)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			return ErrUnauthorized
+			return "", ErrUnauthorized
 		}
-		return err
+		return "", err
 	}
 
 	if err := security.ComparePasswordHash(account.PasswordHash, currentPassword); err != nil {
-		return ErrInvalidCurrentPassword
+		return "", ErrInvalidCurrentPassword
 	}
 
 	if currentPassword == newPassword {
-		return ErrNewPasswordMustDiffer
+		return "", ErrNewPasswordMustDiffer
 	}
 
 	newHash, err := s.hashPassword(newPassword)
 	if err != nil {
 		if errors.Is(err, security.ErrWeakPassword) {
-			return ErrWeakNewPassword
+			return "", ErrWeakNewPassword
 		}
-		return err // codecov:ignore -- HashPassword fails only with ErrWeakPassword on input it validated (see its own codecov:ignore on the bcrypt error).
+		return "", err // codecov:ignore -- HashPassword fails only with ErrWeakPassword on input it validated (see its own codecov:ignore on the bcrypt error).
 	}
 
-	// One transaction: the hash moves only while it is still the one verified
-	// above and the caller's session still exists, and the challenges, other
-	// sessions and reset tokens go with it or not at all. A reset or another
-	// change landing during bcrypt wins (ErrInvalidCurrentPassword); a revoked
-	// session or deleted account answers ErrUnauthorized.
+	// After the new password is validated, so a rejected password does not
+	// spend the code's step.
+	if account.TOTPEnabled {
+		if s.totpChallenges == nil {
+			return "", ErrTOTPNotConfigured
+		}
+		if err := s.totpChallenges.VerifyAccountCode(ctx, account, totpCode); err != nil {
+			return "", err
+		}
+	}
+
+	plainRecovery, recoveryHash, err := security.NewRecoveryCode()
+	if err != nil {
+		return "", err // codecov:ignore -- crypto-primitive error that cannot occur in practice (see internal/security/password.go's own codecov:ignore annotation on NewRecoveryCode's internal rand.Read).
+	}
+
+	// One transaction: the password and recovery hashes move only while both
+	// are still the ones read above and the caller's session still exists, and
+	// the challenges, other sessions and reset tokens go with them or not at
+	// all. A reset, another change, a regeneration or a TOTP enable landing
+	// during bcrypt wins (ErrInvalidCurrentPassword: the verification is
+	// stale); a revoked session or deleted account answers ErrUnauthorized.
 	if err := s.store.ChangeAccountPassword(
 		ctx,
 		accountID,
 		account.PasswordHash,
+		account.RecoveryCodeHash,
 		newHash,
+		recoveryHash,
 		currentSessionTokenHash,
 	); err != nil {
 		switch {
 		case errors.Is(err, db.ErrConflict):
-			return ErrInvalidCurrentPassword
+			return "", ErrInvalidCurrentPassword
 		case errors.Is(err, db.ErrNotFound):
-			return ErrUnauthorized
+			return "", ErrUnauthorized
 		}
-		return err
+		return "", err
 	}
-	return nil
+	return plainRecovery, nil
 }
 
 // ForgotPassword verifies an account-level recovery code and issues a

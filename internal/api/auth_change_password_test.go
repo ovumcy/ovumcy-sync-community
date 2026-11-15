@@ -60,7 +60,7 @@ func TestChangePasswordEndpointSucceedsAndRevokesOtherSessions(t *testing.T) {
 
 	var changePayload map[string]string
 	decodeResponse(t, changeResponse.Body.Bytes(), &changePayload)
-	if changePayload["status"] != "password_changed" {
+	if changePayload["status"] != "password_changed" || changePayload["recovery_code"] == "" {
 		t.Fatalf("unexpected change-password payload: %#v", changePayload)
 	}
 

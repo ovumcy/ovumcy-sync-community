@@ -219,9 +219,14 @@ paths:
       operationId: changePassword
       summary: Change the account password
       description: |
-        Requires the current password. On success, every other session for the
-        account is revoked (the caller's own session token stays valid) and
-        any pending password-reset tokens are deleted.
+        Requires the current password and, on a TOTP-enrolled account, a
+        current TOTP `code` (the new recovery code can reset the password and
+        clear TOTP, so the password alone must not obtain one). The code
+        attempt counts toward the per-account TOTP window. On success the
+        recovery code is rotated — the response carries the new one and the
+        previous one stops working — every other session for the account is
+        revoked (the caller's own session token stays valid), and pending
+        TOTP login challenges and password-reset tokens are deleted.
       security:
         - sessionBearerAuth: []
       requestBody:
@@ -232,14 +237,11 @@ paths:
               $ref: "#/components/schemas/ChangePasswordRequest"
       responses:
         "200":
-          description: Password changed.
+          description: Password changed; the recovery code was rotated.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/StatusResponse"
-              examples:
-                changed:
-                  value: { status: password_changed }
+                $ref: "#/components/schemas/PasswordChangedResponse"
         "400":
           description: New password fails the strength check, or equals the current password.
           content:
@@ -252,7 +254,7 @@ paths:
                 weak:
                   value: { error: weak_new_password }
         "401":
-          description: Missing/invalid session, or wrong current password.
+          description: Missing/invalid session, wrong current password, or a missing/wrong/replayed TOTP code on an enrolled account.
           content:
             application/json:
               schema:
@@ -260,12 +262,23 @@ paths:
               examples:
                 invalidCurrentPassword:
                   value: { error: invalid_current_password }
+                totpInvalidCode:
+                  value: { error: totp_invalid_code }
+                totpReplayed:
+                  value: { error: totp_replayed }
                 unauthorized:
                   value: { error: unauthorized }
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          description: The account has TOTP enabled but the server has no `FIELD_ENCRYPTION_KEY` configured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example: { error: totp_not_configured }
 
   /auth/forgot-password:
     post:
@@ -1525,7 +1538,22 @@ components:
           type: string
           format: password
           description: Must differ from current_password and satisfy the same length policy as registration.
+        code:
+          type: string
+          description: Current 6-digit TOTP code. Required when the account has TOTP enabled; ignored otherwise.
       required: [current_password, new_password]
+      additionalProperties: false
+
+    PasswordChangedResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [password_changed]
+        recovery_code:
+          type: string
+          description: New plaintext recovery code replacing the previous one. Shown once; store it out of band.
+      required: [status, recovery_code]
       additionalProperties: false
 
     ForgotPasswordRequest:
