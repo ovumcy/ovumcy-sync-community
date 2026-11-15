@@ -317,10 +317,11 @@ func (s *SyncService) GetBlob(ctx context.Context, accountID string) (models.Enc
 
 // PutRecoveryKeyPackage overwrites the account's wrapped recovery key after
 // the step-up re-authentication; the store re-checks the verified state in
-// the write's own transaction. The password is checked before the package is
-// validated, so a wrong password answers as such whatever the body holds. A
-// TOTP-enrolled account must also present a current code: an overwrite
-// replaces the owner's phrase-recovery path.
+// the write's own transaction. For a package that differs from the stored
+// one, the password is checked before the package is validated, so a wrong
+// password answers as such whatever such a body holds. A TOTP-enrolled
+// account must also present a current code: an overwrite replaces the
+// owner's phrase-recovery path.
 //
 // A package equal to the stored one after normalization is answered with the
 // stored row and needs no step-up: it writes nothing and discloses nothing
@@ -331,21 +332,24 @@ func (s *SyncService) PutRecoveryKeyPackage(
 	stepUp StepUp,
 	input PutRecoveryKeyPackageInput,
 ) (models.RecoveryKeyPackage, error) {
-	algorithm := strings.TrimSpace(strings.ToLower(input.Algorithm))
-	kdf := strings.TrimSpace(strings.ToLower(input.KDF))
-	wrapNonceHex := strings.TrimSpace(strings.ToLower(input.WrapNonceHex))
-	wrappedMasterKeyHex := strings.TrimSpace(strings.ToLower(input.WrappedMasterKeyHex))
-	phraseFingerprintHex := strings.TrimSpace(strings.ToLower(input.PhraseFingerprintHex))
+	recoveryKeyPackage := models.RecoveryKeyPackage{
+		AccountID:            accountID,
+		Algorithm:            strings.TrimSpace(strings.ToLower(input.Algorithm)),
+		KDF:                  strings.TrimSpace(strings.ToLower(input.KDF)),
+		MnemonicWordCount:    input.MnemonicWordCount,
+		WrapNonceHex:         strings.TrimSpace(strings.ToLower(input.WrapNonceHex)),
+		WrappedMasterKeyHex:  strings.TrimSpace(strings.ToLower(input.WrappedMasterKeyHex)),
+		PhraseFingerprintHex: strings.TrimSpace(strings.ToLower(input.PhraseFingerprintHex)),
+	}
 
 	existing, err := s.store.GetRecoveryKeyPackage(ctx, accountID)
 	switch {
 	case err == nil:
-		if existing.Algorithm == algorithm &&
-			existing.KDF == kdf &&
-			existing.MnemonicWordCount == input.MnemonicWordCount &&
-			existing.WrapNonceHex == wrapNonceHex &&
-			existing.WrappedMasterKeyHex == wrappedMasterKeyHex &&
-			existing.PhraseFingerprintHex == phraseFingerprintHex {
+		// Compared whole, so a field added to the package can never be
+		// skipped by the no-op check.
+		content := existing
+		content.UpdatedAt = time.Time{}
+		if content == recoveryKeyPackage {
 			return existing, nil
 		}
 	case !errors.Is(err, db.ErrNotFound):
@@ -357,32 +361,26 @@ func (s *SyncService) PutRecoveryKeyPackage(
 		return models.RecoveryKeyPackage{}, err
 	}
 
-	if algorithm != "xchacha20poly1305" || kdf != "bip39_seed_hkdf_sha256" {
+	if recoveryKeyPackage.Algorithm != "xchacha20poly1305" || recoveryKeyPackage.KDF != "bip39_seed_hkdf_sha256" {
 		return models.RecoveryKeyPackage{}, ErrInvalidRecoveryPackage
 	}
-	if input.MnemonicWordCount != 12 {
+	if recoveryKeyPackage.MnemonicWordCount != 12 {
 		return models.RecoveryKeyPackage{}, ErrInvalidRecoveryPackage
 	}
+	wrapNonceHex := recoveryKeyPackage.WrapNonceHex
 	if len(wrapNonceHex) != 48 || !lowercaseHexPattern.MatchString(wrapNonceHex) {
 		return models.RecoveryKeyPackage{}, ErrInvalidRecoveryPackage
 	}
+	wrappedMasterKeyHex := recoveryKeyPackage.WrappedMasterKeyHex
 	if len(wrappedMasterKeyHex) < 64 || len(wrappedMasterKeyHex)%2 != 0 || !lowercaseHexPattern.MatchString(wrappedMasterKeyHex) {
 		return models.RecoveryKeyPackage{}, ErrInvalidRecoveryPackage
 	}
+	phraseFingerprintHex := recoveryKeyPackage.PhraseFingerprintHex
 	if len(phraseFingerprintHex) != 16 || !lowercaseHexPattern.MatchString(phraseFingerprintHex) {
 		return models.RecoveryKeyPackage{}, ErrInvalidRecoveryPackage
 	}
 
-	recoveryKeyPackage := models.RecoveryKeyPackage{
-		AccountID:            accountID,
-		Algorithm:            algorithm,
-		KDF:                  kdf,
-		MnemonicWordCount:    input.MnemonicWordCount,
-		WrapNonceHex:         wrapNonceHex,
-		WrappedMasterKeyHex:  wrappedMasterKeyHex,
-		PhraseFingerprintHex: phraseFingerprintHex,
-		UpdatedAt:            s.now().UTC(),
-	}
+	recoveryKeyPackage.UpdatedAt = s.now().UTC()
 
 	// After the package is validated, so a rejected body does not spend the
 	// code's step.
