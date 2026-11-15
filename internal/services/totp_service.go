@@ -12,14 +12,18 @@ import (
 )
 
 var (
-	ErrTOTPNotConfigured    = errors.New("totp_not_configured")
-	ErrTOTPAlreadyEnabled   = errors.New("totp_already_enabled")
-	ErrTOTPSecretEncrypt    = errors.New("totp_secret_encrypt")
-	ErrTOTPSecretDecrypt    = errors.New("totp_secret_decrypt")
-	ErrTOTPInvalidCode      = errors.New("totp_invalid_code")
-	ErrTOTPReplayed         = errors.New("totp_replayed")
-	ErrTOTPChallengeInvalid = errors.New("totp_challenge_invalid")
-	ErrTOTPLocked           = errors.New("totp_locked")
+	ErrTOTPNotConfigured = errors.New("totp_not_configured")
+	// ErrTOTPNotEnabled and ErrTOTPEnrollmentNotStarted are account states,
+	// distinct from ErrTOTPNotConfigured (no FIELD_ENCRYPTION_KEY).
+	ErrTOTPNotEnabled           = errors.New("totp_not_enabled")
+	ErrTOTPEnrollmentNotStarted = errors.New("totp_enrollment_not_started")
+	ErrTOTPAlreadyEnabled       = errors.New("totp_already_enabled")
+	ErrTOTPSecretEncrypt        = errors.New("totp_secret_encrypt")
+	ErrTOTPSecretDecrypt        = errors.New("totp_secret_decrypt")
+	ErrTOTPInvalidCode          = errors.New("totp_invalid_code")
+	ErrTOTPReplayed             = errors.New("totp_replayed")
+	ErrTOTPChallengeInvalid     = errors.New("totp_challenge_invalid")
+	ErrTOTPLocked               = errors.New("totp_locked")
 )
 
 // TOTPLockedError reports a spent failed-TOTP window and when it ends.
@@ -256,7 +260,7 @@ func (s *TOTPService) CompleteEnrollment(
 		return "", ErrTOTPAlreadyEnabled
 	}
 	if account.TOTPSecretEncrypted == "" {
-		return "", ErrTOTPNotConfigured
+		return "", ErrTOTPEnrollmentNotStarted
 	}
 
 	rawSecret, err := security.DecryptField(
@@ -372,7 +376,7 @@ func (s *TOTPService) Disable(
 		return err
 	}
 	if !account.TOTPEnabled {
-		return ErrTOTPNotConfigured
+		return ErrTOTPNotEnabled
 	}
 
 	if err := security.ComparePasswordHash(account.PasswordHash, currentPassword); err != nil {
@@ -380,6 +384,11 @@ func (s *TOTPService) Disable(
 	}
 
 	if err := s.verifyAccountCode(ctx, account, code); err != nil {
+		// The claim is bound to the verified secret, so a concurrent disable
+		// that committed first surfaces here as a replay.
+		if errors.Is(err, ErrTOTPReplayed) && s.totpNoLongerEnabled(ctx, accountID) {
+			return ErrTOTPNotEnabled
+		}
 		return err
 	}
 
@@ -434,7 +443,7 @@ func (s *TOTPService) disableConflict(
 	}
 	switch {
 	case !current.TOTPEnabled:
-		return models.Account{}, ErrTOTPNotConfigured // codecov:ignore -- a disable that commits before the step claim makes the claim lose (it is bound to the verified secret: ErrTOTPReplayed, covered in TestDisableRacingAStateChange); only one landing between the claim and DisableTOTP within this synchronous call gets here.
+		return models.Account{}, ErrTOTPNotEnabled // codecov:ignore -- a disable that commits before the step claim makes the claim lose (it is bound to the verified secret; Disable re-reads and returns ErrTOTPNotEnabled, covered in TestDisableRacingAStateChange); only one landing between the claim and DisableTOTP within this synchronous call gets here.
 	case current.TOTPSecretEncrypted != verified.TOTPSecretEncrypted:
 		return models.Account{}, ErrTOTPInvalidCode // codecov:ignore -- as above: a re-enroll before the claim loses it (ErrTOTPReplayed); only one between the claim and DisableTOTP within this synchronous call gets here.
 	case current.PasswordHash == verifiedHash:
@@ -444,6 +453,11 @@ func (s *TOTPService) disableConflict(
 		return models.Account{}, ErrInvalidCurrentPassword
 	}
 	return current, nil
+}
+
+func (s *TOTPService) totpNoLongerEnabled(ctx context.Context, accountID string) bool {
+	current, err := s.store.FindAccountByID(ctx, accountID)
+	return err == nil && !current.TOTPEnabled
 }
 
 // VerifyAccountCode is the step-up check for an enrolled account on a route

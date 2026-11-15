@@ -46,7 +46,7 @@ func TestDisableRacingAStateChange(t *testing.T) {
 					t.Fatalf("concurrent disable: %v", err)
 				}
 			},
-			want: ErrTOTPReplayed,
+			want: ErrTOTPNotEnabled,
 		},
 		{
 			name: "re-enrolled with a new secret",
