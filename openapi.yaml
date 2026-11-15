@@ -1337,7 +1337,8 @@ paths:
         A package equal to the stored one (after the same trim + lowercase
         normalization, same `mnemonic_word_count`) is a no-op: it needs no
         `current_password` or `code`, writes nothing (`updated_at` is
-        unchanged) and returns the stored package with 200.
+        unchanged), is not refused by a spent wrong-password bucket, and
+        returns the stored package with 200.
       security:
         - sessionBearerAuth: []
       requestBody:
