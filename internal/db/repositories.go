@@ -1045,12 +1045,14 @@ func (s *Store) UpdateTOTPSecretAndEnabled(
 // and revokes every session in one transaction. The clear applies only while
 // the password hash and the enabled secret are still the ones the caller
 // verified: a password change/reset or a disable-and-re-enroll that commits
-// first makes it change nothing (ErrConflict). ErrNotFound when the account
-// is gone. A failed cleanup rolls the clear back, so TOTP stays on and a retry
-// redoes all of it.
+// first makes it change nothing (ErrConflict), and so does a revocation of the
+// caller's session (requireLiveSession: ErrSessionRevoked). ErrNotFound when
+// the account is gone. A failed cleanup rolls the clear back, so TOTP stays on
+// and a retry redoes all of it.
 func (s *Store) DisableTOTP(
 	ctx context.Context,
 	accountID string,
+	sessionTokenHash string,
 	verifiedPasswordHash string,
 	verifiedSecretEncrypted string,
 ) error {
@@ -1062,6 +1064,10 @@ func (s *Store) DisableTOTP(
 		_ = tx.Rollback()
 	}()
 
+	if err := requireLiveSession(ctx, tx, accountID, sessionTokenHash); err != nil {
+		return err
+	}
+
 	result, err := tx.ExecContext(
 		ctx,
 		`UPDATE accounts SET totp_secret_encrypted = '', totp_enabled = 0, totp_last_used_step = 0
@@ -1071,7 +1077,7 @@ func (s *Store) DisableTOTP(
 		verifiedSecretEncrypted,
 	)
 	if err != nil {
-		return fmt.Errorf("disable totp: %w", err)
+		return fmt.Errorf("disable totp: %w", err) // codecov:ignore -- the caller-session read on "accounts" inside this transaction already succeeded, so a failure isolated to this UPDATE needs a fake driver (same same-table-multi-step limitation as the RowsAffected/COMMIT deviations in fault_injection_test.go).
 	}
 	if err := requireOneRow(result, "disable totp"); err != nil {
 		var one int

@@ -116,7 +116,7 @@ func TestRegenerateRecoveryCodeOnTOTPAccountAcceptsCurrentCodeOnce(t *testing.T)
 	}
 
 	// The step is claimed: the same code cannot be replayed on another path.
-	if err := fixture.totp.Disable(ctx, fixture.accountID, regenTOTPPassword, code); !errors.Is(err, ErrTOTPReplayed) {
+	if err := fixture.totp.Disable(ctx, fixture.accountID, StepUp{CurrentPassword: regenTOTPPassword, TOTPCode: code}); !errors.Is(err, ErrTOTPReplayed) {
 		t.Fatalf("expected ErrTOTPReplayed on reuse, got %v", err)
 	}
 }

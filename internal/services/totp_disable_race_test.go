@@ -104,7 +104,7 @@ func TestDisableRacingAStateChange(t *testing.T) {
 			}
 			code := security.GenerateTOTPCode(secret, disableNow.Unix()/security.TOTPStepSeconds)
 
-			if err := totp.Disable(ctx, accountID, password, code); !errors.Is(err, tc.want) {
+			if err := totp.Disable(ctx, accountID, StepUp{SessionTokenHash: security.HashToken(token), CurrentPassword: password, TOTPCode: code}); !errors.Is(err, tc.want) {
 				t.Fatalf("expected %v, got %v", tc.want, err)
 			}
 			account, err := auth.store.FindAccountByID(ctx, accountID)
@@ -130,5 +130,40 @@ func TestDisableRacingAStateChange(t *testing.T) {
 				t.Fatalf("expected session and challenge kept, got %v / %v", sessionErr, challengeErr)
 			}
 		})
+	}
+}
+
+// TestDisableRefusesACallerSessionRevokedMidRequest revokes the caller's
+// session (a device removal, a logout) between Disable's checks and its write:
+// the disable must change nothing and answer as for any revoked session.
+func TestDisableRefusesACallerSessionRevokedMidRequest(t *testing.T) {
+	const password = "correct horse battery staple"
+	ctx := context.Background()
+	auth, totp, now := fixedTOTPClock(t)
+	accountID, token, secret, _ := enrollTOTP(t, auth, totp, now)
+
+	disableNow := now.Add(security.TOTPStepSeconds * time.Second)
+	revoked := false
+	totp.now = func() time.Time {
+		if !revoked {
+			revoked = true
+			if err := auth.store.DeleteSessionByTokenHash(ctx, security.HashToken(token)); err != nil {
+				t.Fatalf("revoke session: %v", err)
+			}
+		}
+		return disableNow
+	}
+	code := security.GenerateTOTPCode(secret, disableNow.Unix()/security.TOTPStepSeconds)
+
+	err := totp.Disable(ctx, accountID, StepUp{SessionTokenHash: security.HashToken(token), CurrentPassword: password, TOTPCode: code})
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("expected ErrUnauthorized, got %v", err)
+	}
+	account, err := auth.store.FindAccountByID(ctx, accountID)
+	if err != nil {
+		t.Fatalf("find account: %v", err)
+	}
+	if !account.TOTPEnabled || account.TOTPSecretEncrypted == "" {
+		t.Fatal("expected TOTP kept for a revoked caller")
 	}
 }

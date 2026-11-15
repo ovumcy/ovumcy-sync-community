@@ -203,7 +203,7 @@ func TestConcurrentDisableGuessesSpendExactlyTheAccountCap(t *testing.T) {
 	var wg sync.WaitGroup
 	for range guesses {
 		wg.Go(func() {
-			results <- totp.Disable(ctx, accountID, totpWindowTestPassword, wrong)
+			results <- totp.Disable(ctx, accountID, StepUp{CurrentPassword: totpWindowTestPassword, TOTPCode: wrong})
 		})
 	}
 	wg.Wait()
@@ -237,13 +237,13 @@ func TestDisableSharesTheAccountTOTPWindow(t *testing.T) {
 	setTOTPClock(auth, totp, later)
 	wrong := wrongTOTPCode(t, secret, later)
 	for range maxTOTPAccountFailedAttempts {
-		if err := totp.Disable(ctx, accountID, totpWindowTestPassword, wrong); !errors.Is(err, ErrTOTPInvalidCode) {
+		if err := totp.Disable(ctx, accountID, StepUp{CurrentPassword: totpWindowTestPassword, TOTPCode: wrong}); !errors.Is(err, ErrTOTPInvalidCode) {
 			t.Fatalf("expected ErrTOTPInvalidCode, got %v", err)
 		}
 	}
 
 	correct := security.GenerateTOTPCode(secret, later.Unix()/security.TOTPStepSeconds)
-	if err := totp.Disable(ctx, accountID, totpWindowTestPassword, correct); !errors.Is(err, ErrTOTPLocked) {
+	if err := totp.Disable(ctx, accountID, StepUp{CurrentPassword: totpWindowTestPassword, TOTPCode: correct}); !errors.Is(err, ErrTOTPLocked) {
 		t.Fatalf("expected disable to be locked, got %v", err)
 	}
 	if _, err := totp.VerifyChallenge(ctx, loginChallengeID(t, auth), correct); !errors.Is(err, ErrTOTPLocked) {
@@ -251,7 +251,7 @@ func TestDisableSharesTheAccountTOTPWindow(t *testing.T) {
 	}
 
 	// A wrong password never reaches the code check, so it spends nothing.
-	if err := totp.Disable(ctx, accountID, "wrong password entirely", wrong); !errors.Is(err, ErrInvalidCurrentPassword) {
+	if err := totp.Disable(ctx, accountID, StepUp{CurrentPassword: "wrong password entirely", TOTPCode: wrong}); !errors.Is(err, ErrInvalidCurrentPassword) {
 		t.Fatalf("expected ErrInvalidCurrentPassword, got %v", err)
 	}
 }
@@ -276,7 +276,7 @@ func TestRegenerateRecoveryCodeSharesTheAccountTOTPWindow(t *testing.T) {
 	if _, err := auth.RegenerateRecoveryCode(ctx, accountID, StepUp{SessionTokenHash: security.HashToken(sessionToken), CurrentPassword: totpWindowTestPassword}, correct); !errors.Is(err, ErrTOTPLocked) {
 		t.Fatalf("expected regeneration to be locked, got %v", err)
 	}
-	if err := totp.Disable(ctx, accountID, totpWindowTestPassword, correct); !errors.Is(err, ErrTOTPLocked) {
+	if err := totp.Disable(ctx, accountID, StepUp{CurrentPassword: totpWindowTestPassword, TOTPCode: correct}); !errors.Is(err, ErrTOTPLocked) {
 		t.Fatalf("expected disable to share the lock, got %v", err)
 	}
 }
@@ -329,7 +329,7 @@ func TestVerifyChallengeSurfacesFailureWindowStoreErrors(t *testing.T) {
 	if _, err := totp.VerifyChallenge(ctx, challengeID, correct); err == nil || errors.Is(err, ErrTOTPLocked) {
 		t.Fatalf("expected a store error from the challenge path, got %v", err)
 	}
-	if err := totp.Disable(ctx, accountID, totpWindowTestPassword, correct); err == nil || errors.Is(err, ErrTOTPLocked) {
+	if err := totp.Disable(ctx, accountID, StepUp{CurrentPassword: totpWindowTestPassword, TOTPCode: correct}); err == nil || errors.Is(err, ErrTOTPLocked) {
 		t.Fatalf("expected a store error from disable, got %v", err)
 	}
 }

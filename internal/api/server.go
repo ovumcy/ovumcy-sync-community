@@ -625,12 +625,9 @@ func (s *Server) handleTOTPDisable(
 	if !s.allowStepUpAttempt(writer, account.ID) {
 		return
 	}
-	err := s.totp.Disable(
-		request.Context(),
-		account.ID,
-		payload.CurrentPassword,
-		payload.Code,
-	)
+	stepUp := stepUpFromRequest(request, payload.CurrentPassword)
+	stepUp.TOTPCode = payload.Code
+	err := s.totp.Disable(request.Context(), account.ID, stepUp)
 	s.settleStepUpAttempt(account.ID, err)
 	if err != nil {
 		mapTOTPError(writer, err)

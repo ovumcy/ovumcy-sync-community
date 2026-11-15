@@ -61,7 +61,7 @@ func TestTOTPServiceRejectsWhenNotConfigured(t *testing.T) {
 	if _, err := unconfigured.CompleteEnrollment(ctx, "any-account", "any-hash", "123456"); err != ErrTOTPNotConfigured {
 		t.Fatalf("CompleteEnrollment: expected ErrTOTPNotConfigured, got %v", err)
 	}
-	if err := unconfigured.Disable(ctx, "any-account", "any-password", "123456"); err != ErrTOTPNotConfigured {
+	if err := unconfigured.Disable(ctx, "any-account", StepUp{CurrentPassword: "any-password", TOTPCode: "123456"}); err != ErrTOTPNotConfigured {
 		t.Fatalf("Disable: expected ErrTOTPNotConfigured, got %v", err)
 	}
 	if _, err := unconfigured.VerifyChallenge(ctx, "any-challenge", "123456"); err != ErrTOTPNotConfigured {
@@ -85,7 +85,7 @@ func TestTOTPServiceMethodsSurfaceGenericErrorWhenAccountsTableIsDropped(t *test
 	if _, err := totp.CompleteEnrollment(ctx, "account-target", "any-hash", "123456"); err == nil || errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("CompleteEnrollment: expected a store-failure error, not ErrUnauthorized, got %v", err)
 	}
-	if err := totp.Disable(ctx, "account-target", "any-password", "123456"); err == nil || errors.Is(err, ErrUnauthorized) {
+	if err := totp.Disable(ctx, "account-target", StepUp{CurrentPassword: "any-password", TOTPCode: "123456"}); err == nil || errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("Disable: expected a store-failure error, not ErrUnauthorized, got %v", err)
 	}
 }
@@ -143,7 +143,7 @@ func TestStartEnrollmentAndDisableRejectUnknownAccount(t *testing.T) {
 	if _, err := totp.StartEnrollment(ctx, "missing-account", StepUp{SessionTokenHash: "any-session", CurrentPassword: "any-password"}); err != ErrUnauthorized {
 		t.Fatalf("StartEnrollment: expected ErrUnauthorized for an unknown account, got %v", err)
 	}
-	if err := totp.Disable(ctx, "missing-account", "any-password", "123456"); err != ErrUnauthorized {
+	if err := totp.Disable(ctx, "missing-account", StepUp{CurrentPassword: "any-password", TOTPCode: "123456"}); err != ErrUnauthorized {
 		t.Fatalf("Disable: expected ErrUnauthorized for an unknown account, got %v", err)
 	}
 }
@@ -266,14 +266,14 @@ func TestDisableRejectsWrongPasswordAndWrongCode(t *testing.T) {
 
 	accountID, _, secret, _ := enrollTOTP(t, auth, totp, now)
 
-	if err := totp.Disable(ctx, accountID, "wrong password entirely", "000000"); err != ErrInvalidCurrentPassword {
+	if err := totp.Disable(ctx, accountID, StepUp{CurrentPassword: "wrong password entirely", TOTPCode: "000000"}); err != ErrInvalidCurrentPassword {
 		t.Fatalf("expected ErrInvalidCurrentPassword for a wrong password, got %v", err)
 	}
 
 	// Right password, but a code that cannot match any step in the ±1 window.
 	step := now.UTC().Unix() / security.TOTPStepSeconds
 	wrongCode := security.GenerateTOTPCode(secret, step+50)
-	if err := totp.Disable(ctx, accountID, password, wrongCode); err != ErrTOTPInvalidCode {
+	if err := totp.Disable(ctx, accountID, StepUp{CurrentPassword: password, TOTPCode: wrongCode}); err != ErrTOTPInvalidCode {
 		t.Fatalf("expected ErrTOTPInvalidCode for a wrong code, got %v", err)
 	}
 }
@@ -319,8 +319,8 @@ func TestDisableRollsBackWhenEitherCleanupFails(t *testing.T) {
 			t.Fatalf("decrypt secret: %v", err)
 		}
 
-		// The challenge delete runs before the failing session delete, so the
-		// challenge surviving proves the whole transaction rolled back.
+		// Without the table the caller-session check fails before anything is
+		// written; the challenge surviving shows nothing was.
 		if err := totp.store.UpsertTOTPChallenge(context.Background(), models.TOTPChallenge{
 			ChallengeIDHash: "pending-challenge",
 			AccountID:       accountID,
@@ -333,12 +333,12 @@ func TestDisableRollsBackWhenEitherCleanupFails(t *testing.T) {
 
 		step := now.UTC().Unix() / security.TOTPStepSeconds
 		code := security.GenerateTOTPCode([]byte(secret), step)
-		err = totp.Disable(context.Background(), accountID, "correct horse battery staple", code)
+		err = totp.Disable(context.Background(), accountID, StepUp{CurrentPassword: "correct horse battery staple", TOTPCode: code})
 		if err == nil {
 			t.Fatal("expected Disable to fail when the sessions table is dropped")
 		}
-		if !strings.Contains(err.Error(), "delete all sessions on disable") {
-			t.Fatalf("expected the session-cleanup store error to surface, got %v", err)
+		if !strings.Contains(err.Error(), "session lookup") {
+			t.Fatalf("expected the session-lookup store error to surface, got %v", err)
 		}
 		after, err := totp.store.FindAccountByID(context.Background(), accountID)
 		if err != nil {
@@ -367,7 +367,7 @@ func TestDisableRollsBackWhenEitherCleanupFails(t *testing.T) {
 
 		step := now.UTC().Unix() / security.TOTPStepSeconds
 		code := security.GenerateTOTPCode([]byte(secret), step)
-		err = totp.Disable(context.Background(), accountID, "correct horse battery staple", code)
+		err = totp.Disable(context.Background(), accountID, StepUp{SessionTokenHash: security.HashToken(token), CurrentPassword: "correct horse battery staple", TOTPCode: code})
 		if err == nil {
 			t.Fatal("expected Disable to fail when the totp_challenges table is dropped")
 		}
@@ -404,7 +404,7 @@ func TestDisableSurfacesDecryptFieldError(t *testing.T) {
 	if err := totp.store.UpdateTOTPSecretAndEnabled(ctx, accountID, "not valid base64!!", true); err != nil {
 		t.Fatalf("corrupt totp secret: %v", err)
 	}
-	err := totp.Disable(ctx, accountID, password, "000000")
+	err := totp.Disable(ctx, accountID, StepUp{CurrentPassword: password, TOTPCode: "000000"})
 	if !errors.Is(err, ErrTOTPSecretDecrypt) {
 		t.Fatalf("expected ErrTOTPSecretDecrypt for a corrupted secret, got %v", err)
 	}

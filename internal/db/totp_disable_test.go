@@ -25,7 +25,7 @@ func TestDisableTOTPClearsAndRevokesOnlyWhileVerifiedStateHolds(t *testing.T) {
 		"stale password hash": {"stale-hash", "secret-v1"},
 		"stale secret":        {"verified-hash", "secret-v0"},
 	} {
-		if err := store.DisableTOTP(ctx, "disable-account", args[0], args[1]); !errors.Is(err, ErrConflict) {
+		if err := store.DisableTOTP(ctx, "disable-account", "owner", args[0], args[1]); !errors.Is(err, ErrConflict) {
 			t.Fatalf("%s: expected ErrConflict, got %v", name, err)
 		}
 	}
@@ -43,7 +43,7 @@ func TestDisableTOTPClearsAndRevokesOnlyWhileVerifiedStateHolds(t *testing.T) {
 		t.Fatalf("expected the challenge kept after a conflict: %v", err)
 	}
 
-	if err := store.DisableTOTP(ctx, "disable-account", "verified-hash", "secret-v1"); err != nil {
+	if err := store.DisableTOTP(ctx, "disable-account", "owner", "verified-hash", "secret-v1"); err != nil {
 		t.Fatalf("disable with the verified state: %v", err)
 	}
 	account, err = store.FindAccountByID(ctx, "disable-account")
@@ -60,11 +60,46 @@ func TestDisableTOTPClearsAndRevokesOnlyWhileVerifiedStateHolds(t *testing.T) {
 		t.Fatalf("expected challenges deleted, got %v", err)
 	}
 
-	if err := store.DisableTOTP(ctx, "disable-account", "verified-hash", "secret-v1"); !errors.Is(err, ErrConflict) {
+	if _, err := store.CreateSession(ctx, guardSession("disable-account", "later")); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := store.DisableTOTP(ctx, "disable-account", "later", "verified-hash", "secret-v1"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("expected a repeat disable to conflict, got %v", err)
 	}
-	if err := store.DisableTOTP(ctx, "missing-account", "verified-hash", "secret-v1"); !errors.Is(err, ErrNotFound) {
+	if err := store.DisableTOTP(ctx, "missing-account", "later", "verified-hash", "secret-v1"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for a missing account, got %v", err)
+	}
+}
+
+func TestDisableTOTPRefusesARevokedCallerSession(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedGuardAccount(t, store, "disable-account")
+	if err := store.UpdateTOTPSecretAndEnabled(ctx, "disable-account", "secret-v1", true); err != nil {
+		t.Fatalf("enable totp: %v", err)
+	}
+	if _, err := store.CreateSession(ctx, guardSession("disable-account", "other")); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := store.UpsertTOTPChallenge(ctx, guardChallenge("disable-account", "pending")); err != nil {
+		t.Fatalf("create challenge: %v", err)
+	}
+
+	if err := store.DisableTOTP(ctx, "disable-account", "revoked", "verified-hash", "secret-v1"); !errors.Is(err, ErrSessionRevoked) {
+		t.Fatalf("expected ErrSessionRevoked, got %v", err)
+	}
+	account, err := store.FindAccountByID(ctx, "disable-account")
+	if err != nil {
+		t.Fatalf("find account: %v", err)
+	}
+	if !account.TOTPEnabled || account.TOTPSecretEncrypted != "secret-v1" {
+		t.Fatal("expected TOTP kept for a revoked caller")
+	}
+	if _, err := store.FindSessionByTokenHash(ctx, "other"); err != nil {
+		t.Fatalf("expected the other session kept: %v", err)
+	}
+	if _, err := store.FindTOTPChallengeByHash(ctx, "pending"); err != nil {
+		t.Fatalf("expected the challenge kept: %v", err)
 	}
 }
 
@@ -74,7 +109,7 @@ func TestDisableTOTPSurfacesStoreFailures(t *testing.T) {
 		if err := store.Close(); err != nil {
 			t.Fatalf("close store: %v", err)
 		}
-		err := store.DisableTOTP(context.Background(), "account-target", "hash", "secret")
+		err := store.DisableTOTP(context.Background(), "account-target", "session", "hash", "secret")
 		if err == nil || !strings.Contains(err.Error(), "begin disable totp") {
 			t.Fatalf("expected the begin error, got %v", err)
 		}
@@ -84,7 +119,7 @@ func TestDisableTOTPSurfacesStoreFailures(t *testing.T) {
 		store, dbPath := newFileBackedTestStore(t)
 		seedFaultInjectionAccount(t, store, "account-target")
 		dropTable(t, dbPath, "accounts")
-		err := store.DisableTOTP(context.Background(), "account-target", "hash", "secret")
+		err := store.DisableTOTP(context.Background(), "account-target", "session", "hash", "secret")
 		if err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, ErrConflict) {
 			t.Fatalf("expected a store failure, got %v", err)
 		}
