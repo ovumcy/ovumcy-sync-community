@@ -740,7 +740,7 @@ func (s *Store) ListLapsedManagedAccountIDs(ctx context.Context, cutoff time.Tim
 
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id FROM accounts WHERE mode = 'managed' AND lapsed_at IS NOT NULL AND lapsed_at < ? ORDER BY lapsed_at LIMIT ?`,
+		`SELECT id FROM accounts WHERE mode = 'managed' AND lapsed_at IS NOT NULL AND julianday(lapsed_at) < julianday(?) ORDER BY julianday(lapsed_at) LIMIT ?`,
 		cutoff.UTC().Format(time.RFC3339Nano),
 		limit,
 	)
@@ -817,7 +817,7 @@ func (s *Store) DeleteLapsedManagedAccount(ctx context.Context, accountID string
 
 	result, err := tx.ExecContext(
 		ctx,
-		`DELETE FROM accounts WHERE id = ? AND mode = 'managed' AND lapsed_at IS NOT NULL AND lapsed_at < ?`,
+		`DELETE FROM accounts WHERE id = ? AND mode = 'managed' AND lapsed_at IS NOT NULL AND julianday(lapsed_at) < julianday(?)`,
 		accountID,
 		cutoff.UTC().Format(time.RFC3339Nano),
 	)
@@ -1529,11 +1529,15 @@ ON CONFLICT(account_id) DO UPDATE SET
 // "is this reset token still actionable" — callers must not pre-check expiry
 // or pre-load the token, or the race the CAS prevents reopens. Args: now,
 // token hash, now.
+//
+// Stored instants are RFC3339Nano, which drops trailing zeros, so as text
+// "…:05Z" sorts after "…:05.5Z": every instant compare in SQL goes through
+// julianday() (millisecond precision), never the raw string.
 const consumeResetTokenSQL = `UPDATE password_reset_tokens
 	 SET consumed_at = ?
 	 WHERE token_hash = ?
 	   AND consumed_at IS NULL
-	   AND expires_at > ?
+	   AND julianday(expires_at) > julianday(?)
 	 RETURNING account_id, token_hash, created_at, expires_at`
 
 // ConsumePasswordResetToken claims the matching token with consumeResetTokenSQL
@@ -1741,7 +1745,7 @@ ON CONFLICT(account_id, device_id) DO UPDATE SET
 func (s *Store) ListDevicesForAccount(ctx context.Context, accountID string) ([]models.Device, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT device_id, account_id, device_label, created_at, last_seen_at FROM devices WHERE account_id = ? ORDER BY created_at`,
+		`SELECT device_id, account_id, device_label, created_at, last_seen_at FROM devices WHERE account_id = ? ORDER BY julianday(created_at)`,
 		accountID,
 	)
 	if err != nil {
@@ -2176,7 +2180,7 @@ func (s *Store) DeleteExpiredSessions(ctx context.Context, cutoff time.Time, lim
 	}
 	result, err := s.db.ExecContext(
 		ctx,
-		`DELETE FROM sessions WHERE rowid IN (SELECT rowid FROM sessions WHERE expires_at <= ? LIMIT ?)`,
+		`DELETE FROM sessions WHERE rowid IN (SELECT rowid FROM sessions WHERE julianday(expires_at) <= julianday(?) LIMIT ?)`,
 		cutoff.UTC().Format(time.RFC3339Nano),
 		limit,
 	)
@@ -2200,7 +2204,7 @@ func (s *Store) DeleteExpiredPasswordResetTokens(ctx context.Context, cutoff tim
 	}
 	result, err := s.db.ExecContext(
 		ctx,
-		`DELETE FROM password_reset_tokens WHERE rowid IN (SELECT rowid FROM password_reset_tokens WHERE expires_at <= ? LIMIT ?)`,
+		`DELETE FROM password_reset_tokens WHERE rowid IN (SELECT rowid FROM password_reset_tokens WHERE julianday(expires_at) <= julianday(?) LIMIT ?)`,
 		cutoff.UTC().Format(time.RFC3339Nano),
 		limit,
 	)
@@ -2223,7 +2227,7 @@ func (s *Store) DeleteExpiredTOTPChallenges(ctx context.Context, cutoff time.Tim
 	}
 	result, err := s.db.ExecContext(
 		ctx,
-		`DELETE FROM totp_challenges WHERE rowid IN (SELECT rowid FROM totp_challenges WHERE expires_at <= ? LIMIT ?)`,
+		`DELETE FROM totp_challenges WHERE rowid IN (SELECT rowid FROM totp_challenges WHERE julianday(expires_at) <= julianday(?) LIMIT ?)`,
 		cutoff.UTC().Format(time.RFC3339Nano),
 		limit,
 	)

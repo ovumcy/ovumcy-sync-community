@@ -101,9 +101,10 @@ func newCorruptTimestampFixture(t *testing.T) corruptTimestampFixture {
 // corruptColumn rewrites one timestamp column through an independent raw
 // connection — simulating the raw database-file write that is the only way a
 // stored timestamp can stop parsing, since every repository write path
-// formats time.RFC3339Nano. The replacement value deliberately sorts AFTER
-// any RFC 3339 string, so rows guarded by lexicographic expiry comparisons
-// (expires_at > now) still match and the scan is reached.
+// formats time.RFC3339Nano. The replacement value is a far-future instant
+// SQLite's julianday() reads (so expiry compares such as
+// julianday(expires_at) > julianday(now) still match and the scan is
+// reached) in a shape parseStoredTime accepts neither way (no seconds).
 func (f corruptTimestampFixture) corruptColumn(t *testing.T, table, column string) {
 	t.Helper()
 	raw, err := sql.Open("sqlite", f.dbPath)
@@ -114,7 +115,7 @@ func (f corruptTimestampFixture) corruptColumn(t *testing.T, table, column strin
 	if _, err := raw.Exec(`PRAGMA busy_timeout = 5000;`); err != nil {
 		t.Fatalf("configure raw sqlite: %v", err)
 	}
-	if _, err := raw.Exec(`UPDATE ` + table + ` SET ` + column + ` = 'zzz-not-a-timestamp'`); err != nil { // #nosec G202 -- table/column are test-fixture constants chosen by the test table below, never user input
+	if _, err := raw.Exec(`UPDATE ` + table + ` SET ` + column + ` = '2999-01-01T00:00'`); err != nil { // #nosec G202 -- table/column are test-fixture constants chosen by the test table below, never user input
 		t.Fatalf("corrupt %s.%s: %v", table, column, err)
 	}
 }
@@ -166,7 +167,7 @@ func TestScansSurfaceCorruptStoredTimestampsAsErrors(t *testing.T) {
 			return err
 		}, "password reset token created_at"},
 		{"password reset token expires_at", "password_reset_tokens", "expires_at", func(s *Store) error {
-			// The corrupt value sorts after the formatted now, so the
+			// The corrupt value is a future instant to julianday(), so the
 			// consume CAS still matches the row and the scan is reached.
 			_, err := s.ConsumePasswordResetToken(ctx, "hash-corrupt-reset", time.Now().UTC())
 			return err
