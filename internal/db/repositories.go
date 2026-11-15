@@ -1745,7 +1745,7 @@ ON CONFLICT(account_id, device_id) DO UPDATE SET
 func (s *Store) ListDevicesForAccount(ctx context.Context, accountID string) ([]models.Device, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT device_id, account_id, device_label, created_at, last_seen_at FROM devices WHERE account_id = ? ORDER BY julianday(created_at)`,
+		`SELECT device_id, account_id, device_label, created_at, last_seen_at FROM devices WHERE account_id = ? ORDER BY julianday(created_at), rowid`,
 		accountID,
 	)
 	if err != nil {
