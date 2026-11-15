@@ -260,6 +260,19 @@ func TestStepUpCodeIsSingleUseAcrossRoutes(t *testing.T) {
 	}
 }
 
+// A store failure on the account read surfaces as-is: neither a 401 nor a
+// silent pass without the TOTP check.
+func TestRemoveDeviceSurfacesAccountReadFailure(t *testing.T) {
+	store, dbPath := openFileBackedTestStore(t)
+	sync := NewSyncService(store, SyncOptions{MaxDevices: 5, MaxBlobBytes: 1 << 20})
+	dropTable(t, dbPath, "accounts")
+
+	err := sync.RemoveDevice(context.Background(), "account-x", StepUp{SessionTokenHash: "hash"}, "device-x1111111")
+	if err == nil || errors.Is(err, ErrUnauthorized) || errors.Is(err, ErrDeviceNotFound) {
+		t.Fatalf("expected the raw store error, got %v", err)
+	}
+}
+
 // Removal reads the account for its TOTP state; an account already gone is no
 // longer an authenticated caller.
 func TestRemoveDeviceOnDeletedAccountIsUnauthorized(t *testing.T) {

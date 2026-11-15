@@ -1008,7 +1008,11 @@ func (s *Server) handleRemoveDevice(
 		return
 	}
 
-	if !s.allowStepUpAttempt(writer, account.ID) {
+	// Only an enrolled account's removal checks a password, so only it draws
+	// on the shared step-up bucket; a session-only removal must neither be
+	// blocked by that bucket nor earn refunds from it.
+	checksPassword := account.TOTPEnabled
+	if checksPassword && !s.allowStepUpAttempt(writer, account.ID) {
 		return
 	}
 	stepUp := stepUpFromRequest(request, payload.CurrentPassword)
@@ -1016,7 +1020,9 @@ func (s *Server) handleRemoveDevice(
 	// device_id comes from the path; the delete is scoped to the authenticated
 	// account in the query, so a caller can only remove its own devices.
 	err := s.sync.RemoveDevice(request.Context(), account.ID, stepUp, request.PathValue("device_id"))
-	s.settleStepUpAttempt(account.ID, err)
+	if checksPassword {
+		s.settleStepUpAttempt(account.ID, err)
+	}
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrInvalidDevice):
