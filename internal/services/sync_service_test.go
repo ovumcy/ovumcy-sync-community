@@ -317,7 +317,7 @@ func TestSyncServiceRemoveDeviceSurfacesStoreError(t *testing.T) {
 
 	dropTable(t, dbPath, "devices")
 
-	err = syncService.RemoveDevice(context.Background(), result.AccountID, security.HashToken(result.SessionToken), "device-12345678")
+	err = syncService.RemoveDevice(context.Background(), result.AccountID, StepUp{SessionTokenHash: security.HashToken(result.SessionToken)}, "device-12345678")
 	if err == nil || errors.Is(err, ErrDeviceNotFound) {
 		t.Fatalf("expected a store error removing a device after the devices table is dropped, got %v", err)
 	}

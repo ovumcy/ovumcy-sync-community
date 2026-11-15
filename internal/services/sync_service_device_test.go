@@ -97,7 +97,7 @@ func TestRemoveDeviceFreesSlotForReuse(t *testing.T) {
 	}
 
 	// Removing the first device frees the slot.
-	if err := sync.RemoveDevice(context.Background(), accountID, deviceTestSessionHash(t, auth, "owner@example.com"), "device-first111"); err != nil {
+	if err := sync.RemoveDevice(context.Background(), accountID, StepUp{SessionTokenHash: deviceTestSessionHash(t, auth, "owner@example.com")}, "device-first111"); err != nil {
 		t.Fatalf("remove first: %v", err)
 	}
 	if _, err := sync.AttachDevice(context.Background(), accountID, "device-second22", "Second"); err != nil {
@@ -109,7 +109,7 @@ func TestRemoveDeviceRejectsUnknownDevice(t *testing.T) {
 	auth, sync := newDeviceTestServices(t, 5)
 	accountID := registerDeviceTestAccount(t, auth, "owner@example.com")
 
-	if err := sync.RemoveDevice(context.Background(), accountID, deviceTestSessionHash(t, auth, "owner@example.com"), "device-missing1"); !errors.Is(err, ErrDeviceNotFound) {
+	if err := sync.RemoveDevice(context.Background(), accountID, StepUp{SessionTokenHash: deviceTestSessionHash(t, auth, "owner@example.com")}, "device-missing1"); !errors.Is(err, ErrDeviceNotFound) {
 		t.Fatalf("expected ErrDeviceNotFound, got %v", err)
 	}
 }
@@ -118,7 +118,7 @@ func TestRemoveDeviceRejectsEmptyID(t *testing.T) {
 	auth, sync := newDeviceTestServices(t, 5)
 	accountID := registerDeviceTestAccount(t, auth, "owner@example.com")
 
-	if err := sync.RemoveDevice(context.Background(), accountID, deviceTestSessionHash(t, auth, "owner@example.com"), "   "); !errors.Is(err, ErrInvalidDevice) {
+	if err := sync.RemoveDevice(context.Background(), accountID, StepUp{SessionTokenHash: deviceTestSessionHash(t, auth, "owner@example.com")}, "   "); !errors.Is(err, ErrInvalidDevice) {
 		t.Fatalf("expected ErrInvalidDevice, got %v", err)
 	}
 }
@@ -224,7 +224,7 @@ func TestRemoveDeviceIsAccountScopedNoIDOR(t *testing.T) {
 
 	// Account B tries to remove account A's device id — must not succeed and
 	// must not delete A's row.
-	if err := sync.RemoveDevice(context.Background(), accountB, deviceTestSessionHash(t, auth, "b@example.com"), "device-aaaa1111"); !errors.Is(err, ErrDeviceNotFound) {
+	if err := sync.RemoveDevice(context.Background(), accountB, StepUp{SessionTokenHash: deviceTestSessionHash(t, auth, "b@example.com")}, "device-aaaa1111"); !errors.Is(err, ErrDeviceNotFound) {
 		t.Fatalf("cross-account removal must be ErrDeviceNotFound, got %v", err)
 	}
 

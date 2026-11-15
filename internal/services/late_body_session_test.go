@@ -53,7 +53,7 @@ func TestLateBodyWritesFromARevokedSessionChangeNothing(t *testing.T) {
 	if _, err := totp.StartEnrollment(ctx, registered.AccountID, revoked); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("enroll start: expected ErrUnauthorized, got %v", err)
 	}
-	if err := syncService.RemoveDevice(ctx, registered.AccountID, revoked.SessionTokenHash, "device-a"); !errors.Is(err, ErrUnauthorized) {
+	if err := syncService.RemoveDevice(ctx, registered.AccountID, StepUp{SessionTokenHash: revoked.SessionTokenHash}, "device-a"); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("remove device: expected ErrUnauthorized, got %v", err)
 	}
 	ciphertext := []byte("ciphertext")

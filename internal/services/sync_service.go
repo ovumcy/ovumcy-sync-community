@@ -11,6 +11,7 @@ import (
 
 	"github.com/ovumcy/ovumcy-sync-community/internal/db"
 	"github.com/ovumcy/ovumcy-sync-community/internal/models"
+	"github.com/ovumcy/ovumcy-sync-community/internal/security"
 )
 
 var ErrInvalidDevice = errors.New("invalid_device")
@@ -57,6 +58,7 @@ type SyncService struct {
 	maxDevices   int
 	maxBlobBytes int
 	now          func() time.Time
+	totpCodes    TOTPCodeVerifier
 }
 
 type SyncOptions struct {
@@ -87,6 +89,13 @@ func NewSyncService(store *db.Store, options SyncOptions) *SyncService {
 		maxBlobBytes: options.MaxBlobBytes,
 		now:          time.Now,
 	}
+}
+
+// AttachTOTPCodeVerifier wires the TOTP code check that device removal and
+// the recovery-key overwrite ask of an enrolled account. Left nil (no field
+// encryption key), both fail closed on an enrolled account.
+func (s *SyncService) AttachTOTPCodeVerifier(verifier TOTPCodeVerifier) {
+	s.totpCodes = verifier
 }
 
 func (s *SyncService) Capabilities() models.CapabilityDocument {
@@ -200,13 +209,36 @@ func (s *SyncService) ListDevices(ctx context.Context, accountID string) ([]mode
 // Returns ErrInvalidDevice for an empty id, ErrDeviceNotFound when the
 // account has no such device, and ErrUnauthorized when the caller's session
 // was revoked before the delete.
-func (s *SyncService) RemoveDevice(ctx context.Context, accountID string, sessionTokenHash string, deviceID string) error {
+//
+// A TOTP-enrolled account must re-enter its password and present a current
+// code (password first, so a wrong one spends no code step), so a stolen
+// session alone can neither evict the owner's devices nor spend the account's
+// TOTP window. An account without TOTP needs only its session, as before.
+// Any credential change by another session revokes this one, which the
+// delete's session predicate catches.
+func (s *SyncService) RemoveDevice(ctx context.Context, accountID string, stepUp StepUp, deviceID string) error {
 	deviceID = strings.TrimSpace(deviceID)
 	if deviceID == "" {
 		return ErrInvalidDevice
 	}
 
-	if err := s.store.DeleteDevice(ctx, accountID, sessionTokenHash, deviceID); err != nil {
+	account, err := s.store.FindAccountByID(ctx, accountID)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return ErrUnauthorized
+		}
+		return err
+	}
+	if account.TOTPEnabled {
+		if err := security.ComparePasswordHash(account.PasswordHash, stepUp.CurrentPassword); err != nil {
+			return ErrInvalidCurrentPassword
+		}
+		if err := verifyStepUpCode(ctx, s.totpCodes, account, stepUp.TOTPCode); err != nil {
+			return err
+		}
+	}
+
+	if err := s.store.DeleteDevice(ctx, accountID, stepUp.SessionTokenHash, deviceID); err != nil {
 		switch {
 		case errors.Is(err, db.ErrSessionRevoked):
 			return ErrUnauthorized
@@ -286,7 +318,9 @@ func (s *SyncService) GetBlob(ctx context.Context, accountID string) (models.Enc
 // PutRecoveryKeyPackage overwrites the account's wrapped recovery key after
 // the step-up re-authentication; the store re-checks the verified state in
 // the write's own transaction. The password is checked before the package is
-// validated, so a wrong password answers as such whatever the body holds.
+// validated, so a wrong password answers as such whatever the body holds. A
+// TOTP-enrolled account must also present a current code: an overwrite
+// replaces the owner's phrase-recovery path.
 func (s *SyncService) PutRecoveryKeyPackage(
 	ctx context.Context,
 	accountID string,
@@ -329,6 +363,12 @@ func (s *SyncService) PutRecoveryKeyPackage(
 		WrappedMasterKeyHex:  wrappedMasterKeyHex,
 		PhraseFingerprintHex: phraseFingerprintHex,
 		UpdatedAt:            s.now().UTC(),
+	}
+
+	// After the package is validated, so a rejected body does not spend the
+	// code's step.
+	if err := verifyStepUpCode(ctx, s.totpCodes, account, stepUp.TOTPCode); err != nil {
+		return models.RecoveryKeyPackage{}, err
 	}
 
 	stored, err := s.store.UpsertRecoveryKeyPackageForSession(

@@ -112,6 +112,7 @@ func runServe(cfg config.Config) error {
 			cfg.TOTPIssuer,
 		)
 		authService.AttachTOTPChallengeIssuer(totpService)
+		syncService.AttachTOTPCodeVerifier(totpService)
 	}
 
 	server := &http.Server{

@@ -10,9 +10,10 @@ import (
 	"github.com/ovumcy/ovumcy-sync-community/internal/services"
 )
 
-// writeStepUpError's unauthorized branch answers a session revoked between
-// withAuth and the store write, a race HTTP tests cannot schedule.
-func TestWriteStepUpError(t *testing.T) {
+// The step-up writes answer through mapTOTPError; its unauthorized branch
+// covers a session revoked between withAuth and the store write, a race HTTP
+// tests cannot schedule.
+func TestMapTOTPErrorStepUpRefusals(t *testing.T) {
 	for _, tc := range []struct {
 		err        error
 		wantStatus int
@@ -20,10 +21,13 @@ func TestWriteStepUpError(t *testing.T) {
 	}{
 		{services.ErrInvalidCurrentPassword, http.StatusUnauthorized, "invalid_current_password"},
 		{services.ErrUnauthorized, http.StatusUnauthorized, "unauthorized"},
+		{services.ErrTOTPInvalidCode, http.StatusUnauthorized, "totp_invalid_code"},
+		{services.ErrTOTPReplayed, http.StatusUnauthorized, "totp_replayed"},
+		{services.ErrTOTPNotConfigured, http.StatusServiceUnavailable, "totp_not_configured"},
 		{errors.New("boom"), http.StatusInternalServerError, "internal_error"},
 	} {
 		recorder := httptest.NewRecorder()
-		writeStepUpError(recorder, tc.err)
+		mapTOTPError(recorder, tc.err)
 
 		var body map[string]string
 		if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {

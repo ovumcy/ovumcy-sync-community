@@ -777,8 +777,10 @@ paths:
         sync blob, the wrapped recovery-key package, pending password-reset
         tokens, and pending TOTP challenges. The account is derived only from
         the authenticated session — there is no field to name a different
-        account. Requires the current password, so a stolen session alone
-        cannot erase the account. A managed account has no password, so a
+        account. Requires the current password and, on a TOTP-enrolled
+        account, a current TOTP `code` (single-use, counted toward the
+        per-account TOTP window; a missing code is not counted), so a stolen
+        session alone cannot erase the account. A managed account has no password, so a
         managed session is refused with `403 managed_account_delete_via_bridge`;
         it is erased only through `DELETE /managed/accounts/{account_id}`.
         Idempotent: a retry after a successful delete still reports success.
@@ -789,7 +791,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/CurrentPasswordRequest"
+              $ref: "#/components/schemas/AccountDeleteRequest"
       responses:
         "200":
           description: Account and all owned data erased (or already gone).
@@ -810,7 +812,7 @@ paths:
                 invalidJSON:
                   value: { error: invalid_json }
         "401":
-          description: Missing/invalid session, or wrong current password.
+          description: Missing/invalid session, wrong current password, or a missing/wrong/replayed TOTP code on an enrolled account.
           content:
             application/json:
               schema:
@@ -820,6 +822,10 @@ paths:
                   value: { error: unauthorized }
                 invalidCurrentPassword:
                   value: { error: invalid_current_password }
+                totpInvalidCode:
+                  value: { error: totp_invalid_code }
+                totpReplayed:
+                  value: { error: totp_replayed }
         "403":
           description: The session belongs to a managed account, which is erased only through the managed-bridge purge.
           content:
@@ -833,6 +839,13 @@ paths:
           $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          description: The account has TOTP enabled but the server has no `FIELD_ENCRYPTION_KEY` configured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example: { error: totp_not_configured }
 
   /managed/session:
     post:
@@ -1194,7 +1207,10 @@ paths:
       tags: [sync]
       operationId: removeDevice
       summary: Remove one of the account's devices
-      description: Detaches a device from the caller's account, freeing a slot. The delete is scoped to the authenticated account in the query, so a caller can only ever remove its own devices. Every session bound to the device is revoked in the same transaction — removing the caller's own device ends the calling session too. Sessions never bound (no `POST /sync/devices` yet) are unaffected.
+      description: |
+        Detaches a device from the caller's account, freeing a slot. The delete is scoped to the authenticated account in the query, so a caller can only ever remove its own devices. Every session bound to the device is revoked in the same transaction — removing the caller's own device ends the calling session too. Sessions never bound (no `POST /sync/devices` yet) are unaffected.
+
+        On a TOTP-enrolled account removal is a step-up: the body must carry the current password and a current TOTP `code` (password checked first; the code is single-use and counted toward the per-account TOTP window, a missing code is not), so a stolen session alone can neither evict the owner's devices nor spend the TOTP window. Wrong passwords draw on the shared step-up bucket. An account without TOTP may omit the body.
       security:
         - sessionBearerAuth: []
       parameters:
@@ -1204,6 +1220,12 @@ paths:
           description: The device_id to remove.
           schema:
             type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeviceRemoveRequest"
       responses:
         "200":
           description: Device removed.
@@ -1215,7 +1237,7 @@ paths:
                 removed:
                   value: { status: removed }
         "400":
-          description: Empty device_id.
+          description: Empty device_id, or a malformed JSON body.
           content:
             application/json:
               schema:
@@ -1223,8 +1245,23 @@ paths:
               examples:
                 invalidDevice:
                   value: { error: invalid_device }
+                invalidJSON:
+                  value: { error: invalid_json }
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          description: Missing/invalid session, wrong current password, or a missing/wrong/replayed TOTP code on an enrolled account.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  value: { error: unauthorized }
+                invalidCurrentPassword:
+                  value: { error: invalid_current_password }
+                totpInvalidCode:
+                  value: { error: totp_invalid_code }
+                totpReplayed:
+                  value: { error: totp_replayed }
         "403":
           $ref: "#/components/responses/SyncDisabled"
         "404":
@@ -1240,6 +1277,13 @@ paths:
           $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          description: The account has TOTP enabled but the server has no `FIELD_ENCRYPTION_KEY` configured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example: { error: totp_not_configured }
 
   /sync/recovery-key:
     get:
@@ -1284,8 +1328,10 @@ paths:
         Upserts the account's client-wrapped master-key package. All fields
         are opaque to the server beyond format validation (fixed algorithm/KDF
         identifiers, fixed word count, hex length checks) — the server never
-        derives or sees the unwrapped key. Requires the current password, so a
-        stolen session alone cannot overwrite the owner's recovery path;
+        derives or sees the unwrapped key. Requires the current password and,
+        on a TOTP-enrolled account, a current TOTP `code` (single-use, counted
+        toward the per-account TOTP window; a missing code is not counted), so
+        a stolen session alone cannot overwrite the owner's recovery path;
         managed accounts (no password) are exempt.
       security:
         - sessionBearerAuth: []
@@ -1312,7 +1358,7 @@ paths:
                 invalidPackage:
                   value: { error: invalid_recovery_package }
         "401":
-          description: Missing/invalid session, or wrong current password.
+          description: Missing/invalid session, wrong current password, or a missing/wrong/replayed TOTP code on an enrolled account.
           content:
             application/json:
               schema:
@@ -1322,12 +1368,23 @@ paths:
                   value: { error: unauthorized }
                 invalidCurrentPassword:
                   value: { error: invalid_current_password }
+                totpInvalidCode:
+                  value: { error: totp_invalid_code }
+                totpReplayed:
+                  value: { error: totp_replayed }
         "403":
           $ref: "#/components/responses/SyncDisabled"
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          description: The account has TOTP enabled but the server has no `FIELD_ENCRYPTION_KEY` configured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example: { error: totp_not_configured }
 
   /sync/blob:
     get:
@@ -1579,13 +1636,28 @@ components:
       required: [reset_token, new_password]
       additionalProperties: false
 
-    CurrentPasswordRequest:
+    AccountDeleteRequest:
       type: object
       properties:
         current_password:
           type: string
           format: password
           description: Required for self-hosted accounts; ignored for managed accounts.
+        code:
+          type: string
+          description: Current 6-digit TOTP code. Required when the account has TOTP enabled; ignored otherwise.
+      additionalProperties: false
+
+    DeviceRemoveRequest:
+      type: object
+      description: Needed only when the account has TOTP enabled; otherwise the body may be omitted.
+      properties:
+        current_password:
+          type: string
+          format: password
+        code:
+          type: string
+          description: Current 6-digit TOTP code.
       additionalProperties: false
 
     RegenerateRecoveryCodeRequest:
@@ -1920,6 +1992,9 @@ components:
           type: string
           format: password
           description: Required for self-hosted accounts; ignored for managed accounts. Never stored or echoed.
+        code:
+          type: string
+          description: Current 6-digit TOTP code. Required when the account has TOTP enabled; ignored otherwise.
       required:
         - algorithm
         - kdf
