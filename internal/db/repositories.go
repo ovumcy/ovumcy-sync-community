@@ -277,11 +277,13 @@ func (s *Store) ResetAccountCredentials(
 // still the ones the caller read and verified against: a regeneration that
 // read the account before a concurrent TOTP enable (or reset, or another
 // regeneration) rotated the code, or before a password change, must not land
-// a code issued on stale credentials. ErrConflict when either hash moved,
-// ErrNotFound when the account is gone.
+// a code issued on stale credentials. It also needs the caller's session
+// (requireLiveSession). ErrConflict when either hash moved, ErrSessionRevoked
+// when the session is gone, ErrNotFound when the account is.
 func (s *Store) UpdateAccountRecoveryCodeHash(
 	ctx context.Context,
 	accountID string,
+	sessionTokenHash string,
 	expectedHash string,
 	expectedPasswordHash string,
 	recoveryCodeHash string,
@@ -293,6 +295,10 @@ func (s *Store) UpdateAccountRecoveryCodeHash(
 	defer func() {
 		_ = tx.Rollback()
 	}()
+
+	if err := requireLiveSession(ctx, tx, accountID, sessionTokenHash); err != nil {
+		return err
+	}
 
 	result, err := tx.ExecContext(
 		ctx,
@@ -1026,14 +1032,27 @@ func (s *Store) UpdateTOTPSecretAndEnabled(
 // StorePendingTOTPSecret writes a fresh pending secret (totp_enabled stays 0,
 // totp_last_used_step resets to 0) only while TOTP is still off: an enrollment
 // start that read "disabled" before a concurrent verify committed must not
-// switch the just-enabled factor back off. ErrConflict when TOTP is enabled,
-// ErrNotFound when the account is gone.
+// switch the just-enabled factor back off. It also needs the caller's session
+// (requireLiveSession). ErrConflict when TOTP is enabled, ErrSessionRevoked
+// when the session is gone, ErrNotFound when the account is.
 func (s *Store) StorePendingTOTPSecret(
 	ctx context.Context,
 	accountID string,
+	sessionTokenHash string,
 	encryptedSecret string,
 ) error {
-	result, err := s.db.ExecContext(
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin store pending totp secret: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if err := requireLiveSession(ctx, tx, accountID, sessionTokenHash); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(
 		ctx,
 		`UPDATE accounts SET totp_secret_encrypted = ?, totp_last_used_step = 0
 		 WHERE id = ? AND totp_enabled = 0`,
@@ -1041,14 +1060,18 @@ func (s *Store) StorePendingTOTPSecret(
 		accountID,
 	)
 	if err != nil {
-		return fmt.Errorf("store pending totp secret: %w", err)
+		return fmt.Errorf("store pending totp secret: %w", err) // codecov:ignore -- requireLiveSession just read "accounts" in this transaction, so failing only this UPDATE needs a fake driver (same same-table-multi-step limitation as the RowsAffected/COMMIT deviations in fault_injection_test.go).
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("store pending totp secret rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); needs a fake driver, the same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
 	}
 	if affected == 0 {
-		return s.accountExistsOr(ctx, accountID, ErrConflict)
+		return ErrConflict
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit store pending totp secret: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteAccount's COMMIT branch in fault_injection_test.go.
 	}
 	return nil
 }
@@ -1073,19 +1096,6 @@ func (s *Store) DiscardPendingTOTPSecret(
 	return nil
 }
 
-// accountExistsOr returns ErrNotFound when accountID has no row, else
-// otherwise: it names why a guarded single-row write matched nothing.
-func (s *Store) accountExistsOr(ctx context.Context, accountID string, otherwise error) error {
-	var one int
-	if err := s.db.QueryRowContext(ctx, `SELECT 1 FROM accounts WHERE id = ?`, accountID).Scan(&one); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrNotFound
-		}
-		return fmt.Errorf("account lookup: %w", err) // codecov:ignore -- every caller's guarded UPDATE on the same table has just succeeded, so a failure isolated to this SELECT needs a fake driver (same same-table-multi-step limitation as the RowsAffected/COMMIT deviations in fault_injection_test.go).
-	}
-	return otherwise
-}
-
 // EnableTOTPAndRotateRecoveryCode is the enable transition at the end of
 // CompleteEnrollment. In one transaction it flips totp_enabled on, replaces
 // the recovery code hash, and deletes the account's pending reset tokens: a
@@ -1105,8 +1115,10 @@ func (s *Store) accountExistsOr(ctx context.Context, accountID string, otherwise
 // The update is guarded on totp_enabled = 0 AND on the pending ciphertext the
 // caller verified: a concurrent enrollment that already enabled wins
 // (ErrConflict), and a concurrent StartEnrollment that swapped in a new secret
-// is not enabled unverified (ErrTOTPPendingSecretChanged). ErrNotFound when
-// the account is gone.
+// is not enabled unverified (ErrTOTPPendingSecretChanged). The caller's
+// session must still exist (requireLiveSession): a revoked caller would
+// otherwise rotate the recovery code into a response nobody can trust.
+// ErrSessionRevoked when it is gone, ErrNotFound when the account is.
 func (s *Store) EnableTOTPAndRotateRecoveryCode(
 	ctx context.Context,
 	accountID string,
@@ -1121,6 +1133,10 @@ func (s *Store) EnableTOTPAndRotateRecoveryCode(
 	defer func() {
 		_ = tx.Rollback()
 	}()
+
+	if err := requireLiveSession(ctx, tx, accountID, keepSessionTokenHash); err != nil {
+		return err
+	}
 
 	result, err := tx.ExecContext(
 		ctx,
@@ -1716,8 +1732,9 @@ RETURNING device_id`,
 // DeleteDevice removes one device from the account together with every
 // session bound to it, in one transaction, so a removed device never leaves
 // a live session behind. Both DELETEs are scoped by account_id and device_id
-// (no IDOR). Returns ErrNotFound when the account has no such device.
-func (s *Store) DeleteDevice(ctx context.Context, accountID string, deviceID string) error {
+// (no IDOR). The caller's session must still exist (requireLiveSession;
+// ErrSessionRevoked). Returns ErrNotFound when the account has no such device.
+func (s *Store) DeleteDevice(ctx context.Context, accountID string, sessionTokenHash string, deviceID string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin delete device: %w", err)
@@ -1725,6 +1742,10 @@ func (s *Store) DeleteDevice(ctx context.Context, accountID string, deviceID str
 	defer func() {
 		_ = tx.Rollback()
 	}()
+
+	if err := requireLiveSession(ctx, tx, accountID, sessionTokenHash); err != nil {
+		return err
+	}
 
 	result, err := tx.ExecContext(
 		ctx,
@@ -1782,8 +1803,25 @@ func (s *Store) GetEncryptedBlob(ctx context.Context, accountID string) (models.
 // Returns ErrStaleGeneration when an existing row already has
 // generation >= blob.Generation (RowsAffected == 0 on the conflict-update
 // branch); the caller should map this to its public stale-generation error.
-func (s *Store) UpsertEncryptedBlob(ctx context.Context, blob models.EncryptedBlob) (models.EncryptedBlob, error) {
-	result, err := s.db.ExecContext(
+// The caller's session must still exist (requireLiveSession;
+// ErrSessionRevoked, or ErrNotFound when the account is gone).
+func (s *Store) UpsertEncryptedBlob(
+	ctx context.Context,
+	sessionTokenHash string,
+	blob models.EncryptedBlob,
+) (models.EncryptedBlob, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return models.EncryptedBlob{}, fmt.Errorf("begin upsert blob: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if err := requireLiveSession(ctx, tx, blob.AccountID, sessionTokenHash); err != nil {
+		return models.EncryptedBlob{}, err
+	}
+	result, err := tx.ExecContext(
 		ctx,
 		`
 INSERT INTO encrypted_blobs (account_id, schema_version, generation, checksum_sha256, ciphertext, ciphertext_size, created_at, updated_at)
@@ -1817,6 +1855,9 @@ WHERE excluded.generation > encrypted_blobs.generation
 		return models.EncryptedBlob{}, ErrStaleGeneration
 	}
 
+	if err := tx.Commit(); err != nil {
+		return models.EncryptedBlob{}, fmt.Errorf("commit upsert blob: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteAccount's COMMIT branch in fault_injection_test.go.
+	}
 	return blob, nil
 }
 

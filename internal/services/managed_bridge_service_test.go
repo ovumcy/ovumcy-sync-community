@@ -11,6 +11,7 @@ import (
 
 	"github.com/ovumcy/ovumcy-sync-community/internal/db"
 	"github.com/ovumcy/ovumcy-sync-community/internal/models"
+	"github.com/ovumcy/ovumcy-sync-community/internal/security"
 )
 
 func TestManagedBridgeRejectsInvalidAccountID(t *testing.T) {
@@ -105,7 +106,7 @@ func TestManagedBridgePurgeErasesBlobDeviceAndSessionThenIsIdempotent(t *testing
 
 	ciphertext := []byte("managed-ciphertext-payload")
 	sum := sha256.Sum256(ciphertext)
-	if _, err := syncService.PutBlob(ctx, accountID, PutBlobInput{
+	if _, err := syncService.PutBlob(ctx, accountID, security.HashToken(session.SessionToken), PutBlobInput{
 		SchemaVersion:  1,
 		Generation:     1,
 		ChecksumSHA256: hex.EncodeToString(sum[:]),
@@ -222,7 +223,7 @@ func TestManagedBridgePurgeRefusesSelfHostedAccount(t *testing.T) {
 
 	ciphertext := []byte("self-hosted-ciphertext")
 	sum := sha256.Sum256(ciphertext)
-	if _, err := syncService.PutBlob(ctx, registered.AccountID, PutBlobInput{
+	if _, err := syncService.PutBlob(ctx, registered.AccountID, security.HashToken(registered.SessionToken), PutBlobInput{
 		SchemaVersion:  1,
 		Generation:     1,
 		ChecksumSHA256: hex.EncodeToString(sum[:]),

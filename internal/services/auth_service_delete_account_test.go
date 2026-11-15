@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ovumcy/ovumcy-sync-community/internal/security"
 )
 
 func TestDeleteAccountErasesBlobDeviceAndSessionThenIsIdempotent(t *testing.T) {
@@ -26,7 +28,7 @@ func TestDeleteAccountErasesBlobDeviceAndSessionThenIsIdempotent(t *testing.T) {
 
 	ciphertext := []byte("ciphertext-only-payload")
 	sum := sha256.Sum256(ciphertext)
-	if _, err := syncService.PutBlob(ctx, result.AccountID, PutBlobInput{
+	if _, err := syncService.PutBlob(ctx, result.AccountID, security.HashToken(result.SessionToken), PutBlobInput{
 		SchemaVersion:  1,
 		Generation:     1,
 		ChecksumSHA256: hex.EncodeToString(sum[:]),
@@ -110,7 +112,7 @@ func TestDeleteAccountDoesNotTouchOtherAccounts(t *testing.T) {
 
 	ciphertext := []byte("bystander-ciphertext")
 	sum := sha256.Sum256(ciphertext)
-	if _, err := syncService.PutBlob(ctx, bystander.AccountID, PutBlobInput{
+	if _, err := syncService.PutBlob(ctx, bystander.AccountID, security.HashToken(bystander.SessionToken), PutBlobInput{
 		SchemaVersion:  1,
 		Generation:     1,
 		ChecksumSHA256: hex.EncodeToString(sum[:]),

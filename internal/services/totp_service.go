@@ -144,7 +144,7 @@ type TOTPEnrollmentStart struct {
 func (s *TOTPService) StartEnrollment(
 	ctx context.Context,
 	accountID string,
-	currentPassword string,
+	stepUp StepUp,
 ) (TOTPEnrollmentStart, error) {
 	if !s.Configured() {
 		return TOTPEnrollmentStart{}, ErrTOTPNotConfigured
@@ -162,7 +162,7 @@ func (s *TOTPService) StartEnrollment(
 		return TOTPEnrollmentStart{}, ErrTOTPAlreadyEnabled
 	}
 
-	if err := security.ComparePasswordHash(account.PasswordHash, currentPassword); err != nil {
+	if err := security.ComparePasswordHash(account.PasswordHash, stepUp.CurrentPassword); err != nil {
 		return TOTPEnrollmentStart{}, ErrInvalidCurrentPassword
 	}
 
@@ -183,24 +183,29 @@ func (s *TOTPService) StartEnrollment(
 	// The step claim is only meaningful for the secret that earned it, so a
 	// new secret starts from a clean step. (The enable in CompleteEnrollment,
 	// by contrast, preserves the step — see EnableTOTPAndRotateRecoveryCode.)
-	// codecov:ignore:start -- every branch below needs the account row to
-	// change specifically for THIS write, after the FindAccountByID lookup
-	// above within this one synchronous call: ErrNotFound and ErrConflict are
-	// TOCTOUs (account deleted, or a concurrent verify enabled TOTP, mid-call
-	// — same class as the managed_bridge_service.go precedents; the store
-	// branches are covered in internal/db/totp_enable_test.go) and the
-	// generic case needs a fake driver (same same-table-multi-step limitation
-	// as the RowsAffected/COMMIT deviations in internal/db/fault_injection_test.go).
-	if err := s.store.StorePendingTOTPSecret(ctx, accountID, encrypted); err != nil {
+	// A caller whose session was revoked while the body was in flight writes
+	// nothing (ErrSessionRevoked → 401).
+	if err := s.store.StorePendingTOTPSecret(ctx, accountID, stepUp.SessionTokenHash, encrypted); err != nil {
 		switch {
+		case errors.Is(err, db.ErrSessionRevoked):
+			return TOTPEnrollmentStart{}, ErrUnauthorized
+		// codecov:ignore:start -- the branches below need the account row to
+		// change specifically for THIS write, after the FindAccountByID lookup
+		// above within this one synchronous call: ErrNotFound and ErrConflict
+		// are TOCTOUs (account deleted, or a concurrent verify enabled TOTP,
+		// mid-call — same class as the managed_bridge_service.go precedents;
+		// the store branches are covered in internal/db/totp_enable_test.go)
+		// and the generic case needs a fake driver (same same-table-multi-step
+		// limitation as the RowsAffected/COMMIT deviations in
+		// internal/db/fault_injection_test.go).
 		case errors.Is(err, db.ErrNotFound):
 			return TOTPEnrollmentStart{}, ErrUnauthorized
 		case errors.Is(err, db.ErrConflict):
 			return TOTPEnrollmentStart{}, ErrTOTPAlreadyEnabled
 		}
 		return TOTPEnrollmentStart{}, err
+		// codecov:ignore:end
 	}
-	// codecov:ignore:end
 
 	// A new secret is a fresh guessing space with its own code window; the
 	// password re-check above is what restarting it costs.
@@ -318,6 +323,8 @@ func (s *TOTPService) CompleteEnrollment(
 		currentSessionTokenHash,
 	); err != nil {
 		switch {
+		case errors.Is(err, db.ErrSessionRevoked):
+			return "", ErrUnauthorized
 		case errors.Is(err, db.ErrNotFound):
 			return "", ErrUnauthorized // codecov:ignore -- the account would have to be deleted between FindAccountByID above and this write within one synchronous call; a TOCTOU, same class as the managed_bridge_service.go precedents.
 		case errors.Is(err, db.ErrConflict):

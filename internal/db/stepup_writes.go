@@ -51,6 +51,32 @@ func requireStepUpState(
 	return nil
 }
 
+// requireLiveSession holds a session-authenticated write to its caller: the
+// write runs only while the caller's session still exists, so a request whose
+// body arrived after a revocation (a password change or reset, a TOTP change,
+// a device removal) changes nothing. ErrNotFound when the account is gone,
+// ErrSessionRevoked when only the session is. As in requireStepUpState, the
+// single connection makes this read and the write after it one atomic unit.
+func requireLiveSession(ctx context.Context, tx *sql.Tx, accountID string, sessionTokenHash string) error {
+	var sessionLive bool
+	err := tx.QueryRowContext(
+		ctx,
+		`SELECT EXISTS (SELECT 1 FROM sessions WHERE account_id = accounts.id AND token_hash = ?)
+		 FROM accounts WHERE id = ?`,
+		sessionTokenHash,
+		accountID,
+	).Scan(&sessionLive)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return ErrNotFound
+	case err != nil:
+		return fmt.Errorf("session lookup: %w", err)
+	case !sessionLive:
+		return ErrSessionRevoked
+	}
+	return nil
+}
+
 // DeleteAccountForSession is DeleteAccount for a session-authenticated caller:
 // the erase runs only while requireStepUpState holds, in the same transaction.
 func (s *Store) DeleteAccountForSession(

@@ -32,7 +32,7 @@ func TestCompleteEnrollmentRotatesRecoveryCodeIssuedBeforeEnrollment(t *testing.
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	preEnrollRecovery, err := authService.RegenerateRecoveryCode(ctx, registered.AccountID, password, "")
+	preEnrollRecovery, err := authService.RegenerateRecoveryCode(ctx, registered.AccountID, StepUp{SessionTokenHash: security.HashToken(registered.SessionToken), CurrentPassword: password}, "")
 	if err != nil {
 		t.Fatalf("regenerate: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestCompleteEnrollmentRotatesRecoveryCodeIssuedBeforeEnrollment(t *testing.
 		t.Fatalf("forgot password before enrollment: %v", err)
 	}
 
-	start, err := totpService.StartEnrollment(ctx, registered.AccountID, newPassword)
+	start, err := totpService.StartEnrollment(ctx, registered.AccountID, StepUp{SessionTokenHash: security.HashToken(registered.SessionToken), CurrentPassword: newPassword})
 	if err != nil {
 		t.Fatalf("StartEnrollment: %v", err)
 	}
@@ -95,7 +95,7 @@ func startPendingEnrollment(t *testing.T, auth *AuthService, totp *TOTPService) 
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	start, err := totp.StartEnrollment(ctx, registered.AccountID, totpWindowTestPassword)
+	start, err := totp.StartEnrollment(ctx, registered.AccountID, StepUp{SessionTokenHash: security.HashToken(registered.SessionToken), CurrentPassword: totpWindowTestPassword})
 	if err != nil {
 		t.Fatalf("StartEnrollment: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestCompleteEnrollmentGuessesAreCappedAndBurnThePendingSecret(t *testing.T)
 		t.Fatalf("expected the pending secret burnt and TOTP off, got enabled=%v secret-set=%v", account.TOTPEnabled, account.TOTPSecretEncrypted != "")
 	}
 
-	start, err := totp.StartEnrollment(ctx, accountID, totpWindowTestPassword)
+	start, err := totp.StartEnrollment(ctx, accountID, StepUp{SessionTokenHash: sessionHash, CurrentPassword: totpWindowTestPassword})
 	if err != nil {
 		t.Fatalf("restart enrollment: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestCompleteEnrollmentRefusesASecretReplacedMidVerify(t *testing.T) {
 	totp.now = func() time.Time {
 		if !restarted {
 			restarted = true
-			if _, err := totp.StartEnrollment(ctx, accountID, totpWindowTestPassword); err != nil {
+			if _, err := totp.StartEnrollment(ctx, accountID, StepUp{SessionTokenHash: security.HashToken(sessionToken), CurrentPassword: totpWindowTestPassword}); err != nil {
 				t.Fatalf("concurrent StartEnrollment: %v", err)
 			}
 		}
@@ -232,7 +232,7 @@ func TestCompleteEnrollmentLosesToAConcurrentEnable(t *testing.T) {
 			if err != nil {
 				t.Fatalf("find account: %v", err)
 			}
-			if err := totp.store.EnableTOTPAndRotateRecoveryCode(ctx, accountID, account.TOTPSecretEncrypted, "winner-recovery-hash", ""); err != nil {
+			if err := totp.store.EnableTOTPAndRotateRecoveryCode(ctx, accountID, account.TOTPSecretEncrypted, "winner-recovery-hash", security.HashToken(sessionToken)); err != nil {
 				t.Fatalf("concurrent enable: %v", err)
 			}
 		}

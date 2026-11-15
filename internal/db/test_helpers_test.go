@@ -74,3 +74,26 @@ func dropTable(t *testing.T, dbPath string, table string) {
 		t.Fatalf("drop table %s: %v", table, err)
 	}
 }
+
+// failDeletesOn makes every row delete on one table fail, through a second
+// connection to the same database file, while the table stays readable. It
+// reaches the "delete ... rows" error branches of a transaction that must first
+// read that table (a session lookup), which dropTable would trip earlier.
+func failDeletesOn(t *testing.T, dbPath string, table string) {
+	t.Helper()
+
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw sqlite: %v", err)
+	}
+	defer func() {
+		_ = raw.Close()
+	}()
+
+	if _, err := raw.Exec(`PRAGMA busy_timeout = 5000;`); err != nil {
+		t.Fatalf("configure raw sqlite: %v", err)
+	}
+	if _, err := raw.Exec("CREATE TRIGGER fail_delete_" + table + " BEFORE DELETE ON " + table + " BEGIN SELECT RAISE(ABORT, 'delete refused'); END"); err != nil { // #nosec G202 -- table is a test-fixture constant chosen by the test, never user input
+		t.Fatalf("create delete-failing trigger on %s: %v", table, err)
+	}
+}

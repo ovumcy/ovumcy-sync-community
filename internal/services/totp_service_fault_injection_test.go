@@ -55,7 +55,7 @@ func TestTOTPServiceRejectsWhenNotConfigured(t *testing.T) {
 	unconfigured := NewTOTPService(store, auth, nil, "ovumcy-sync-community-test")
 	ctx := context.Background()
 
-	if _, err := unconfigured.StartEnrollment(ctx, "any-account", "any-password"); err != ErrTOTPNotConfigured {
+	if _, err := unconfigured.StartEnrollment(ctx, "any-account", StepUp{SessionTokenHash: "any-session", CurrentPassword: "any-password"}); err != ErrTOTPNotConfigured {
 		t.Fatalf("StartEnrollment: expected ErrTOTPNotConfigured, got %v", err)
 	}
 	if _, err := unconfigured.CompleteEnrollment(ctx, "any-account", "any-hash", "123456"); err != ErrTOTPNotConfigured {
@@ -79,7 +79,7 @@ func TestTOTPServiceMethodsSurfaceGenericErrorWhenAccountsTableIsDropped(t *test
 	ctx := context.Background()
 	dropTable(t, dbPath, "accounts")
 
-	if _, err := totp.StartEnrollment(ctx, "account-target", "any-password"); err == nil || errors.Is(err, ErrUnauthorized) {
+	if _, err := totp.StartEnrollment(ctx, "account-target", StepUp{SessionTokenHash: "any-session", CurrentPassword: "any-password"}); err == nil || errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("StartEnrollment: expected a store-failure error, not ErrUnauthorized, got %v", err)
 	}
 	if _, err := totp.CompleteEnrollment(ctx, "account-target", "any-hash", "123456"); err == nil || errors.Is(err, ErrUnauthorized) {
@@ -107,7 +107,7 @@ func TestStartEnrollmentSurfacesNewSecretSeamFailure(t *testing.T) {
 	wantErr := errors.New("boom: rand exhausted")
 	totp.newSecret = func() ([]byte, error) { return nil, wantErr }
 
-	if _, err := totp.StartEnrollment(ctx, registered.AccountID, password); !errors.Is(err, wantErr) {
+	if _, err := totp.StartEnrollment(ctx, registered.AccountID, StepUp{SessionTokenHash: security.HashToken(registered.SessionToken), CurrentPassword: password}); !errors.Is(err, wantErr) {
 		t.Fatalf("expected the seam's error to surface unwrapped, got %v", err)
 	}
 }
@@ -140,7 +140,7 @@ func TestStartEnrollmentAndDisableRejectUnknownAccount(t *testing.T) {
 	_, totp, _ := fixedTOTPClock(t)
 	ctx := context.Background()
 
-	if _, err := totp.StartEnrollment(ctx, "missing-account", "any-password"); err != ErrUnauthorized {
+	if _, err := totp.StartEnrollment(ctx, "missing-account", StepUp{SessionTokenHash: "any-session", CurrentPassword: "any-password"}); err != ErrUnauthorized {
 		t.Fatalf("StartEnrollment: expected ErrUnauthorized for an unknown account, got %v", err)
 	}
 	if err := totp.Disable(ctx, "missing-account", "any-password", "123456"); err != ErrUnauthorized {
@@ -165,7 +165,7 @@ func TestCompleteEnrollmentRejectsPreClaimedStepAsReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	start, err := totp.StartEnrollment(ctx, registered.AccountID, password)
+	start, err := totp.StartEnrollment(ctx, registered.AccountID, StepUp{SessionTokenHash: security.HashToken(registered.SessionToken), CurrentPassword: password})
 	if err != nil {
 		t.Fatalf("StartEnrollment: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestCompleteEnrollmentSurfacesSessionRevocationStoreError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	start, err := totp.StartEnrollment(ctx, registered.AccountID, password)
+	start, err := totp.StartEnrollment(ctx, registered.AccountID, StepUp{SessionTokenHash: security.HashToken(registered.SessionToken), CurrentPassword: password})
 	if err != nil {
 		t.Fatalf("StartEnrollment: %v", err)
 	}
@@ -222,7 +222,13 @@ func TestCompleteEnrollmentSurfacesSessionRevocationStoreError(t *testing.T) {
 		t.Fatalf("decode secret: %v", err)
 	}
 
-	dropTable(t, dbPath, "sessions")
+	// A second session gives the enable something to revoke. The enable first
+	// looks the caller's session up, so the delete is made to fail rather than
+	// the table dropped.
+	if _, err := auth.Login(ctx, "owner@example.com", password); err != nil {
+		t.Fatalf("second login: %v", err)
+	}
+	failSessionsDeletes(t, dbPath)
 
 	step := now.UTC().Unix() / security.TOTPStepSeconds
 	code := security.GenerateTOTPCode(secret, step)

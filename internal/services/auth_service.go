@@ -489,7 +489,7 @@ func (s *AuthService) ResetPassword(
 func (s *AuthService) RegenerateRecoveryCode(
 	ctx context.Context,
 	accountID string,
-	currentPassword string,
+	stepUp StepUp,
 	totpCode string,
 ) (string, error) {
 	account, err := s.store.FindAccountByID(ctx, accountID)
@@ -500,7 +500,7 @@ func (s *AuthService) RegenerateRecoveryCode(
 		return "", err
 	}
 
-	if err := security.ComparePasswordHash(account.PasswordHash, currentPassword); err != nil {
+	if err := security.ComparePasswordHash(account.PasswordHash, stepUp.CurrentPassword); err != nil {
 		return "", ErrInvalidCurrentPassword
 	}
 
@@ -518,29 +518,33 @@ func (s *AuthService) RegenerateRecoveryCode(
 		return "", err // codecov:ignore -- crypto-primitive error that cannot occur in practice (see internal/security/password.go's own codecov:ignore annotation on NewRecoveryCode's internal rand.Read).
 	}
 
-	// codecov:ignore:start -- both branches below need the account row or the
+	// ErrSessionRevoked: the caller's session was revoked while the body was
+	// in flight. ErrConflict: the code or the password changed since the read
+	// above (a TOTP enable, a reset, a password change, or a concurrent
+	// regeneration). The first three from another session have revoked this
+	// one; a concurrent regeneration has not, and gets the same 401 — rare,
+	// and never a code landed on credentials that are no longer current.
+	err = s.store.UpdateAccountRecoveryCodeHash(
+		ctx, accountID, stepUp.SessionTokenHash, account.RecoveryCodeHash, account.PasswordHash, recoveryHash,
+	)
+	switch {
+	case err == nil:
+		return plainRecovery, nil
+	case errors.Is(err, db.ErrSessionRevoked):
+		return "", ErrUnauthorized
+	// codecov:ignore:start -- the branches below need the account row or the
 	// accounts table to fail specifically for THIS write, after the
 	// FindAccountByID lookup above has already succeeded against the same
-	// table within this one synchronous call: the ErrNotFound case is a
-	// TOCTOU (same class as the managed_bridge_service.go precedents) and
-	// the generic case needs a fake driver (same same-table-multi-step
-	// limitation as the RowsAffected/COMMIT deviations in
+	// table within this one synchronous call: ErrNotFound and ErrConflict are
+	// TOCTOUs (same class as the managed_bridge_service.go precedents) and the
+	// generic case needs a fake driver (same same-table-multi-step limitation
+	// as the RowsAffected/COMMIT deviations in
 	// internal/db/fault_injection_test.go).
-	//
-	// ErrConflict: the code or the password changed since the read above (a
-	// TOTP enable, a reset, a password change, or a concurrent regeneration).
-	// The first three from another session have revoked this one; a
-	// concurrent regeneration has not, and gets the same 401 — rare, and never
-	// a code landed on credentials that are no longer current.
-	if err := s.store.UpdateAccountRecoveryCodeHash(ctx, accountID, account.RecoveryCodeHash, account.PasswordHash, recoveryHash); err != nil {
-		if errors.Is(err, db.ErrNotFound) || errors.Is(err, db.ErrConflict) {
-			return "", ErrUnauthorized
-		}
-		return "", err
+	case errors.Is(err, db.ErrNotFound), errors.Is(err, db.ErrConflict):
+		return "", ErrUnauthorized
 	}
+	return "", err
 	// codecov:ignore:end
-
-	return plainRecovery, nil
 }
 
 func (s *AuthService) RevokeSession(ctx context.Context, sessionToken string) error {

@@ -195,16 +195,20 @@ func (s *SyncService) ListDevices(ctx context.Context, accountID string) ([]mode
 // RemoveDevice detaches one device from the account so its slot is freed, and
 // revokes every session bound to it (the caller's own included, when it is
 // that device's session). The delete is account-scoped in the query (no IDOR).
-// Returns ErrInvalidDevice for an empty id and ErrDeviceNotFound when the
-// account has no such device.
-func (s *SyncService) RemoveDevice(ctx context.Context, accountID string, deviceID string) error {
+// Returns ErrInvalidDevice for an empty id, ErrDeviceNotFound when the
+// account has no such device, and ErrUnauthorized when the caller's session
+// was revoked before the delete.
+func (s *SyncService) RemoveDevice(ctx context.Context, accountID string, sessionTokenHash string, deviceID string) error {
 	deviceID = strings.TrimSpace(deviceID)
 	if deviceID == "" {
 		return ErrInvalidDevice
 	}
 
-	if err := s.store.DeleteDevice(ctx, accountID, deviceID); err != nil {
-		if errors.Is(err, db.ErrNotFound) {
+	if err := s.store.DeleteDevice(ctx, accountID, sessionTokenHash, deviceID); err != nil {
+		switch {
+		case errors.Is(err, db.ErrSessionRevoked):
+			return ErrUnauthorized
+		case errors.Is(err, db.ErrNotFound):
 			return ErrDeviceNotFound
 		}
 		return err
@@ -213,9 +217,13 @@ func (s *SyncService) RemoveDevice(ctx context.Context, accountID string, device
 	return nil
 }
 
+// PutBlob stores the account's ciphertext while the caller's session still
+// exists: a session revoked while the body was in flight writes nothing
+// (ErrUnauthorized).
 func (s *SyncService) PutBlob(
 	ctx context.Context,
 	accountID string,
+	sessionTokenHash string,
 	input PutBlobInput,
 ) (models.EncryptedBlob, error) {
 	if input.SchemaVersion <= 0 || input.Generation <= 0 || len(input.Ciphertext) == 0 {
@@ -248,10 +256,13 @@ func (s *SyncService) PutBlob(
 	// Atomic CAS in the repository: the WHERE excluded.generation >
 	// encrypted_blobs.generation guard rejects concurrent writers that
 	// passed the same baseline, so we don't read-then-write here.
-	stored, err := s.store.UpsertEncryptedBlob(ctx, blob)
+	stored, err := s.store.UpsertEncryptedBlob(ctx, sessionTokenHash, blob)
 	if err != nil {
-		if errors.Is(err, db.ErrStaleGeneration) {
+		switch {
+		case errors.Is(err, db.ErrStaleGeneration):
 			return models.EncryptedBlob{}, ErrStaleGeneration
+		case errors.Is(err, db.ErrSessionRevoked), errors.Is(err, db.ErrNotFound):
+			return models.EncryptedBlob{}, ErrUnauthorized
 		}
 		return models.EncryptedBlob{}, err
 	}

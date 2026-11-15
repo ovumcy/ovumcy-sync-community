@@ -166,7 +166,7 @@ func TestCompletedEnrollmentClearsASpentWindow(t *testing.T) {
 		}
 	}
 
-	start, err := totp.StartEnrollment(ctx, registered.AccountID, totpWindowTestPassword)
+	start, err := totp.StartEnrollment(ctx, registered.AccountID, StepUp{SessionTokenHash: security.HashToken(registered.SessionToken), CurrentPassword: totpWindowTestPassword})
 	if err != nil {
 		t.Fatalf("StartEnrollment: %v", err)
 	}
@@ -261,19 +261,19 @@ func TestDisableSharesTheAccountTOTPWindow(t *testing.T) {
 func TestRegenerateRecoveryCodeSharesTheAccountTOTPWindow(t *testing.T) {
 	auth, totp, now := fixedTOTPClock(t)
 	ctx := context.Background()
-	accountID, _, secret, _ := enrollTOTP(t, auth, totp, now)
+	accountID, sessionToken, secret, _ := enrollTOTP(t, auth, totp, now)
 
 	later := now.Add(security.TOTPStepSeconds * time.Second)
 	setTOTPClock(auth, totp, later)
 	wrong := wrongTOTPCode(t, secret, later)
 	for range maxTOTPAccountFailedAttempts {
-		if _, err := auth.RegenerateRecoveryCode(ctx, accountID, totpWindowTestPassword, wrong); !errors.Is(err, ErrTOTPInvalidCode) {
+		if _, err := auth.RegenerateRecoveryCode(ctx, accountID, StepUp{SessionTokenHash: security.HashToken(sessionToken), CurrentPassword: totpWindowTestPassword}, wrong); !errors.Is(err, ErrTOTPInvalidCode) {
 			t.Fatalf("expected ErrTOTPInvalidCode, got %v", err)
 		}
 	}
 
 	correct := security.GenerateTOTPCode(secret, later.Unix()/security.TOTPStepSeconds)
-	if _, err := auth.RegenerateRecoveryCode(ctx, accountID, totpWindowTestPassword, correct); !errors.Is(err, ErrTOTPLocked) {
+	if _, err := auth.RegenerateRecoveryCode(ctx, accountID, StepUp{SessionTokenHash: security.HashToken(sessionToken), CurrentPassword: totpWindowTestPassword}, correct); !errors.Is(err, ErrTOTPLocked) {
 		t.Fatalf("expected regeneration to be locked, got %v", err)
 	}
 	if err := totp.Disable(ctx, accountID, totpWindowTestPassword, correct); !errors.Is(err, ErrTOTPLocked) {
@@ -286,21 +286,21 @@ func TestRegenerateRecoveryCodeSharesTheAccountTOTPWindow(t *testing.T) {
 func TestRegenerateRecoveryCodeMissingCodeSpendsNoTOTPAttempt(t *testing.T) {
 	auth, totp, now := fixedTOTPClock(t)
 	ctx := context.Background()
-	accountID, _, secret, _ := enrollTOTP(t, auth, totp, now)
+	accountID, sessionToken, secret, _ := enrollTOTP(t, auth, totp, now)
 
 	later := now.Add(security.TOTPStepSeconds * time.Second)
 	setTOTPClock(auth, totp, later)
 	correct := security.GenerateTOTPCode(secret, later.Unix()/security.TOTPStepSeconds)
 	for range maxTOTPAccountFailedAttempts {
-		if _, err := auth.RegenerateRecoveryCode(ctx, accountID, totpWindowTestPassword, ""); !errors.Is(err, ErrTOTPInvalidCode) {
+		if _, err := auth.RegenerateRecoveryCode(ctx, accountID, StepUp{SessionTokenHash: security.HashToken(sessionToken), CurrentPassword: totpWindowTestPassword}, ""); !errors.Is(err, ErrTOTPInvalidCode) {
 			t.Fatalf("expected ErrTOTPInvalidCode for a missing code, got %v", err)
 		}
-		if _, err := auth.RegenerateRecoveryCode(ctx, accountID, "wrong password entirely", correct); !errors.Is(err, ErrInvalidCurrentPassword) {
+		if _, err := auth.RegenerateRecoveryCode(ctx, accountID, StepUp{SessionTokenHash: security.HashToken(sessionToken), CurrentPassword: "wrong password entirely"}, correct); !errors.Is(err, ErrInvalidCurrentPassword) {
 			t.Fatalf("expected ErrInvalidCurrentPassword, got %v", err)
 		}
 	}
 
-	if _, err := auth.RegenerateRecoveryCode(ctx, accountID, totpWindowTestPassword, correct); err != nil {
+	if _, err := auth.RegenerateRecoveryCode(ctx, accountID, StepUp{SessionTokenHash: security.HashToken(sessionToken), CurrentPassword: totpWindowTestPassword}, correct); err != nil {
 		t.Fatalf("expected the correct code to work after a window of missing codes, got %v", err)
 	}
 }
