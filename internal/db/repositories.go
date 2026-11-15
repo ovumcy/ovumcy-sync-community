@@ -1684,8 +1684,8 @@ func (s *Store) ListDevicesForAccount(ctx context.Context, accountID string) ([]
 // created or refreshed. The bound-device check is the UPDATE ... RETURNING
 // itself, so no concurrent attach can slip between a read and the write; a
 // ceiling rejection rolls the bind back. Scoped by account, so a token hash
-// never binds another account's session; a session that no longer exists binds
-// nothing and the attach still commits.
+// never binds another account's session; a session that no longer exists
+// (revoked while the body was in flight) attaches nothing: ErrSessionRevoked.
 func (s *Store) AttachDeviceForSession(
 	ctx context.Context,
 	device models.Device,
@@ -1712,6 +1712,7 @@ RETURNING device_id`,
 	).Scan(&boundDeviceID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
+		return models.Device{}, ErrSessionRevoked
 	case err != nil:
 		return models.Device{}, fmt.Errorf("bind session to device: %w", err)
 	case boundDeviceID != device.DeviceID:

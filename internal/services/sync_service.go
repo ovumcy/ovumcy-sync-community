@@ -182,6 +182,8 @@ func mapAttachError(device models.Device, err error) (models.Device, error) {
 		return models.Device{}, ErrTooManyDevices
 	case errors.Is(err, db.ErrSessionDeviceBound):
 		return models.Device{}, ErrSessionDeviceBound
+	case errors.Is(err, db.ErrSessionRevoked):
+		return models.Device{}, ErrUnauthorized
 	default:
 		return models.Device{}, err
 	}

@@ -113,8 +113,11 @@ func TestAttachDeviceForSessionIsOneDevicePerSession(t *testing.T) {
 	seedBindingSession(t, store, "acct-a", "a-caller")
 	seedBindingSession(t, store, "acct-b", "b-caller")
 
-	if err := attachForSession(store, "acct-b", "a-session", "device-cross11", 10); err != nil {
-		t.Fatalf("cross-account attach: %v", err)
+	if err := attachForSession(store, "acct-b", "a-session", "device-cross11", 10); !errors.Is(err, ErrSessionRevoked) {
+		t.Fatalf("expected a cross-account attach refused, got %v", err)
+	}
+	if got := deviceCount(t, store, "acct-b"); got != 0 {
+		t.Fatalf("a cross-account attach must create no device, count=%d", got)
 	}
 	if err := attachForSession(store, "acct-a", "a-session", "device-first11", 10); err != nil {
 		t.Fatalf("attach: %v", err)
@@ -129,9 +132,6 @@ func TestAttachDeviceForSessionIsOneDevicePerSession(t *testing.T) {
 		t.Fatalf("a refused attach must not create its device, count=%d", got)
 	}
 
-	if err := store.DeleteDevice(ctx, "acct-b", "b-caller", "device-cross11"); err != nil {
-		t.Fatalf("delete cross-account device: %v", err)
-	}
 	if !sessionExists(t, store, "a-session") {
 		t.Fatal("a cross-account attach must not bind the session")
 	}
@@ -167,17 +167,17 @@ func TestAttachDeviceForSessionCeilingRollsBackTheBind(t *testing.T) {
 	}
 }
 
-// TestAttachDeviceForSessionWithoutASessionStillAttaches: a session revoked
-// before the attach lands binds nothing; the device is still attached.
-func TestAttachDeviceForSessionWithoutASessionStillAttaches(t *testing.T) {
+// TestAttachDeviceForSessionWithoutASessionAttachesNothing: a session revoked
+// before the attach lands (its body arrived late) attaches nothing.
+func TestAttachDeviceForSessionWithoutASessionAttachesNothing(t *testing.T) {
 	store := openTestStore(t)
 	createWindowTestAccount(t, store, "acct-a")
 
-	if err := attachForSession(store, "acct-a", "gone", "device-abcd1234", 10); err != nil {
-		t.Fatalf("attach: %v", err)
+	if err := attachForSession(store, "acct-a", "gone", "device-abcd1234", 10); !errors.Is(err, ErrSessionRevoked) {
+		t.Fatalf("expected ErrSessionRevoked, got %v", err)
 	}
-	if got := deviceCount(t, store, "acct-a"); got != 1 {
-		t.Fatalf("device count=%d, want 1", got)
+	if got := deviceCount(t, store, "acct-a"); got != 0 {
+		t.Fatalf("device count=%d, want 0", got)
 	}
 }
 

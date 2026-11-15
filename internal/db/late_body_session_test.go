@@ -88,6 +88,10 @@ func TestLateBodyWritesNeedTheCallersSession(t *testing.T) {
 			if err := lateBodyWrites(store, "missing-account")[name](ctx, "late-account-live"); !errors.Is(err, ErrNotFound) {
 				t.Fatalf("expected ErrNotFound for a missing account, got %v", err)
 			}
+			seedLateBodyAccount(t, store, "other-account")
+			if err := lateBodyWrites(store, "other-account")[name](ctx, "late-account-live"); !errors.Is(err, ErrSessionRevoked) {
+				t.Fatalf("expected another account's live session not to count, got %v", err)
+			}
 		})
 	}
 }
