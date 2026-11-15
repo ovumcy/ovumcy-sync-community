@@ -681,6 +681,10 @@ func mapTOTPError(writer http.ResponseWriter, err error) {
 		writeError(writer, http.StatusServiceUnavailable, "totp_not_configured")
 	case errors.Is(err, services.ErrTOTPAlreadyEnabled):
 		writeError(writer, http.StatusConflict, "totp_already_enabled")
+	case errors.Is(err, services.ErrTOTPNotEnabled):
+		writeError(writer, http.StatusConflict, "totp_not_enabled")
+	case errors.Is(err, services.ErrTOTPEnrollmentNotStarted):
+		writeError(writer, http.StatusConflict, "totp_enrollment_not_started")
 	case errors.Is(err, services.ErrInvalidCurrentPassword):
 		writeError(writer, http.StatusUnauthorized, "invalid_current_password")
 	case errors.Is(err, services.ErrTOTPInvalidCode):

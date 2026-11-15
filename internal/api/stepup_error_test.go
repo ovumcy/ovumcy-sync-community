@@ -24,6 +24,8 @@ func TestMapTOTPErrorStepUpRefusals(t *testing.T) {
 		{services.ErrTOTPInvalidCode, http.StatusUnauthorized, "totp_invalid_code"},
 		{services.ErrTOTPReplayed, http.StatusUnauthorized, "totp_replayed"},
 		{services.ErrTOTPNotConfigured, http.StatusServiceUnavailable, "totp_not_configured"},
+		{services.ErrTOTPNotEnabled, http.StatusConflict, "totp_not_enabled"},
+		{services.ErrTOTPEnrollmentNotStarted, http.StatusConflict, "totp_enrollment_not_started"},
 		{errors.New("boom"), http.StatusInternalServerError, "internal_error"},
 	} {
 		recorder := httptest.NewRecorder()
