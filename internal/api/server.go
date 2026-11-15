@@ -420,6 +420,9 @@ func (s *Server) handleChangePassword(
 
 	currentSessionTokenHash := security.HashToken(bearerTokenFromRequest(request))
 
+	if !s.allowStepUpAttempt(writer, account.ID) {
+		return
+	}
 	err := s.auth.ChangePassword(
 		request.Context(),
 		account.ID,
@@ -427,6 +430,7 @@ func (s *Server) handleChangePassword(
 		payload.CurrentPassword,
 		payload.NewPassword,
 	)
+	s.settleStepUpAttempt(account.ID, err)
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrInvalidCurrentPassword):
@@ -514,12 +518,16 @@ func (s *Server) handleRegenerateRecoveryCode(
 		return
 	}
 
+	if !s.allowStepUpAttempt(writer, account.ID) {
+		return
+	}
 	recoveryCode, err := s.auth.RegenerateRecoveryCode(
 		request.Context(),
 		account.ID,
 		payload.CurrentPassword,
 		payload.Code,
 	)
+	s.settleStepUpAttempt(account.ID, err)
 	if err != nil {
 		mapTOTPError(writer, err)
 		return
@@ -546,7 +554,11 @@ func (s *Server) handleTOTPEnroll(
 		return
 	}
 
+	if !s.allowStepUpAttempt(writer, account.ID) {
+		return
+	}
 	result, err := s.totp.StartEnrollment(request.Context(), account.ID, payload.CurrentPassword)
+	s.settleStepUpAttempt(account.ID, err)
 	if err != nil {
 		mapTOTPError(writer, err)
 		return
@@ -610,12 +622,17 @@ func (s *Server) handleTOTPDisable(
 		return
 	}
 
-	if err := s.totp.Disable(
+	if !s.allowStepUpAttempt(writer, account.ID) {
+		return
+	}
+	err := s.totp.Disable(
 		request.Context(),
 		account.ID,
 		payload.CurrentPassword,
 		payload.Code,
-	); err != nil {
+	)
+	s.settleStepUpAttempt(account.ID, err)
+	if err != nil {
 		mapTOTPError(writer, err)
 		return
 	}
@@ -722,7 +739,11 @@ func (s *Server) handleDeleteAccount(
 	if !decodeJSON(writer, request, &payload, 4<<10) {
 		return
 	}
+	if !s.allowStepUpAttempt(writer, account.ID) {
+		return
+	}
 	err := s.auth.DeleteAccount(request.Context(), account.ID, stepUpFromRequest(request, payload.CurrentPassword))
+	s.settleStepUpAttempt(account.ID, err)
 	if err != nil {
 		writeStepUpError(writer, err)
 		return
@@ -735,6 +756,29 @@ func stepUpFromRequest(request *http.Request, currentPassword string) services.S
 	return services.StepUp{
 		SessionTokenHash: security.HashToken(bearerTokenFromRequest(request)),
 		CurrentPassword:  currentPassword,
+	}
+}
+
+// stepUpFailureKey names the one bucket every current-password check of an
+// account draws on. Each step-up route also has its own per-route bucket, so
+// without this one a session holder could try AUTH_RATE_LIMIT_COUNT passwords
+// per window on every step-up route; with it the account gets that many wrong
+// passwords per window across all of them.
+func stepUpFailureKey(accountID string) string {
+	return "stepup:" + accountID
+}
+
+// allowStepUpAttempt charges the account's step-up bucket before the
+// current-password check; settleStepUpAttempt keeps the charge only when the
+// password was wrong, so correct passwords and unrelated refusals never
+// exhaust it.
+func (s *Server) allowStepUpAttempt(writer http.ResponseWriter, accountID string) bool {
+	return allowUnderLimiter(s.authLimiter, writer, stepUpFailureKey(accountID))
+}
+
+func (s *Server) settleStepUpAttempt(accountID string, err error) {
+	if !errors.Is(err, services.ErrInvalidCurrentPassword) {
+		s.authLimiter.Refund(stepUpFailureKey(accountID))
 	}
 }
 
@@ -1022,6 +1066,9 @@ func (s *Server) handlePutRecoveryKey(
 	if !decodeJSON(writer, request, &payload, 8<<10) {
 		return
 	}
+	if !s.allowStepUpAttempt(writer, account.ID) {
+		return
+	}
 	recoveryKeyPackage, err := s.sync.PutRecoveryKeyPackage(
 		request.Context(),
 		account.ID,
@@ -1035,6 +1082,7 @@ func (s *Server) handlePutRecoveryKey(
 			PhraseFingerprintHex: payload.PhraseFingerprintHex,
 		},
 	)
+	s.settleStepUpAttempt(account.ID, err)
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrInvalidRecoveryPackage):
