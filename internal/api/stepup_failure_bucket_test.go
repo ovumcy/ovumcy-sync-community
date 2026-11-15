@@ -73,7 +73,7 @@ func TestStepUpBucketKeepsOnlyWrongPasswords(t *testing.T) {
 	// A refusal that is not a wrong password, and a correct password, leave
 	// the bucket as they found it.
 	performJSONRequest(t, handler, right["disable"].method, right["disable"].path, right["disable"].body,
-		token, http.StatusServiceUnavailable)
+		token, http.StatusConflict)
 	performJSONRequest(t, handler, right["regen"].method, right["regen"].path, right["regen"].body,
 		token, http.StatusOK)
 
