@@ -117,15 +117,12 @@ func TestReLoginCannotResetTheSignInTOTPBudget(t *testing.T) {
 }
 
 // TestSignInTOTPBudgetIsKeyedByClientAndAccount: a spent account bucket locks
-// every client out of that account's sign-in step, and a spent client bucket
-// locks that client out of every account; the window ending opens both.
+// every client out of that account's sign-in step, a client's success on
+// another account forgives nothing spent against this one, and the window
+// ending opens both.
 func TestSignInTOTPBudgetIsKeyedByClientAndAccount(t *testing.T) {
 	auth, totp, now := fixedTOTPClock(t)
 	accountID, _, secret, _ := enrollTOTP(t, auth, totp, now)
-	other, err := auth.Register(context.Background(), "other@example.com", totpWindowTestPassword)
-	if err != nil {
-		t.Fatalf("register other: %v", err)
-	}
 
 	start := now.Add(security.TOTPStepSeconds * time.Second)
 	setTOTPClock(auth, totp, start)
@@ -135,11 +132,14 @@ func TestSignInTOTPBudgetIsKeyedByClientAndAccount(t *testing.T) {
 	if _, err := totp.VerifyChallenge(fromClient("198.51.100.9"), freshChallengeID(t, totp, accountID), wrong); !errors.Is(err, ErrTOTPLocked) {
 		t.Fatalf("another client against the spent account: expected ErrTOTPLocked, got %v", err)
 	}
-	if _, _, ok := totp.attempts.reserve([]string{
-		string(totpPurposeSignIn) + ":client:203.0.113.7",
-		string(totpPurposeSignIn) + ":account:" + other.AccountID,
-	}, start); ok {
-		t.Fatal("the spent client must be refused against another account too")
+	ownBudget := totp.budget(fromClient("203.0.113.7"), totpPurposeSignIn, "attacker-own-account")
+	ownReservation, err := ownBudget.reserve(start)
+	if err != nil {
+		t.Fatalf("the client's own account must have its own budget: %v", err)
+	}
+	ownBudget.succeedSignIn(ownReservation)
+	if _, err := totp.budget(fromClient("203.0.113.7"), totpPurposeSignIn, accountID).reserve(start); !errors.Is(err, ErrTOTPLocked) {
+		t.Fatalf("a success on another account forgave this account's failures: %v", err)
 	}
 
 	almost := start.Add(TOTPAttemptWindow - time.Second)

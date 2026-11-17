@@ -48,18 +48,13 @@ func clientKeyFrom(ctx context.Context) string {
 	return key
 }
 
-// totpBudgetKeys names the two buckets an attempt of purpose draws. The
-// sign-in client bucket is the address alone, as the password limiter's is: it
-// caps one address across every account it holds a password for. The
-// in-session client buckets carry the account, so accounts sharing an address
-// never draw each other's budget.
+// totpBudgetKeys names the two buckets an attempt of purpose draws. The client
+// bucket carries the account: accounts sharing an address never draw each
+// other's budget, and a success on one account (which clears its client
+// bucket) cannot forgive failures the same address spent against another.
 func totpBudgetKeys(purpose totpPurpose, clientKey string, accountID string) (client string, account string) {
-	if purpose == totpPurposeSignIn {
-		client = string(purpose) + ":client:" + clientKey
-	} else {
-		client = string(purpose) + ":client:" + accountID + ":" + clientKey
-	}
-	return client, string(purpose) + ":account:" + accountID
+	return string(purpose) + ":client:" + accountID + ":" + clientKey,
+		string(purpose) + ":account:" + accountID
 }
 
 // totpAttemptSweepInterval bounds the map the same way the HTTP limiter's
