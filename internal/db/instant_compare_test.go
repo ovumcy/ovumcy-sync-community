@@ -191,6 +191,15 @@ func TestTextInstantCompareDetector(t *testing.T) {
 		`ORDER BY device_id, d.last_seen_at LIMIT ?`,
 		`ORDER BY julianday(lapsed_at), created_at LIMIT ?`,
 		`WHERE note <> '--' AND expires_at < ?`,
+		`WHERE julianday(COALESCE(lapsed_at, created_at)) <= ?`,
+		`WHERE ? > julianday(COALESCE(lapsed_at, created_at))`,
+		`WHERE COALESCE(lapsed_at, created_at) < julianday(?)`,
+		`WHERE julianday(expires_at) + 1 > ?`,
+		`ORDER BY COALESCE(lapsed_at, created_at) LIMIT ?`,
+		`SELECT MIN(COALESCE(updated_at, created_at)) FROM encrypted_blobs`,
+		"it's\nWHERE expires_at < ?",
+		`WHERE created_at NOT BETWEEN ? AND ?`,
+		`WHERE CAST(expires_at AS REAL) < ?`,
 	} {
 		if len(textInstantCompares(sql)) == 0 {
 			t.Errorf("detector missed a text instant compare: %q", sql)
@@ -208,6 +217,13 @@ func TestTextInstantCompareDetector(t *testing.T) {
 		"-- rows expire when expires_at < now\nSELECT 1",
 		"/* rows where expires_at < now */ SELECT 1",
 		`window_started_unix < ?`,
+		`WHERE julianday(COALESCE(lapsed_at, created_at)) <= julianday(?)`,
+		`ORDER BY julianday(COALESCE(lapsed_at, created_at)), id`,
+		`WHERE julianday(expires_at) - julianday(?) > 0`,
+		`WHERE (julianday(?) - julianday(created_at)) * 86400 >= 30.5`,
+		`WHERE julianday(expires_at) + 1 > julianday(?)`,
+		"it's\n-- rows where expires_at < now\nSELECT 1",
+		`WHERE note = 'it''s' /* expires_at < now */ AND julianday(expires_at) > julianday(?)`,
 	} {
 		if matches := textInstantCompares(sql); len(matches) != 0 {
 			t.Errorf("detector flagged %q in %q", matches, sql)
@@ -215,121 +231,333 @@ func TestTextInstantCompareDetector(t *testing.T) {
 	}
 }
 
+type sqlTokenKind int
+
 const (
-	bareInstantColumn = `(?:\w+\.)?\w+_at`
-	sqlOperand        = `(\w+\s*\([^()]*\)|(?:\w+\.)?\w+|\?)`
+	sqlWord sqlTokenKind = iota
+	sqlNumber
+	sqlString
+	sqlParam
+	sqlSymbol
 )
 
+// sqlToken is one lexical unit of a SQL text: a word (keyword, function name
+// or possibly qualified column), a number, a quoted string, a ? parameter or
+// an operator.
+type sqlToken struct {
+	kind sqlTokenKind
+	text string
+}
+
 var (
-	instantCompare     = regexp.MustCompile(sqlOperand + `\s*(?:<=|>=|<|>)\s*` + sqlOperand)
-	instantBetween     = regexp.MustCompile(`(?i)` + sqlOperand + `\s+BETWEEN\s+` + sqlOperand + `\s+AND\s+` + sqlOperand)
-	instantAggregate   = regexp.MustCompile(`(?i)\b(?:MAX|MIN)\s*\(\s*` + bareInstantColumn + `\s*\)`)
-	orderByKeyword     = regexp.MustCompile(`(?i)\bORDER\s+BY\s`)
-	limitKeyword       = regexp.MustCompile(`(?i)^\sLIMIT\b`)
-	orderModifiers     = regexp.MustCompile(`(?i)(?:\s+(?:ASC|DESC|NULLS\s+(?:FIRST|LAST)|COLLATE\s+\w+))+$`)
-	bareInstantOperand = regexp.MustCompile(`^` + bareInstantColumn + `$`)
-	juliandayOperand   = regexp.MustCompile(`(?i)^julianday\s*\(`)
+	instantColumn   = regexp.MustCompile(`^(?:\w+\.)*\w+_at$`)
+	instantCompares = map[string]bool{"<": true, "<=": true, ">": true, ">=": true}
+	// operandBoundaries end a compared operand at nesting depth 0.
+	operandBoundaries = map[string]bool{
+		",": true, ";": true, "=": true, "==": true, "<>": true, "!=": true,
+		"<": true, "<=": true, ">": true, ">=": true,
+		"AND": true, "OR": true, "NOT": true, "WHERE": true, "ON": true, "WHEN": true,
+		"THEN": true, "ELSE": true, "END": true, "CASE": true, "SELECT": true,
+		"SET": true, "FROM": true, "AS": true, "HAVING": true, "BETWEEN": true,
+		"IS": true, "IN": true, "LIKE": true, "GLOB": true, "MATCH": true,
+		"REGEXP": true, "ESCAPE": true, "ORDER": true, "GROUP": true, "BY": true,
+		"LIMIT": true, "OFFSET": true, "RETURNING": true, "VALUES": true,
+		"UNION": true, "INTERSECT": true, "EXCEPT": true, "JOIN": true,
+		"USING": true, "DO": true, "WITH": true,
+	}
+	twoByteOperators = map[string]bool{
+		"<=": true, ">=": true, "<>": true, "!=": true, "==": true, "||": true, "<<": true, ">>": true,
+	}
 )
 
 // textInstantCompares returns each fragment of sql that compares, orders or
-// aggregates a bare *_at column, or compares a julianday() value with one
-// that is not: SQLite sorts every number before every text value.
+// aggregates a *_at column outside julianday(), or compares a julianday()
+// value with one that is neither julianday() nor a number: SQLite sorts every
+// number before every text value.
 func textInstantCompares(sql string) []string {
-	sql = stripSQLComments(sql)
+	tokens := lexSQL(sql)
 	var matches []string
-	for _, match := range instantCompare.FindAllStringSubmatch(sql, -1) {
-		if instantOperandsMismatch(match[1:]...) {
-			matches = append(matches, match[0])
-		}
-	}
-	for _, match := range instantBetween.FindAllStringSubmatch(sql, -1) {
-		if instantOperandsMismatch(match[1:]...) {
-			matches = append(matches, match[0])
-		}
-	}
-	matches = append(matches, instantAggregate.FindAllString(sql, -1)...)
-	for _, term := range orderByTerms(sql) {
-		if term = orderModifiers.ReplaceAllString(strings.TrimSpace(term), ""); bareInstantOperand.MatchString(term) {
-			matches = append(matches, "ORDER BY "+term)
+	for i, token := range tokens {
+		switch {
+		case token.kind == sqlSymbol && instantCompares[token.text]:
+			left, right := operandBefore(tokens, i), operandAfter(tokens, i+1)
+			if instantOperandsMismatch(left, right) {
+				matches = append(matches, joinSQL(tokens[i-len(left):i+1+len(right)]))
+			}
+		case isSQLKeyword(token, "BETWEEN"):
+			leftEnd := i
+			if i > 0 && isSQLKeyword(tokens[i-1], "NOT") {
+				leftEnd--
+			}
+			left, low := operandBefore(tokens, leftEnd), operandAfter(tokens, i+1)
+			and := i + 1 + len(low)
+			if and >= len(tokens) || !isSQLKeyword(tokens[and], "AND") {
+				continue
+			}
+			high := operandAfter(tokens, and+1)
+			if instantOperandsMismatch(left, low, high) {
+				matches = append(matches, joinSQL(tokens[leftEnd-len(left):and+1+len(high)]))
+			}
+		case (isSQLKeyword(token, "MAX") || isSQLKeyword(token, "MIN")) && isSQLCall(tokens, i):
+			call := tokens[i : closingParen(tokens, i+1)+1]
+			if hasBareInstant(call[2:]) {
+				matches = append(matches, joinSQL(call))
+			}
+		case isSQLKeyword(token, "ORDER") && i+1 < len(tokens) && isSQLKeyword(tokens[i+1], "BY"):
+			for _, term := range orderByTerms(tokens[i+2:]) {
+				if hasBareInstant(term) {
+					matches = append(matches, "ORDER BY "+joinSQL(term))
+				}
+			}
 		}
 	}
 	return matches
 }
 
-func instantOperandsMismatch(operands ...string) bool {
-	wrapped := 0
+func instantOperandsMismatch(operands ...[]sqlToken) bool {
+	julian, text := 0, 0
 	for _, operand := range operands {
-		if bareInstantOperand.MatchString(operand) {
+		switch {
+		case len(operand) == 0:
+		case hasBareInstant(operand):
+			return true
+		case hasJuliandayCall(operand):
+			julian++
+		case isNumericLiteral(operand):
+		default:
+			text++
+		}
+	}
+	return julian > 0 && text > 0
+}
+
+// hasBareInstant reports a *_at column that no julianday() call wraps.
+func hasBareInstant(tokens []sqlToken) bool {
+	for i := 0; i < len(tokens); i++ {
+		if tokens[i].kind != sqlWord {
+			continue
+		}
+		if isSQLCall(tokens, i) {
+			if isSQLKeyword(tokens[i], "julianday") {
+				i = closingParen(tokens, i+1)
+			}
+			continue
+		}
+		if instantColumn.MatchString(tokens[i].text) {
 			return true
 		}
-		if juliandayOperand.MatchString(operand) {
-			wrapped++
-		}
 	}
-	return wrapped > 0 && wrapped < len(operands)
+	return false
 }
 
-// orderByTerms splits each ORDER BY list at its top-level commas, ending it at
-// a closing parenthesis, a semicolon or LIMIT.
-func orderByTerms(sql string) []string {
-	var terms []string
-	for _, keyword := range orderByKeyword.FindAllStringIndex(sql, -1) {
-		depth, start, i := 0, keyword[1], keyword[1]
-	scan:
-		for ; i < len(sql); i++ {
-			switch sql[i] {
-			case '(':
-				depth++
-			case ')':
-				if depth == 0 {
-					break scan
-				}
-				depth--
-			case ',':
-				if depth == 0 {
-					terms = append(terms, sql[start:i])
-					start = i + 1
-				}
-			case ';':
-				if depth == 0 {
-					break scan
-				}
-			default:
-				if depth == 0 && limitKeyword.MatchString(sql[i:]) {
-					break scan
-				}
+func hasJuliandayCall(tokens []sqlToken) bool {
+	for i := range tokens {
+		if isSQLKeyword(tokens[i], "julianday") && isSQLCall(tokens, i) {
+			return true
+		}
+	}
+	return false
+}
+
+func isNumericLiteral(tokens []sqlToken) bool {
+	if len(tokens) == 2 && (tokens[0].text == "-" || tokens[0].text == "+") {
+		tokens = tokens[1:]
+	}
+	return len(tokens) == 1 && tokens[0].kind == sqlNumber
+}
+
+// operandBefore returns the expression that ends just before tokens[end].
+func operandBefore(tokens []sqlToken, end int) []sqlToken {
+	depth, start := 0, end
+	for ; start > 0; start-- {
+		token := tokens[start-1]
+		if token.text == ")" {
+			depth++
+		} else if token.text == "(" {
+			if depth == 0 {
+				break
+			}
+			depth--
+		} else if depth == 0 && isOperandBoundary(token) {
+			break
+		}
+	}
+	return tokens[start:end]
+}
+
+// operandAfter returns the expression that starts at tokens[start].
+func operandAfter(tokens []sqlToken, start int) []sqlToken {
+	depth, end := 0, start
+	for ; end < len(tokens); end++ {
+		token := tokens[end]
+		if token.text == "(" {
+			depth++
+		} else if token.text == ")" {
+			if depth == 0 {
+				break
+			}
+			depth--
+		} else if depth == 0 && isOperandBoundary(token) {
+			break
+		}
+	}
+	return tokens[start:end]
+}
+
+// orderByTerms splits the ORDER BY list that tokens open at its top-level
+// commas, ending it at a closing parenthesis, a semicolon, LIMIT or OFFSET.
+func orderByTerms(tokens []sqlToken) [][]sqlToken {
+	var terms [][]sqlToken
+	depth, start, i := 0, 0, 0
+scan:
+	for ; i < len(tokens); i++ {
+		switch token := tokens[i]; {
+		case token.text == "(":
+			depth++
+		case token.text == ")":
+			if depth == 0 {
+				break scan
+			}
+			depth--
+		case depth > 0:
+		case token.text == ",":
+			terms = append(terms, tokens[start:i])
+			start = i + 1
+		case token.text == ";", isSQLKeyword(token, "LIMIT"), isSQLKeyword(token, "OFFSET"):
+			break scan
+		}
+	}
+	return append(terms, tokens[start:i])
+}
+
+// closingParen returns the index of the parenthesis that closes
+// tokens[open], or the last index when it is never closed.
+func closingParen(tokens []sqlToken, open int) int {
+	depth := 0
+	for i := open; i < len(tokens); i++ {
+		switch tokens[i].text {
+		case "(":
+			depth++
+		case ")":
+			if depth--; depth == 0 {
+				return i
 			}
 		}
-		terms = append(terms, sql[start:i])
 	}
-	return terms
+	return len(tokens) - 1
 }
 
-// stripSQLComments drops -- and /* */ comments outside single-quoted strings.
-func stripSQLComments(sql string) string {
-	var out strings.Builder
-	quoted := false
-	for i := 0; i < len(sql); i++ {
+func isSQLCall(tokens []sqlToken, i int) bool {
+	return tokens[i].kind == sqlWord && i+1 < len(tokens) && tokens[i+1].text == "("
+}
+
+func isSQLKeyword(token sqlToken, keyword string) bool {
+	return token.kind == sqlWord && strings.EqualFold(token.text, keyword)
+}
+
+func isOperandBoundary(token sqlToken) bool {
+	switch token.kind {
+	case sqlSymbol:
+		return operandBoundaries[token.text]
+	case sqlWord:
+		return operandBoundaries[strings.ToUpper(token.text)]
+	}
+	return false
+}
+
+func joinSQL(tokens []sqlToken) string {
+	texts := make([]string, len(tokens))
+	for i, token := range tokens {
+		texts[i] = token.text
+	}
+	return strings.Join(texts, " ")
+}
+
+// lexSQL splits sql into tokens and drops -- and /* */ comments. A quote with
+// no closing partner (an apostrophe in a non-SQL literal) opens no string.
+func lexSQL(sql string) []sqlToken {
+	var tokens []sqlToken
+	for i := 0; i < len(sql); {
+		c := sql[i]
 		switch {
-		case sql[i] == '\'':
-			quoted = !quoted
-		case quoted:
+		case c == ' ' || c == '\t' || c == '\n' || c == '\r':
+			i++
 		case strings.HasPrefix(sql[i:], "--"):
 			end := strings.IndexByte(sql[i:], '\n')
 			if end < 0 {
-				return out.String()
+				return tokens
 			}
 			i += end
 		case strings.HasPrefix(sql[i:], "/*"):
 			end := strings.Index(sql[i+2:], "*/")
 			if end < 0 {
-				return out.String()
+				return tokens
 			}
-			i += 2 + end + 1
-			out.WriteByte(' ')
+			i += 2 + end + 2
+		case c == '\'' || c == '"' || c == '`':
+			end := closingQuote(sql, i)
+			switch {
+			case end < 0:
+				tokens = append(tokens, sqlToken{sqlSymbol, string(c)})
+				i++
+				continue
+			case c == '\'':
+				tokens = append(tokens, sqlToken{sqlString, sql[i : end+1]})
+			default:
+				tokens = append(tokens, sqlToken{sqlWord, sql[i+1 : end]})
+			}
+			i = end + 1
+		case c == '?':
+			end := i + 1
+			for end < len(sql) && isDigitByte(sql[end]) {
+				end++
+			}
+			tokens = append(tokens, sqlToken{sqlParam, sql[i:end]})
+			i = end
+		case isWordByte(c) || (c == '.' && i+1 < len(sql) && isDigitByte(sql[i+1])):
+			end := i
+			for end < len(sql) && (isWordByte(sql[end]) || sql[end] == '.') {
+				end++
+			}
+			kind := sqlWord
+			if isDigitByte(c) || c == '.' {
+				kind = sqlNumber
+			}
+			tokens = append(tokens, sqlToken{kind, sql[i:end]})
+			i = end
+		default:
+			width := 1
+			if i+1 < len(sql) && twoByteOperators[sql[i:i+2]] {
+				width = 2
+			}
+			tokens = append(tokens, sqlToken{sqlSymbol, sql[i : i+width]})
+			i += width
+		}
+	}
+	return tokens
+}
+
+// closingQuote returns the index of the quote that closes sql[open], reading
+// a doubled quote as an escaped one, or -1 when none does.
+func closingQuote(sql string, open int) int {
+	quote := sql[open]
+	for i := open + 1; i < len(sql); i++ {
+		if sql[i] != quote {
 			continue
 		}
-		out.WriteByte(sql[i])
+		if i+1 < len(sql) && sql[i+1] == quote {
+			i++
+			continue
+		}
+		return i
 	}
-	return out.String()
+	return -1
+}
+
+func isDigitByte(c byte) bool {
+	return c >= '0' && c <= '9'
+}
+
+func isWordByte(c byte) bool {
+	return c == '_' || isDigitByte(c) || (c|0x20 >= 'a' && c|0x20 <= 'z')
 }
