@@ -467,7 +467,7 @@ const (
 // drift that keep the erased-rows contract legible without relying on cascade
 // alone. TestAccountChildTablesCoverEveryAccountKeyedTable fails when a table
 // keyed by account_id is missing here.
-var accountChildTables = []string{
+var accountChildTables = [...]string{
 	"sessions",
 	"devices",
 	"encrypted_blobs",
