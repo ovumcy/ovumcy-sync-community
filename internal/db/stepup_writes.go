@@ -101,7 +101,7 @@ func (s *Store) DeleteAccountForSession(
 	if err := requireStepUpState(ctx, tx, accountID, verifiedHash, sessionTokenHash); err != nil {
 		return err
 	}
-	if err := deleteAccountRows(ctx, tx, accountID); err != nil {
+	if err := deleteAccountRows(ctx, tx, accountID, deleteAnyAccountSQL); err != nil {
 		return err
 	}
 
