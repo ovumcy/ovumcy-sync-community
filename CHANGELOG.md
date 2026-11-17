@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The expired-rows sweep scanned whole tables on every batch.** Each batch of the sessions, password-reset-token and TOTP-challenge sweep re-ran an unindexed `julianday(expires_at)` lookup, so a backlog of N rows cost about N/limit full scans per run while holding the database's single connection. Migration `0012` adds an index on that exact expression to each of the three tables, and the sweep now finds its batch through it. The index is built once when `migrate` runs; on a large database that step takes a little longer.
+
 - **`docker compose stop` could kill the server mid-drain.** The server waits up to 10 s for in-flight requests and then stops its sweeps, which is exactly Docker's default stop grace. The bundled compose file now sets `stop_grace_period: 30s`, and a drain that times out is logged rather than dropped silently. If you run the image another way, give it at least 30 s between SIGTERM and SIGKILL.
 
 - **The server's `/tmp` had no size limit.** It is a RAM-backed tmpfs, and an uncapped one may grow to half the host's memory if SQLite spills a large temporary file there. The bundled compose file now caps it at 64 MiB, so a runaway spill fails that statement with `SQLITE_FULL` instead of using up host memory. Normal operation uses a small fraction of that.
