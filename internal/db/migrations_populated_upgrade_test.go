@@ -13,8 +13,9 @@ import (
 
 // TestMigratingAPopulatedFirstReleaseDatabaseKeepsEveryRow seeds the 0001
 // schema with rows shaped as the first release wrote them (the blob's
-// created_at as SQLite CURRENT_TIMESTAMP text), applies every later migration
-// over the populated tables, and reads and writes them back through the Store.
+// created_at as SQLite CURRENT_TIMESTAMP text), steps to 0005 to seed the
+// tables 0002-0005 create, applies every later migration over the populated
+// tables, and reads and writes them back through the Store.
 func TestMigratingAPopulatedFirstReleaseDatabaseKeepsEveryRow(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(filepath.Join(t.TempDir(), "first-release.db"))
@@ -51,6 +52,43 @@ func TestMigratingAPopulatedFirstReleaseDatabaseKeepsEveryRow(t *testing.T) {
 	} {
 		if _, err := store.db.ExecContext(ctx, statement.sql, statement.args...); err != nil {
 			t.Fatalf("seed first-release database: %v", err)
+		}
+	}
+
+	// Stop at 0005 and seed the tables whose rows a later ALTER must carry:
+	// 0006 adds totp_challenges.failed_attempts, 0007 adds
+	// password_reset_tokens.consumed_at.
+	for _, version := range []string{
+		"0002_recovery_key_packages.sql",
+		"0003_managed_account_fields.sql",
+		"0004_recovery_codes_and_reset_tokens.sql",
+		"0005_totp.sql",
+	} {
+		body, err := migrationFiles.ReadFile("migrations/" + version)
+		if err != nil {
+			t.Fatalf("read %s: %v", version, err)
+		}
+		if _, err := store.db.ExecContext(ctx, string(body)); err != nil {
+			t.Fatalf("apply %s: %v", version, err)
+		}
+		if _, err := store.db.ExecContext(ctx,
+			`INSERT INTO schema_migrations (version, applied_at) VALUES (?, CURRENT_TIMESTAMP)`, version); err != nil {
+			t.Fatalf("record %s: %v", version, err)
+		}
+	}
+	for _, statement := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO recovery_key_packages (account_id, algorithm, kdf, mnemonic_word_count, wrap_nonce_hex, wrapped_master_key_hex, phrase_fingerprint_hex, updated_at) VALUES (?, 'v5-algorithm', 'v5-kdf', 24, 'aa', 'bb', 'cc', ?)`,
+			[]any{"v1-account", stamp}},
+		{`INSERT INTO password_reset_tokens (account_id, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?)`,
+			[]any{"v1-account", "v5-reset-hash", stamp, expires.Format(time.RFC3339Nano)}},
+		{`INSERT INTO totp_challenges (challenge_id_hash, account_id, created_at, expires_at) VALUES (?, ?, ?, ?)`,
+			[]any{"v5-challenge-hash", "v1-account", stamp, expires.Format(time.RFC3339Nano)}},
+	} {
+		if _, err := store.db.ExecContext(ctx, statement.sql, statement.args...); err != nil {
+			t.Fatalf("seed 0005 database: %v", err)
 		}
 	}
 
@@ -98,6 +136,30 @@ func TestMigratingAPopulatedFirstReleaseDatabaseKeepsEveryRow(t *testing.T) {
 		t.Fatalf("migrated blob changed: %#v", blob)
 	}
 
+	recoveryPackage, err := store.GetRecoveryKeyPackage(ctx, "v1-account")
+	if err != nil {
+		t.Fatalf("get migrated recovery key package: %v", err)
+	}
+	if recoveryPackage.Algorithm != "v5-algorithm" || recoveryPackage.MnemonicWordCount != 24 ||
+		!recoveryPackage.UpdatedAt.Equal(created) {
+		t.Fatalf("migrated recovery key package changed: %#v", recoveryPackage)
+	}
+
+	if attempts, err := store.IncrementTOTPChallengeFailedAttempts(ctx, "v5-challenge-hash"); err != nil || attempts != 1 {
+		t.Fatalf("expected the migrated challenge's first failure counted as 1, got %d, %v", attempts, err)
+	}
+
+	resetToken, err := store.ConsumePasswordResetToken(ctx, "v5-reset-hash", created.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("consume migrated reset token: %v", err)
+	}
+	if resetToken.AccountID != "v1-account" || !resetToken.ExpiresAt.Equal(expires) {
+		t.Fatalf("migrated reset token changed: %#v", resetToken)
+	}
+	if _, err := store.ConsumePasswordResetToken(ctx, "v5-reset-hash", created.Add(time.Hour)); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected the migrated reset token single-use, got %v", err)
+	}
+
 	next := []byte("after-upgrade")
 	if _, err := store.UpsertEncryptedBlob(ctx, "v1-token-hash", models.EncryptedBlob{
 		AccountID:      "v1-account",
@@ -117,7 +179,7 @@ func TestMigratingAPopulatedFirstReleaseDatabaseKeepsEveryRow(t *testing.T) {
 	if _, err := store.FindAccountByID(ctx, "v1-account"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected the migrated account erased, got %v", err)
 	}
-	for _, table := range []string{"sessions", "devices", "encrypted_blobs"} {
+	for _, table := range []string{"sessions", "devices", "encrypted_blobs", "recovery_key_packages", "password_reset_tokens", "totp_challenges"} {
 		var rows int
 		if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&rows); err != nil { // #nosec G202 -- fixed test table names
 			t.Fatalf("count %s: %v", table, err)
