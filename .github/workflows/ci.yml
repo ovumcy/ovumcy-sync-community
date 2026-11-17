@@ -327,6 +327,12 @@ jobs:
           ports=$(echo "$config" | jq '.services["ovumcy-sync-community"].ports // [] | length')
           [ "$ports" = "0" ] || { echo "app still publishes $ports port(s) under the Caddy example"; exit 1; }
 
+      - name: Docker Compose config with Traefik example
+        env:
+          SYNC_HOST: sync.example.com
+          ACME_EMAIL: ops@example.com
+        run: docker compose -f docker-compose.yml -f docs/examples/reverse-proxy/traefik/docker-compose.traefik.yml config --quiet
+
       - name: Caddy example refuses to start without a site address
         run: |
           if err=$(docker compose -f docker-compose.yml -f docker-compose.caddy.yml config 2>&1 >/dev/null); then
