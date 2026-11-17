@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The expired-rows sweep scanned whole tables on every batch.** Each batch of the sessions, password-reset-token and TOTP-challenge sweep re-ran an unindexed `julianday(expires_at)` lookup, so a backlog of N rows cost about N/limit full scans per run while holding the database's single connection. Migration `0012` adds an index on that exact expression to each of the three tables, and the sweep now finds its batch through it. The index is built once when `migrate` runs; on a large database that step takes a little longer.
+
 - **`docker compose stop` could kill the server mid-drain.** The server waits up to 10 s for in-flight requests and then stops its sweeps, which is exactly Docker's default stop grace. The bundled compose file now sets `stop_grace_period: 30s`, and a drain that times out is logged rather than dropped silently. If you run the image another way, give it at least 30 s between SIGTERM and SIGKILL.
 
 - **Rows with an unreadable expiry were never swept.** A session, reset token or TOTP challenge whose stored `expires_at` SQLite cannot read as a date could not be used (its lookup failed), but the expired-rows sweep skipped it, so it stayed in the database forever. The sweep now removes it. The managed-bridge purge also checks `mode = 'managed'` in the delete statement itself, and a new sync blob's `created_at` is written in the same RFC 3339 format as every other timestamp.

@@ -2191,6 +2191,15 @@ func scanRecoveryKeyPackage(
 // in one call.
 const DefaultExpiredRowsSweepLimit = 500
 
+// The expired-rows sweep statements. Their predicate is the exact expression
+// migration 0012 indexes, julianday(expires_at); changing one side without
+// the other turns each batch back into a full scan.
+const (
+	deleteExpiredSessionsSQL            = `DELETE FROM sessions WHERE rowid IN (SELECT rowid FROM sessions WHERE julianday(expires_at) <= julianday(?) OR julianday(expires_at) IS NULL LIMIT ?)`
+	deleteExpiredPasswordResetTokensSQL = `DELETE FROM password_reset_tokens WHERE rowid IN (SELECT rowid FROM password_reset_tokens WHERE julianday(expires_at) <= julianday(?) OR julianday(expires_at) IS NULL LIMIT ?)`
+	deleteExpiredTOTPChallengesSQL      = `DELETE FROM totp_challenges WHERE rowid IN (SELECT rowid FROM totp_challenges WHERE julianday(expires_at) <= julianday(?) OR julianday(expires_at) IS NULL LIMIT ?)`
+)
+
 // DeleteExpiredSessions deletes up to limit sessions whose expires_at is at
 // or before cutoff and reports how many rows were removed. Expiry is already
 // enforced at use time (Authenticate rejects an expired session by the same
@@ -2205,7 +2214,7 @@ func (s *Store) DeleteExpiredSessions(ctx context.Context, cutoff time.Time, lim
 	}
 	result, err := s.db.ExecContext(
 		ctx,
-		`DELETE FROM sessions WHERE rowid IN (SELECT rowid FROM sessions WHERE julianday(expires_at) <= julianday(?) OR julianday(expires_at) IS NULL LIMIT ?)`,
+		deleteExpiredSessionsSQL,
 		cutoff.UTC().Format(time.RFC3339Nano),
 		limit,
 	)
@@ -2229,7 +2238,7 @@ func (s *Store) DeleteExpiredPasswordResetTokens(ctx context.Context, cutoff tim
 	}
 	result, err := s.db.ExecContext(
 		ctx,
-		`DELETE FROM password_reset_tokens WHERE rowid IN (SELECT rowid FROM password_reset_tokens WHERE julianday(expires_at) <= julianday(?) OR julianday(expires_at) IS NULL LIMIT ?)`,
+		deleteExpiredPasswordResetTokensSQL,
 		cutoff.UTC().Format(time.RFC3339Nano),
 		limit,
 	)
@@ -2252,7 +2261,7 @@ func (s *Store) DeleteExpiredTOTPChallenges(ctx context.Context, cutoff time.Tim
 	}
 	result, err := s.db.ExecContext(
 		ctx,
-		`DELETE FROM totp_challenges WHERE rowid IN (SELECT rowid FROM totp_challenges WHERE julianday(expires_at) <= julianday(?) OR julianday(expires_at) IS NULL LIMIT ?)`,
+		deleteExpiredTOTPChallengesSQL,
 		cutoff.UTC().Format(time.RFC3339Nano),
 		limit,
 	)
