@@ -294,30 +294,33 @@ func TestLapsedAccountSweepServiceNeverRelistsASkippedCandidate(t *testing.T) {
 
 // TestLapsedAccountSweepServiceStopsOnCancelledContext proves a shutdown
 // mid-run stops the drain before the next delete instead of failing every
-// remaining candidate, and reports what it already did.
+// remaining candidate, and reports what it already did. limit=1 stops at the
+// next listing; limit=10 stops inside the page, before the next delete.
 func TestLapsedAccountSweepServiceStopsOnCancelledContext(t *testing.T) {
-	store := openTestStore(t)
+	for _, limit := range []int{1, 10} {
+		store := openTestStore(t)
 
-	authService := NewAuthService(store, 24*time.Hour)
-	syncService := NewSyncService(store, SyncOptions{MaxDevices: 5, MaxBlobBytes: 16 << 20})
-	bridgeService := NewManagedBridgeService(store, authService)
-	sweepService := NewLapsedAccountSweepService(store, lapsedSweepGracePeriod)
+		authService := NewAuthService(store, 24*time.Hour)
+		syncService := NewSyncService(store, SyncOptions{MaxDevices: 5, MaxBlobBytes: 16 << 20})
+		bridgeService := NewManagedBridgeService(store, authService)
+		sweepService := NewLapsedAccountSweepService(store, lapsedSweepGracePeriod)
 
-	for i, id := range []string{"managedcancel0001", "managedcancel0002", "managedcancel0003"} {
-		seedLapsedCandidateWithFullData(t, store, authService, syncService, bridgeService, id, time.Duration(90+i)*24*time.Hour)
-	}
+		for i, id := range []string{"managedcancel0001", "managedcancel0002", "managedcancel0003"} {
+			seedLapsedCandidateWithFullData(t, store, authService, syncService, bridgeService, id, time.Duration(90+i)*24*time.Hour)
+		}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	counting := &pageCountingSweepStore{inner: store, listed: map[string]int{}, cancel: cancel}
-	sweepService.store = counting
+		ctx, cancel := context.WithCancel(context.Background())
+		counting := &pageCountingSweepStore{inner: store, listed: map[string]int{}, cancel: cancel}
+		sweepService.store = counting
 
-	result, err := sweepService.Run(ctx, 1, false)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected context.Canceled, got %v", err)
-	}
-	if result.Examined != 1 || result.Deleted != 1 || counting.pages != 1 {
-		t.Fatalf("expected the run to stop after the first candidate, got %#v after %d pages", result, counting.pages)
+		result, err := sweepService.Run(ctx, limit, false)
+		cancel()
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("limit=%d: expected context.Canceled, got %v", limit, err)
+		}
+		if result.Examined != 1 || result.Deleted != 1 || counting.pages != 1 {
+			t.Fatalf("limit=%d: expected the run to stop after the first candidate, got %#v after %d pages", limit, result, counting.pages)
+		}
 	}
 }
 
