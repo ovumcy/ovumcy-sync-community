@@ -44,7 +44,7 @@ pending.
 
 **Fix.** Read the logs. Then, as applicable: fix `/data` permissions (next section), run
 `migrate` for pending migrations, or deploy the build that applied the schema (see
-"schema is ahead" below). If you changed `BIND_ADDR` to another port, the check follows it.
+"schema is ahead" below). If you changed `BIND_ADDR` to another address or port, the check follows it.
 
 ## `permission denied` on `/data`
 
