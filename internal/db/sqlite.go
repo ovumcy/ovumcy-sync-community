@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,6 +33,9 @@ type Store struct {
 const readinessCacheTTL = time.Second
 
 func Open(path string) (*Store, error) {
+	if err := refuseTxLockOverride(path); err != nil {
+		return nil, err
+	}
 	inMemory := isInMemoryPath(path)
 	if !inMemory {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -111,6 +115,22 @@ func sqliteDSN(path string) string {
 		return path + "&" + connectionPragmas
 	}
 	return path + "?" + connectionPragmas
+}
+
+// refuseTxLockOverride rejects a path whose own query sets _txlock: the driver
+// reads the first _txlock in the DSN, so the path's value would win over
+// connectionPragmas' immediate and bring back SQLITE_BUSY_SNAPSHOT.
+func refuseTxLockOverride(path string) error {
+	_, query, found := strings.Cut(path, "?")
+	if !found {
+		return nil
+	}
+	// A query the driver cannot parse fails its own "configure sqlite" check.
+	values, err := url.ParseQuery(query)
+	if err == nil && values.Has("_txlock") {
+		return errors.New("database path must not set _txlock: every transaction takes the write lock at begin")
+	}
+	return nil
 }
 
 func (s *Store) Close() error {

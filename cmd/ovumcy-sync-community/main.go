@@ -65,7 +65,10 @@ func runMigrate(cfg config.Config) error {
 		}
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// No deadline: an index build over a large table may run for minutes, and
+	// a cut-short migration only rolls back to be redone. Each lock wait is
+	// already bounded by busy_timeout; SIGINT/SIGTERM cancel the run.
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if err := store.ApplyMigrations(ctx); err != nil {
 		return fmt.Errorf("apply migrations: %w", err)
