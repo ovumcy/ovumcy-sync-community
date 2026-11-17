@@ -10,7 +10,7 @@ import (
 )
 
 // TestTOTPChallengeLocksTheAccountAcrossLogins drives the SYNC-4 attack over
-// HTTP: logging in again mints a fresh challenge, but the eleventh wrong code
+// HTTP: logging in again mints a fresh challenge, but the sixth wrong code
 // in the window answers 429 `rate_limited` with a Retry-After inside the
 // 15-minute window instead of another retryable 401.
 func TestTOTPChallengeLocksTheAccountAcrossLogins(t *testing.T) {
@@ -44,12 +44,10 @@ func TestTOTPChallengeLocksTheAccountAcrossLogins(t *testing.T) {
 		}
 	}
 
-	for range 2 {
-		challengeID := loginForTOTPChallengeID(t, handler)
-		for range 5 {
-			performJSONRequest(t, handler, http.MethodPost, "/auth/totp/challenge",
-				map[string]string{"challenge_id": challengeID, "code": wrong}, "", http.StatusUnauthorized)
-		}
+	challengeID := loginForTOTPChallengeID(t, handler)
+	for range 5 {
+		performJSONRequest(t, handler, http.MethodPost, "/auth/totp/challenge",
+			map[string]string{"challenge_id": challengeID, "code": wrong}, "", http.StatusUnauthorized)
 	}
 
 	resp := performJSONRequest(t, handler, http.MethodPost, "/auth/totp/challenge",
@@ -65,4 +63,9 @@ func TestTOTPChallengeLocksTheAccountAcrossLogins(t *testing.T) {
 	if err != nil || retryAfter < 1 || retryAfter > int((15*time.Minute).Seconds()) {
 		t.Fatalf("Retry-After = %q, want 1..900 seconds", resp.Header().Get("Retry-After"))
 	}
+
+	// The spent sign-in budget leaves the owner's session its own step-up
+	// budget: a correct code still rotates the recovery code.
+	performJSONRequest(t, handler, http.MethodPost, "/auth/recovery-code/regenerate",
+		map[string]string{"current_password": totpTestPassword, "code": security.GenerateTOTPCode(secret, step+1)}, token, http.StatusOK)
 }

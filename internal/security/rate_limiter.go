@@ -53,50 +53,66 @@ func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
 	}
 }
 
+// Reservation is one slot Reserve granted, bound to the window it was granted
+// in.
+type Reservation struct {
+	key         string
+	windowStart time.Time
+}
+
 func (l *RateLimiter) Allow(key string) bool {
+	_, allowed := l.Reserve(key)
+	return allowed
+}
+
+// Reserve charges one slot to key, like Allow, and returns it so the caller
+// can give it back with Refund when the outcome should not count. Reserving
+// before slow work keeps the ceiling exact under concurrency: parallel
+// requests cannot all pass a check that has not been charged yet.
+func (l *RateLimiter) Reserve(key string) (Reservation, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	now := l.now().UTC()
-	allowed := l.allowLocked(key, now)
+	windowStart, allowed := l.allowLocked(key, now)
 	l.maybeSweepLocked(now)
-	return allowed
+	return Reservation{key: key, windowStart: windowStart}, allowed
 }
 
-func (l *RateLimiter) allowLocked(key string, now time.Time) bool {
+func (l *RateLimiter) allowLocked(key string, now time.Time) (time.Time, bool) {
 	entry, exists := l.entries[key]
 	if !exists || now.Sub(entry.windowStart) >= l.window {
 		l.entries[key] = rateLimitEntry{
 			count:       1,
 			windowStart: now,
 		}
-		return true
+		return now, true
 	}
 
 	if entry.count >= l.limit {
-		return false
+		return entry.windowStart, false
 	}
 
 	entry.count++
 	l.entries[key] = entry
-	return true
+	return entry.windowStart, true
 }
 
-// Refund returns one slot that Allow granted to key in the current window, so
-// a caller can reserve before slow work and give the slot back when the
-// outcome should not count. Reserving first keeps the ceiling exact under
-// concurrency: parallel requests cannot all pass a check that has not been
-// charged yet.
-func (l *RateLimiter) Refund(key string) {
+// Refund returns the slot r holds while its key is still in the window r was
+// granted in. Once that window has rolled over the slot belongs to a window
+// that no longer counts, and returning it would grant the new window an extra
+// one.
+func (l *RateLimiter) Refund(r Reservation) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	entry, exists := l.entries[key]
-	if !exists || entry.count <= 0 || l.now().UTC().Sub(entry.windowStart) >= l.window {
+	entry, exists := l.entries[r.key]
+	if !exists || entry.count <= 0 || !entry.windowStart.Equal(r.windowStart) ||
+		l.now().UTC().Sub(entry.windowStart) >= l.window {
 		return
 	}
 	entry.count--
-	l.entries[key] = entry
+	l.entries[r.key] = entry
 }
 
 // Reset drops key's window, so its next Allow starts a fresh one.

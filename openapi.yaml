@@ -222,7 +222,7 @@ paths:
         Requires the current password and, on a TOTP-enrolled account, a
         current TOTP `code` (the new recovery code can reset the password and
         clear TOTP, so the password alone must not obtain one). The code
-        attempt counts toward the per-account TOTP window. On success the
+        attempt counts toward the step-up TOTP budget. On success the
         recovery code is rotated — the response carries the new one and the
         previous one stops working — every other session for the account is
         revoked (the caller's own session token stays valid), and pending
@@ -375,7 +375,7 @@ paths:
         Requires the current password and, on a TOTP-enrolled account, a
         current TOTP `code` (a reset with the new recovery code clears TOTP,
         so the password alone must not rotate it). The code attempt counts
-        toward the per-account TOTP window. Pending password-reset tokens are
+        toward the step-up TOTP budget. Pending password-reset tokens are
         deleted; existing sessions are left untouched.
       security:
         - sessionBearerAuth: []
@@ -542,11 +542,13 @@ paths:
                   value: { error: totp_already_enabled }
         "429":
           description: |
-            Request rate limit, or the pending secret's verify budget is spent
+            Request rate limit; the enrollment TOTP budget is spent (5 code
+            attempts per 15 minutes per client and per account; retry after
+            `Retry-After`); or the pending secret's lifetime budget is spent
             (10 attempts per pending secret, no window restart). A spent
-            budget discards the pending secret: no wait makes it usable
-            again, so ignore `Retry-After` and restart with
-            `POST /auth/totp/enroll`, which needs the password.
+            lifetime budget discards the pending secret: no wait makes it
+            usable again, so restart with `POST /auth/totp/enroll`, which
+            needs the password.
           headers:
             Retry-After:
               description: Seconds until the caller may retry.
@@ -591,8 +593,8 @@ paths:
         temporarily-borrowed authenticator alone cannot remove 2FA. On
         success, the secret is cleared, and every session and pending
         challenge for the account is revoked/deleted. Code attempts here
-        share the account's failed-TOTP window with `/auth/totp/challenge`
-        (429 `rate_limited` once spent).
+        draw the step-up TOTP budget (429 `rate_limited` once spent), not the
+        sign-in budget of `/auth/totp/challenge`.
       security:
         - sessionBearerAuth: []
       requestBody:
@@ -659,11 +661,15 @@ paths:
         `POST /auth/login` plus a current authenticator code, and issues a
         session on success. Each challenge allows a bounded number of failed
         code attempts before it is burnt and the caller must restart from
-        password login. Code attempts are also capped per account across
-        all challenges (10 per 15-minute window, cleared by a successful
-        verify): past the cap this route answers 429 `rate_limited` with
-        `Retry-After` set to the end of the window, and logging in again
-        does not reset it.
+        password login. Code attempts also draw the sign-in TOTP budget
+        across all challenges: 5 per 15-minute window per client address and
+        per account, refused when either is spent. Past the cap this route
+        answers 429 `rate_limited` with `Retry-After` set to the end of the
+        window, and logging in again does not reset it. A success clears only
+        the caller's client bucket. The sign-in budget is separate from the
+        step-up budget the session-authenticated TOTP routes draw (5 per
+        15 minutes per client and per account, cleared by a success), so a
+        spent sign-in budget does not block the owner's session.
       security: []
       requestBody:
         required: true
@@ -779,7 +785,7 @@ paths:
         the authenticated session — there is no field to name a different
         account. Requires the current password and, on a TOTP-enrolled
         account, a current TOTP `code` (single-use, counted toward the
-        per-account TOTP window; a missing code is not counted), so a stolen
+        step-up TOTP budget; a missing code is not counted), so a stolen
         session alone cannot erase the account. A managed account has no password, so a
         managed session is refused with `403 managed_account_delete_via_bridge`;
         it is erased only through `DELETE /managed/accounts/{account_id}`.
@@ -1210,7 +1216,7 @@ paths:
       description: |
         Detaches a device from the caller's account, freeing a slot. The delete is scoped to the authenticated account in the query, so a caller can only ever remove its own devices. Every session bound to the device is revoked in the same transaction — removing the caller's own device ends the calling session too. Sessions never bound (no `POST /sync/devices` yet) are unaffected.
 
-        On a TOTP-enrolled account removal is a step-up: the body must carry the current password and a current TOTP `code` (password checked first; the code is single-use and counted toward the per-account TOTP window, a missing code is not), so a stolen session alone can neither evict the owner's devices nor spend the TOTP window. On an enrolled account wrong passwords draw on the shared step-up bucket (429 once it is spent). An account without TOTP may omit the body and never touches that bucket.
+        On a TOTP-enrolled account removal is a step-up: the body must carry the current password and a current TOTP `code` (password checked first; the code is single-use and counted toward the step-up TOTP budget, a missing code is not), so a stolen session alone can neither evict the owner's devices nor spend the step-up TOTP budget. On an enrolled account wrong passwords draw on the shared step-up bucket (429 once it is spent). An account without TOTP may omit the body and never touches that bucket.
       security:
         - sessionBearerAuth: []
       parameters:
@@ -1330,7 +1336,7 @@ paths:
         identifiers, fixed word count, hex length checks) — the server never
         derives or sees the unwrapped key. Requires the current password and,
         on a TOTP-enrolled account, a current TOTP `code` (single-use, counted
-        toward the per-account TOTP window; a missing code is not counted), so
+        toward the step-up TOTP budget; a missing code is not counted), so
         a stolen session alone cannot overwrite the owner's recovery path;
         managed accounts (no password) are exempt.
 
