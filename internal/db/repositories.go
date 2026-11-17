@@ -449,6 +449,23 @@ func (s *Store) ChangeAccountPassword(
 // idempotent: a repeat call after a successful delete is a no-op, not an
 // error.
 func (s *Store) DeleteAccount(ctx context.Context, accountID string) error {
+	return s.deleteAccount(ctx, accountID, deleteAnyAccountSQL)
+}
+
+// DeleteManagedAccount is DeleteAccount for the bridge purge: the account row
+// goes only while mode = 'managed', so the bridge credential cannot erase a
+// self-hosted account even if the caller's own mode check is wrong.
+// ErrNotFound when the account is gone or not managed; nothing is erased then.
+func (s *Store) DeleteManagedAccount(ctx context.Context, accountID string) error {
+	return s.deleteAccount(ctx, accountID, deleteManagedAccountSQL)
+}
+
+const (
+	deleteAnyAccountSQL     = `DELETE FROM accounts WHERE id = ?`
+	deleteManagedAccountSQL = `DELETE FROM accounts WHERE id = ? AND mode = 'managed'`
+)
+
+func (s *Store) deleteAccount(ctx context.Context, accountID, accountDelete string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin delete account: %w", err)
@@ -457,7 +474,7 @@ func (s *Store) DeleteAccount(ctx context.Context, accountID string) error {
 		_ = tx.Rollback()
 	}()
 
-	if err := deleteAccountRows(ctx, tx, accountID); err != nil {
+	if err := deleteAccountRows(ctx, tx, accountID, accountDelete); err != nil {
 		return err
 	}
 
@@ -469,8 +486,9 @@ func (s *Store) DeleteAccount(ctx context.Context, accountID string) error {
 }
 
 // deleteAccountRows is DeleteAccount's body, run inside the caller's
-// transaction. ErrNotFound when the account row is already gone.
-func deleteAccountRows(ctx context.Context, tx *sql.Tx, accountID string) error {
+// transaction. ErrNotFound when accountDelete removes no account row; the
+// caller's rollback then restores the child rows.
+func deleteAccountRows(ctx context.Context, tx *sql.Tx, accountID, accountDelete string) error {
 	childTables := []string{
 		"sessions",
 		"devices",
@@ -490,7 +508,7 @@ func deleteAccountRows(ctx context.Context, tx *sql.Tx, accountID string) error 
 		}
 	}
 
-	result, err := tx.ExecContext(ctx, `DELETE FROM accounts WHERE id = ?`, accountID)
+	result, err := tx.ExecContext(ctx, accountDelete, accountID)
 	if err != nil {
 		return fmt.Errorf("delete account row: %w", err) // codecov:ignore -- isolating this specific step needs "accounts" to exist for all 7 child-table deletes above to succeed, then vanish only for this one; dropping "accounts" wholesale instead fails the very first child delete (confirmed empirically: with foreign_keys=ON, SQLite rejects DML against a child table whose FK-referenced table is gone, even though the statement never touches the FK column), same as TestDeleteAccountReturnsErrorAndRollsBackWhenAChildTableIsDropped. Needs a fake driver.
 	}
@@ -1923,7 +1941,7 @@ func (s *Store) UpsertEncryptedBlob(
 		ctx,
 		`
 INSERT INTO encrypted_blobs (account_id, schema_version, generation, checksum_sha256, ciphertext, ciphertext_size, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(account_id) DO UPDATE SET
   schema_version = excluded.schema_version,
   generation = excluded.generation,
@@ -1939,6 +1957,7 @@ WHERE excluded.generation > encrypted_blobs.generation
 		blob.ChecksumSHA256,
 		blob.Ciphertext,
 		blob.CiphertextSize,
+		blob.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		blob.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
@@ -2186,7 +2205,7 @@ func (s *Store) DeleteExpiredSessions(ctx context.Context, cutoff time.Time, lim
 	}
 	result, err := s.db.ExecContext(
 		ctx,
-		`DELETE FROM sessions WHERE rowid IN (SELECT rowid FROM sessions WHERE julianday(expires_at) <= julianday(?) LIMIT ?)`,
+		`DELETE FROM sessions WHERE rowid IN (SELECT rowid FROM sessions WHERE julianday(expires_at) <= julianday(?) OR julianday(expires_at) IS NULL LIMIT ?)`,
 		cutoff.UTC().Format(time.RFC3339Nano),
 		limit,
 	)
@@ -2210,7 +2229,7 @@ func (s *Store) DeleteExpiredPasswordResetTokens(ctx context.Context, cutoff tim
 	}
 	result, err := s.db.ExecContext(
 		ctx,
-		`DELETE FROM password_reset_tokens WHERE rowid IN (SELECT rowid FROM password_reset_tokens WHERE julianday(expires_at) <= julianday(?) LIMIT ?)`,
+		`DELETE FROM password_reset_tokens WHERE rowid IN (SELECT rowid FROM password_reset_tokens WHERE julianday(expires_at) <= julianday(?) OR julianday(expires_at) IS NULL LIMIT ?)`,
 		cutoff.UTC().Format(time.RFC3339Nano),
 		limit,
 	)
@@ -2233,7 +2252,7 @@ func (s *Store) DeleteExpiredTOTPChallenges(ctx context.Context, cutoff time.Tim
 	}
 	result, err := s.db.ExecContext(
 		ctx,
-		`DELETE FROM totp_challenges WHERE rowid IN (SELECT rowid FROM totp_challenges WHERE julianday(expires_at) <= julianday(?) LIMIT ?)`,
+		`DELETE FROM totp_challenges WHERE rowid IN (SELECT rowid FROM totp_challenges WHERE julianday(expires_at) <= julianday(?) OR julianday(expires_at) IS NULL LIMIT ?)`,
 		cutoff.UTC().Format(time.RFC3339Nano),
 		limit,
 	)

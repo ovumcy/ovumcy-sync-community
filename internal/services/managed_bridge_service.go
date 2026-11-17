@@ -124,7 +124,7 @@ func (s *ManagedBridgeService) PurgeManagedAccount(
 		return ErrInvalidManagedAccount
 	}
 
-	if err := s.store.DeleteAccount(ctx, accountID); err != nil {
+	if err := s.store.DeleteManagedAccount(ctx, accountID); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			return nil // codecov:ignore -- TOCTOU race: account deleted between the lookup above and this delete; an idempotent no-op that is not deterministically reachable in-process without a fragile hack (see testing rules), while a store failure lands on the covered return below.
 		}
