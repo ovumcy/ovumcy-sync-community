@@ -37,9 +37,14 @@ func NormalizeLogin(login string) string {
 // that account (the bridge's upsert would collide on the login UNIQUE index).
 const reservedManagedLoginPrefix = "managed:"
 
+// MaxLoginBytes caps a registered login at the longest valid email address.
+// Login and forgot-password do not re-check it, so an account registered
+// before the cap keeps working.
+const MaxLoginBytes = 254
+
 func ValidateLogin(login string) bool {
 	normalized := NormalizeLogin(login)
-	if len(normalized) < 3 {
+	if len(normalized) < 3 || len(normalized) > MaxLoginBytes {
 		return false
 	}
 	if strings.HasPrefix(normalized, reservedManagedLoginPrefix) {

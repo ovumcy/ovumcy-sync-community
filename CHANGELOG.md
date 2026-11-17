@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking for clients: request bodies must be declared `application/json`, and login, device id and label have maximum lengths.** A request with a body and any other (or no) `Content-Type` now answers 415 `unsupported_media_type`, before any rate limiter — a cross-site page could otherwise POST `text/plain` without a CORS preflight and spend a victim's per-IP auth bucket. Requests without a body (logout, a session-only device removal) need no content type. Registration rejects a login over 254 bytes (400 `invalid_registration_input`), and device attach rejects an id over 128 bytes or a label over 64 (400 `invalid_device`). Existing accounts and devices keep working: login and device removal do not re-check the lengths. Client note: send `Content-Type: application/json` on every request that carries a body, and keep device labels to 64 bytes.
+
 ### Fixed
 
 - **Rows with an unreadable expiry were never swept.** A session, reset token or TOTP challenge whose stored `expires_at` SQLite cannot read as a date could not be used (its lookup failed), but the expired-rows sweep skipped it, so it stayed in the database forever. The sweep now removes it. The managed-bridge purge also checks `mode = 'managed'` in the delete statement itself, and a new sync blob's `created_at` is written in the same RFC 3339 format as every other timestamp.

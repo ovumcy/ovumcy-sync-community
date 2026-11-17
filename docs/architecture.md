@@ -65,6 +65,8 @@ is the only place the layers are wired together.
 
 1. `Server.ServeHTTP` sets the baseline hardening headers (`Cache-Control: no-store`, CSP, `X-Frame-Options`,
    `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`) and applies CORS. `OPTIONS` ends here.
+   A request with a body not declared `application/json` ends here too, with `415 unsupported_media_type`,
+   before any rate limiter.
 2. The mux dispatches by method and path; a handler panic is converted to a clean `500 internal_error`
    without logging request content.
 3. Routes that need a session are wrapped in `withAuth`, which resolves the bearer token to an account

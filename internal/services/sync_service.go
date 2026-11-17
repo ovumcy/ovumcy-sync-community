@@ -15,6 +15,13 @@ import (
 )
 
 var ErrInvalidDevice = errors.New("invalid_device")
+
+// MaxDeviceIDBytes and MaxDeviceLabelBytes cap what an attach stores. Removal
+// does not check them, so a device attached before the caps can still go.
+const (
+	MaxDeviceIDBytes    = 128
+	MaxDeviceLabelBytes = 64
+)
 var ErrTooManyDevices = errors.New("too_many_devices")
 var ErrSessionDeviceBound = errors.New("session_device_bound")
 var ErrDeviceNotFound = errors.New("device_not_found")
@@ -170,7 +177,8 @@ func (s *SyncService) AttachDeviceForSession(
 func (s *SyncService) newDeviceRow(accountID, deviceID, deviceLabel string) (models.Device, error) {
 	deviceID = strings.TrimSpace(deviceID)
 	deviceLabel = strings.TrimSpace(deviceLabel)
-	if len(deviceID) < 8 || len(deviceLabel) < 2 {
+	if len(deviceID) < 8 || len(deviceID) > MaxDeviceIDBytes ||
+		len(deviceLabel) < 2 || len(deviceLabel) > MaxDeviceLabelBytes {
 		return models.Device{}, ErrInvalidDevice
 	}
 	now := s.now().UTC()
