@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -31,9 +32,15 @@ func runHealthcheck(bindAddr string, timeout time.Duration) error {
 	if timeout <= 0 {
 		timeout = defaultHealthcheckTimeout
 	}
-	url := "http://" + net.JoinHostPort(healthcheckHost(bindAddr), healthcheckPort(bindAddr)) + healthcheckPath
-	client := &http.Client{Timeout: timeout}
-	resp, err := client.Get(url)
+	// url.URL escapes an IPv6 zone ("fe80::1%eth0") that a concatenated string would leave unparseable.
+	target := url.URL{
+		Scheme: "http",
+		Host:   net.JoinHostPort(healthcheckHost(bindAddr), healthcheckPort(bindAddr)),
+		Path:   healthcheckPath,
+	}
+	// No proxy: HTTP_PROXY exempts loopback only, and the probe must reach the bound address directly.
+	client := &http.Client{Timeout: timeout, Transport: &http.Transport{Proxy: nil}}
+	resp, err := client.Get(target.String())
 	if err != nil {
 		return err
 	}
