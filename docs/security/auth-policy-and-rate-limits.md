@@ -99,7 +99,9 @@ Notes on the table:
 | Item | Value | Source |
 | --- | --- | --- |
 | Password length | at least 12 Unicode runes after trimming whitespace; at most 72 UTF-8 bytes (bcrypt's input ceiling), rejected as weak before a reset token is consumed | `ValidatePassword`, `internal/security/password.go` |
-| Login | lowercased and trimmed, at least 3 characters, the `managed:` prefix is reserved and rejected | `NormalizeLogin`, `ValidateLogin` |
+| Login | lowercased and trimmed, 3 to 254 bytes on registration (`MaxLoginBytes`; login does not re-check it), the `managed:` prefix is reserved and rejected | `NormalizeLogin`, `ValidateLogin` |
+| Device id and label | 8 to 128 bytes and 2 to 64 bytes after trimming on attach (`MaxDeviceIDBytes`, `MaxDeviceLabelBytes`); removal does not re-check them | `SyncService.newDeviceRow` |
+| Request body media type | a request with a body must declare `application/json`, else 415 `unsupported_media_type` before any limiter, so a cross-site `text/plain` POST cannot spend a per-IP bucket | `Server.ServeHTTP` |
 | Password and recovery-code hashing | bcrypt, cost 12 (`PasswordHashCost`); older lower-cost hashes are re-hashed on the next successful login | `internal/security/password.go`, `AuthService.Login` |
 | Session lifetime | `SESSION_TTL`, default 720h; stored as a hash, never in plaintext | `internal/config/config.go`, `AuthService.createSession` |
 | Password-reset token lifetime | 30 minutes, single use (`PasswordResetTokenTTL`) | `internal/services/auth_service.go` |

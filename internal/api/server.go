@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"mime"
 	"net"
 	"net/http"
 	"net/netip"
@@ -189,8 +190,27 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)
 		return
 	}
+	// Ahead of every limiter: a cross-site page can send a text/plain body
+	// without a CORS preflight, and it must not spend the victim's per-IP
+	// buckets. A JSON content type forces the preflight the origin allowlist
+	// refuses.
+	if requestHasBody(request) && !isJSONMediaType(request.Header.Get("Content-Type")) {
+		writeError(writer, http.StatusUnsupportedMediaType, "unsupported_media_type")
+		return
+	}
 	request = request.WithContext(services.WithClientKey(request.Context(), s.clientIPForRateLimit(request)))
 	serveWithPanicRecovery(writer, request, s.mux)
+}
+
+// requestHasBody reports a request that declares a body or an unknown
+// (chunked) length; one that declares none may omit Content-Type.
+func requestHasBody(request *http.Request) bool {
+	return request.ContentLength != 0 && request.Body != nil && request.Body != http.NoBody
+}
+
+func isJSONMediaType(value string) bool {
+	mediaType, _, err := mime.ParseMediaType(value)
+	return err == nil && mediaType == "application/json"
 }
 
 // recoveryWriter tracks whether a response has begun so the panic recovery only

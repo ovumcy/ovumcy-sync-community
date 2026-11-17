@@ -35,7 +35,7 @@ tags:
   - name: auth
     description: Registration, login, password/recovery-code management, TOTP 2FA, and session lifecycle.
   - name: sync
-    description: Device registry, encrypted blob storage, and the wrapped recovery-key package. Authenticated, account- and device-scoped.
+    description: Device registry, encrypted blob storage (one blob per account, shared by its devices), and the wrapped recovery-key package. Authenticated and account-scoped.
   - name: managed-bridge
     description: Machine-to-machine bridge for the separate managed-cloud service. Disabled unless MANAGED_BRIDGE_TOKEN is configured.
 
@@ -160,6 +160,8 @@ paths:
                   value: { error: invalid_registration_input }
                 registrationFailed:
                   value: { error: registration_failed }
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
@@ -199,6 +201,8 @@ paths:
               examples:
                 invalidCredentials:
                   value: { error: invalid_credentials }
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
@@ -268,6 +272,8 @@ paths:
                   value: { error: totp_replayed }
                 unauthorized:
                   value: { error: unauthorized }
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
@@ -313,6 +319,8 @@ paths:
               examples:
                 invalidRecoveryCredentials:
                   value: { error: invalid_recovery_credentials }
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
@@ -361,6 +369,8 @@ paths:
               examples:
                 invalidResetToken:
                   value: { error: invalid_reset_token }
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
@@ -407,6 +417,8 @@ paths:
                   value: { error: totp_replayed }
                 unauthorized:
                   value: { error: unauthorized }
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
@@ -464,6 +476,8 @@ paths:
               examples:
                 alreadyEnabled:
                   value: { error: totp_already_enabled }
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
@@ -540,6 +554,8 @@ paths:
               examples:
                 alreadyEnabled:
                   value: { error: totp_already_enabled }
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           description: |
             Request rate limit; the enrollment TOTP budget is spent (5 code
@@ -628,6 +644,8 @@ paths:
                   value: { error: totp_replayed }
                 unauthorized:
                   value: { error: unauthorized }
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
@@ -699,6 +717,8 @@ paths:
                   value: { error: totp_replayed }
                 unauthorized:
                   value: { error: unauthorized }
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
@@ -841,6 +861,8 @@ paths:
               examples:
                 managedAccountDeleteViaBridge:
                   value: { error: managed_account_delete_via_bridge }
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
@@ -911,6 +933,8 @@ paths:
               examples:
                 unauthorized:
                   value: { error: unauthorized }
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "500":
           $ref: "#/components/responses/InternalError"
         "503":
@@ -1102,6 +1126,8 @@ paths:
               examples:
                 staleEntitlementSignal:
                   value: { error: stale_entitlement_signal }
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "500":
           $ref: "#/components/responses/InternalError"
         "503":
@@ -1181,6 +1207,8 @@ paths:
                   value: { error: session_device_bound }
                 tooManyDevices:
                   value: { error: too_many_devices }
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
@@ -1279,6 +1307,8 @@ paths:
               examples:
                 notFound:
                   value: { error: device_not_found }
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
@@ -1386,6 +1416,8 @@ paths:
                   value: { error: totp_replayed }
         "403":
           $ref: "#/components/responses/SyncDisabled"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
@@ -1483,6 +1515,8 @@ paths:
               examples:
                 staleGeneration:
                   value: { error: stale_generation }
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
@@ -1561,6 +1595,15 @@ components:
           examples:
             internalError:
               value: { error: internal_error }
+    UnsupportedMediaType:
+      description: "The request carries a body that is not declared `Content-Type: application/json` (parameters such as `charset` are allowed). Checked before any rate limiter, so the refused request spends no bucket. A request without a body needs no content type."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            unsupportedMediaType:
+              value: { error: unsupported_media_type }
 
   schemas:
     ErrorResponse:
@@ -1589,7 +1632,8 @@ components:
       properties:
         login:
           type: string
-          description: Normalized (lowercased, trimmed) to at least 3 characters server-side; the `managed:` prefix is reserved and rejected on registration.
+          maxLength: 254
+          description: Normalized (lowercased, trimmed) server-side; on registration it must be 3 to 254 bytes after normalizing (longer → 400 `invalid_registration_input`), and the `managed:` prefix is reserved and rejected. Login does not re-check the length, so an account registered before the cap keeps working.
         password:
           type: string
           format: password
@@ -1891,10 +1935,12 @@ components:
       properties:
         device_id:
           type: string
-          description: Minimum 8 characters after trimming.
+          maxLength: 128
+          description: 8 to 128 bytes after trimming; otherwise 400 `invalid_device`.
         device_label:
           type: string
-          description: Minimum 2 characters after trimming.
+          maxLength: 64
+          description: 2 to 64 bytes after trimming; otherwise 400 `invalid_device`.
       required: [device_id, device_label]
       additionalProperties: false
 

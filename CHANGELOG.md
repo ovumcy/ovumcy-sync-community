@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking for clients: request bodies must be declared `application/json`, and login, device id and label have maximum lengths.** A request with a body and any other (or no) `Content-Type` now answers 415 `unsupported_media_type`, before any rate limiter — a cross-site page could otherwise POST `text/plain` without a CORS preflight and spend a victim's per-IP auth bucket. Requests without a body (logout, a session-only device removal) need no content type. Registration rejects a login over 254 bytes (400 `invalid_registration_input`), and device attach rejects an id over 128 bytes or a label over 64 (400 `invalid_device`). Existing accounts and devices keep working: login and device removal do not re-check the lengths. Client note: send `Content-Type: application/json` on every request that carries a body, and keep device labels to 64 bytes.
+
 ### Fixed
 
 - **A password holder could lock the owner out of every TOTP step-up.** One per-account window of 10 code attempts per 15 minutes served the login challenge and every session-authenticated code check, so whoever held the password could keep it spent through login challenges and block the owner's password change, device removal, TOTP disable, account deletion and recovery-key overwrite. Code attempts now draw three separate budgets — sign-in challenge, enrollment verify, in-session step-up — each 5 per 15 minutes, keyed by client address and by account and refused (429 `rate_limited`, `Retry-After`) when either is spent. A sign-in success clears only the caller's client bucket; an in-session success clears both. Enrollment verify now also draws its own rolling budget beside the per-pending-secret cap. The budgets live in memory and reset on restart.
