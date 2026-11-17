@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -26,6 +27,47 @@ func TestHealthcheckPortExtractsPort(t *testing.T) {
 		if got := healthcheckPort(bindAddr); got != want {
 			t.Fatalf("healthcheckPort(%q) = %q, want %q", bindAddr, got, want)
 		}
+	}
+}
+
+func TestHealthcheckHostFollowsBindAddr(t *testing.T) {
+	cases := map[string]string{
+		"":                 defaultHealthcheckHost,
+		"no-port":          defaultHealthcheckHost,
+		":8080":            defaultHealthcheckHost,
+		"0.0.0.0:8080":     defaultHealthcheckHost,
+		"[::]:8080":        defaultHealthcheckHost,
+		"127.0.0.1:8443":   "127.0.0.1",
+		"10.1.2.3:8080":    "10.1.2.3",
+		"[fd00::5]:8080":   "fd00::5",
+		"sync.local:8080":  "sync.local",
+		" 10.1.2.3:8080  ": "10.1.2.3",
+	}
+	for bindAddr, want := range cases {
+		if got := healthcheckHost(bindAddr); got != want {
+			t.Fatalf("healthcheckHost(%q) = %q, want %q", bindAddr, got, want)
+		}
+	}
+}
+
+// TestRunHealthcheckProbesTheBoundAddress pins that a server bound to one
+// non-loopback address is probed there, not on 127.0.0.1 where it does not
+// listen. The stand-in binds the IPv6 loopback, so a probe that still went
+// to 127.0.0.1 would be refused.
+func TestRunHealthcheckProbesTheBoundAddress(t *testing.T) {
+	listener, err := net.Listen("tcp", "[::1]:0")
+	if err != nil {
+		t.Skipf("IPv6 loopback unavailable: %v", err)
+	}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	server.Listener = listener
+	server.Start()
+	defer server.Close()
+
+	if err := runHealthcheck(listener.Addr().String(), time.Second); err != nil {
+		t.Fatalf("expected the probe to reach the bound address, got %v", err)
 	}
 }
 

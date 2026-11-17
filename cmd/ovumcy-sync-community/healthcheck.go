@@ -9,6 +9,7 @@ import (
 )
 
 const (
+	defaultHealthcheckHost    = "127.0.0.1"
 	defaultHealthcheckPort    = "8080"
 	defaultHealthcheckTimeout = 5 * time.Second
 	healthcheckPath           = "/readyz"
@@ -30,7 +31,7 @@ func runHealthcheck(bindAddr string, timeout time.Duration) error {
 	if timeout <= 0 {
 		timeout = defaultHealthcheckTimeout
 	}
-	url := fmt.Sprintf("http://127.0.0.1:%s%s", healthcheckPort(bindAddr), healthcheckPath)
+	url := "http://" + net.JoinHostPort(healthcheckHost(bindAddr), healthcheckPort(bindAddr)) + healthcheckPath
 	client := &http.Client{Timeout: timeout}
 	resp, err := client.Get(url)
 	if err != nil {
@@ -43,6 +44,26 @@ func runHealthcheck(bindAddr string, timeout time.Duration) error {
 		return fmt.Errorf("healthcheck: unexpected status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// healthcheckHost returns the host the server listens on per BIND_ADDR, or
+// loopback when BIND_ADDR names every interface (":8080", "0.0.0.0:8080",
+// "[::]:8080") or cannot be parsed. A server bound to one address does not
+// answer on 127.0.0.1, so probing loopback there marks a working container
+// unhealthy.
+func healthcheckHost(bindAddr string) string {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(bindAddr))
+	if err != nil {
+		return defaultHealthcheckHost
+	}
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return defaultHealthcheckHost
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
+		return defaultHealthcheckHost
+	}
+	return host
 }
 
 // healthcheckPort extracts the port from a BIND_ADDR value such as ":8080" or

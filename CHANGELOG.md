@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A refunded rate-limit slot could land in the next window.** A slot reserved just before a window ended and refunded after the next one opened lowered the new window's count, granting an extra attempt. A refund now returns the slot only to the window it was reserved in.
 
+- **The container healthcheck ignored the host in `BIND_ADDR`.** The probe always called `127.0.0.1`, so a server bound to one specific address (`BIND_ADDR=10.0.0.5:8080`) was reported unhealthy while it served normally. The probe now calls the address the server listens on, and loopback only when `BIND_ADDR` names every interface (empty host, `0.0.0.0` or `::`).
+
 - **Expiry checks misordered instants within one second.** Stored timestamps are RFC3339Nano, which drops trailing zeros, and SQL compared them as text, so `…:05Z` sorted after `…:05.5Z`. A reset token could still be claimed for up to a second after it expired, and the expired-row and lapsed-account sweeps could skip a row for that second. Every instant compare in SQL now goes through `julianday()`.
 
 - **SIGTERM closed the database under live requests.** `serve` returned as soon as graceful shutdown began, so the database closed while in-flight handlers were still running; a password change or reset caught mid-way could commit its new hash and fail to revoke the old sessions. `serve` now waits for the HTTP drain (up to 10 s) and for the in-process sweeps to stop before closing the database.

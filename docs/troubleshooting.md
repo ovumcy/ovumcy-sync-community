@@ -36,7 +36,8 @@ rate-limit key.
 ## Container is `unhealthy`
 
 **Cause.** The image `HEALTHCHECK` runs `ovumcy-sync-community healthcheck`, which requests
-`http://127.0.0.1:<port>/readyz` (port taken from `BIND_ADDR`, default `8080`) with a 5 s timeout.
+`/readyz` on the address in `BIND_ADDR` (loopback when its host is empty, `0.0.0.0` or `::`;
+default port `8080`) with a 5 s timeout.
 `/readyz` is schema-aware, so unhealthy means the process cannot serve the database it holds:
 the file is unreadable or unwritable, the schema is ahead of this binary, or migrations are
 pending.
