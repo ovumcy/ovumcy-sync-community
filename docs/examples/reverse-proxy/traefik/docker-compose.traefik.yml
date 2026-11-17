@@ -7,7 +7,7 @@
 
 services:
   traefik:
-    image: traefik:v3.6@sha256:31267173a15b4944e797a76ffd9c419707c8d8b32fe5b610f80cd0cfa05f372d
+    image: traefik:v3.7@sha256:b7b1b31e6440de0b1f7c4e0f6cf0a0f3f004866761d30c025fe00c80daaf7d9c
     command:
       # Routes come from a file, not Docker discovery: no Docker socket in a
       # container that faces the internet.
