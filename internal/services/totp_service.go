@@ -274,12 +274,15 @@ func (s *TOTPService) CompleteEnrollment(
 	}
 	now := s.now().UTC()
 	budget := s.budget(ctx, totpPurposeEnroll, accountID)
-	if _, err := budget.reserve(now); err != nil {
+	reservation, err := budget.reserve(now)
+	if err != nil {
 		s.observeEnrollmentCompletion("locked")
 		return "", err
 	}
 	reserved, _, err := s.store.ReserveTOTPAttempt(ctx, accountID, now, pendingEnrollmentAttemptWindow, maxPendingEnrollmentAttempts)
 	if err != nil {
+		// No code was checked: a store failure is not the caller's attempt.
+		budget.limiter.refund(reservation)
 		return "", err
 	}
 	if !reserved {
