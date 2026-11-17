@@ -86,7 +86,8 @@ type Config struct {
 	// restart, with no new image.
 	ExpiredRowsSweepInterval time.Duration
 	// ExpiredRowsSweepLimit, from EXPIRED_ROWS_SWEEP_LIMIT (default 0 = the
-	// store's own default page size), caps rows deleted per table per run.
+	// store's own default page size), caps rows per delete statement; a run
+	// repeats the statement per table until the backlog is drained.
 	ExpiredRowsSweepLimit int
 	// HTTPReadTimeout / HTTPWriteTimeout bound a single HTTP request's full
 	// read and write windows (HTTP_READ_TIMEOUT, default 10s;

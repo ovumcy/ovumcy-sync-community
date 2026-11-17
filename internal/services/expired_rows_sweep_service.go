@@ -52,9 +52,9 @@ type ExpiredRowsSweepService struct {
 	now   func() time.Time
 }
 
-// NewExpiredRowsSweepService wires the service over the store. The per-run
+// NewExpiredRowsSweepService wires the service over the store. The per-batch
 // row cap comes from the caller (config.Config.ExpiredRowsSweepLimit,
-// EXPIRED_ROWS_SWEEP_LIMIT; non-positive = the store's own default).
+// EXPIRED_ROWS_SWEEP_LIMIT; non-positive = db.DefaultExpiredRowsSweepLimit).
 func NewExpiredRowsSweepService(store *db.Store) *ExpiredRowsSweepService {
 	return &ExpiredRowsSweepService{
 		store: store,
@@ -62,35 +62,63 @@ func NewExpiredRowsSweepService(store *db.Store) *ExpiredRowsSweepService {
 	}
 }
 
-// Run deletes up to limit expired rows per table, cutoff computed once at
-// the start so all three tables see the same clock. Failure policy mirrors
-// LapsedAccountSweepService.Run: each table's delete failing is collected
-// via errors.Join and the remaining tables still run — one uncooperative
-// table must never block cleanup of the others, and nothing about a failed
-// delete changes a row's eligibility for the next scheduled run.
+// Run drains every row that expired at or before one cutoff, computed once
+// at the start so all three tables see the same clock. Each table is deleted
+// in batches of limit rows until a batch comes back short: one bounded
+// statement at a time leaves the single pooled connection free for requests
+// between batches, while a once-a-day tick still clears a backlog instead of
+// shaving one page off it. The drain terminates because the cutoff is fixed
+// and rows are written with a future expiry, so the qualifying set only
+// shrinks.
+//
+// Failure policy mirrors LapsedAccountSweepService.Run: a table's delete
+// failing stops that table's drain and is collected via errors.Join, and the
+// remaining tables still run — one uncooperative table must never block
+// cleanup of the others, and nothing about a failed delete changes a row's
+// eligibility for the next scheduled run. Batches deleted before the failure
+// still count. A cancelled ctx stops each drain between batches.
 func (s *ExpiredRowsSweepService) Run(ctx context.Context, limit int) (ExpiredRowsSweepResult, error) {
+	if limit <= 0 {
+		limit = db.DefaultExpiredRowsSweepLimit
+	}
 	cutoff := s.now().UTC()
 
 	var result ExpiredRowsSweepResult
 	var errs []error
 
-	if deleted, err := s.store.DeleteExpiredSessions(ctx, cutoff, limit); err != nil {
-		errs = append(errs, err)
-	} else {
-		result.Sessions = deleted
-	}
-
-	if deleted, err := s.store.DeleteExpiredPasswordResetTokens(ctx, cutoff, limit); err != nil {
-		errs = append(errs, err)
-	} else {
-		result.ResetTokens = deleted
-	}
-
-	if deleted, err := s.store.DeleteExpiredTOTPChallenges(ctx, cutoff, limit); err != nil {
-		errs = append(errs, err)
-	} else {
-		result.TOTPChallenges = deleted
+	for _, table := range []struct {
+		deleteBatch expiredRowsBatchDelete
+		total       *int64
+	}{
+		{s.store.DeleteExpiredSessions, &result.Sessions},
+		{s.store.DeleteExpiredPasswordResetTokens, &result.ResetTokens},
+		{s.store.DeleteExpiredTOTPChallenges, &result.TOTPChallenges},
+	} {
+		deleted, err := drainExpiredRows(ctx, table.deleteBatch, cutoff, limit)
+		*table.total = deleted
+		if err != nil {
+			errs = append(errs, err)
+		}
 	}
 
 	return result, errors.Join(errs...)
+}
+
+type expiredRowsBatchDelete func(ctx context.Context, cutoff time.Time, limit int) (int64, error)
+
+func drainExpiredRows(ctx context.Context, deleteBatch expiredRowsBatchDelete, cutoff time.Time, limit int) (int64, error) {
+	var total int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return total, err
+		}
+		deleted, err := deleteBatch(ctx, cutoff, limit)
+		if err != nil {
+			return total, err
+		}
+		total += deleted
+		if deleted < int64(limit) {
+			return total, nil
+		}
+	}
 }
