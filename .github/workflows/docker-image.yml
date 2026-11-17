@@ -14,8 +14,9 @@ on:
 permissions:
   contents: read
 
-# Two publish runs for one ref must not interleave their tag writes; queue, never cancel
-# a run that may already have promoted and signed a digest.
+# Two publish runs for one ref must not interleave their tag writes. A running publish is
+# never cancelled; GitHub keeps one pending run per group, so a newer push replaces an
+# older one still waiting.
 concurrency:
   group: docker-image-${{ github.ref }}
   cancel-in-progress: false
@@ -79,6 +80,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Decide whether this ref is a release
+        id: release
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [[ "$REF" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
@@ -91,7 +103,7 @@ jobs:
           flavor: |
             latest=false
           tags: |
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+            type=raw,value=latest,enable=${{ steps.release.outputs.is_release == 'true' }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=ref,event=branch
