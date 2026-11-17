@@ -267,7 +267,7 @@ Operational notes:
 
 This section only applies if you run the managed bridge (`MANAGED_BRIDGE_TOKEN` set). Plain self-hosted/community accounts are entirely unaffected — they can never carry the lapse marker described below.
 
-When a managed account's subscription lapses, the separate managed-auth service calls `POST /managed/accounts/{account_id}/premium` with `{"active": false, "as_of": "<RFC 3339>"}` (`as_of` is optional for a lapse). This server responds by:
+When a managed account's subscription lapses, the separate managed-auth service calls `POST /managed/accounts/{account_id}/premium` with `{"active": false, "as_of": "<RFC 3339>"}`; a signal without `as_of` is refused with `400 invalid_entitlement_signal`. This server responds by:
 
 1. Clearing `premium_active` and recording the lapse timestamp.
 2. Immediately revoking every still-valid session the account holds — no entitlement, no sync, from that moment on. Any session that slips past the revocation is refused on every device, recovery-key and blob route with `403 sync_disabled`.

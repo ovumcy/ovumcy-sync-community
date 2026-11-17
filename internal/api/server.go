@@ -1672,8 +1672,8 @@ type managedSessionRequest struct {
 // /premium body. Active false records an entitlement lapse; true reactivates
 // after one. Active is required: a pointer, so `{}` or `null` is refused
 // rather than read as a lapse. AsOf is the managed service's observation
-// instant (RFC 3339): required for active=true, optional for a lapse; the zero
-// value means omitted.
+// instant (RFC 3339), required for both; the zero value means omitted and is
+// refused.
 type managedAccountPremiumRequest struct {
 	Active *bool     `json:"active"`
 	AsOf   time.Time `json:"as_of"`

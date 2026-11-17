@@ -287,7 +287,7 @@ func TestSetAccountLapseSignalRecordsLapseRevokesSessionsAndReplayIsIdempotent(t
 	firstLapse := time.Now().UTC().Add(-time.Hour)
 	bridgeService.now = func() time.Time { return firstLapse }
 
-	if err := bridgeService.SetAccountLapseSignal(ctx, accountID, false, time.Time{}); err != nil {
+	if err := bridgeService.SetAccountLapseSignal(ctx, accountID, false, firstLapse); err != nil {
 		t.Fatalf("set account lapse signal: %v", err)
 	}
 
@@ -311,7 +311,7 @@ func TestSetAccountLapseSignalRecordsLapseRevokesSessionsAndReplayIsIdempotent(t
 
 	// Replay with a later clock reading: idempotent success, marker unmoved.
 	bridgeService.now = func() time.Time { return firstLapse.Add(2 * time.Hour) }
-	if err := bridgeService.SetAccountLapseSignal(ctx, accountID, false, time.Time{}); err != nil {
+	if err := bridgeService.SetAccountLapseSignal(ctx, accountID, false, firstLapse); err != nil {
 		t.Fatalf("replay set account lapse signal: %v", err)
 	}
 	replayedLapsedAt, err := store.GetAccountLapsedAt(ctx, accountID)
@@ -328,7 +328,7 @@ func TestSetAccountLapseSignalUnknownAccountIsIdempotentNoOp(t *testing.T) {
 	authService := NewAuthService(store, 24*time.Hour)
 	bridgeService := NewManagedBridgeService(store, authService)
 
-	if err := bridgeService.SetAccountLapseSignal(context.Background(), "neverexisted1234", false, time.Time{}); err != nil {
+	if err := bridgeService.SetAccountLapseSignal(context.Background(), "neverexisted1234", false, time.Now().UTC()); err != nil {
 		t.Fatalf("expected lapse signal for a never-existed account to succeed, got %v", err)
 	}
 	if err := bridgeService.SetAccountLapseSignal(context.Background(), "neverexisted1234", true, time.Now().UTC()); err != nil {
@@ -351,7 +351,7 @@ func TestSetAccountLapseSignalRefusesSelfHostedAccount(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	if err := bridgeService.SetAccountLapseSignal(ctx, registered.AccountID, false, time.Time{}); !errors.Is(err, ErrInvalidManagedAccount) {
+	if err := bridgeService.SetAccountLapseSignal(ctx, registered.AccountID, false, time.Now().UTC()); !errors.Is(err, ErrInvalidManagedAccount) {
 		t.Fatalf("expected ErrInvalidManagedAccount for self-hosted account, got %v", err)
 	}
 
@@ -383,7 +383,7 @@ func TestSetAccountLapseSignalActiveTrueRetractsWithoutTouchingSessionsOrPremium
 	if _, err := bridgeService.CreateManagedSession(ctx, accountID); err != nil {
 		t.Fatalf("create managed session: %v", err)
 	}
-	if err := bridgeService.SetAccountLapseSignal(ctx, accountID, false, time.Time{}); err != nil {
+	if err := bridgeService.SetAccountLapseSignal(ctx, accountID, false, time.Now().UTC()); err != nil {
 		t.Fatalf("lapse account: %v", err)
 	}
 	if lapsedAt, err := store.GetAccountLapsedAt(ctx, accountID); err != nil || lapsedAt == nil {
@@ -535,17 +535,6 @@ func TestSetAccountLapseSignalOrdersSignalsByAsOf(t *testing.T) {
 	if _, err := authService.Authenticate(ctx, session.SessionToken); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("expected the tied lapse to revoke the session, got %v", err)
 	}
-
-	// A lapse without as-of is never stale, even behind a newer stored point.
-	if err := bridgeService.SetAccountLapseSignal(ctx, accountID, true, time.Now().UTC().Add(time.Minute)); err != nil {
-		t.Fatalf("reactivate ahead of the server clock: %v", err)
-	}
-	if err := bridgeService.SetAccountLapseSignal(ctx, accountID, false, time.Time{}); err != nil {
-		t.Fatalf("expected a lapse without as-of to apply, got %v", err)
-	}
-	if lapsedAt, err := store.GetAccountLapsedAt(ctx, accountID); err != nil || lapsedAt == nil {
-		t.Fatalf("expected lapse without as-of to be recorded, got %v err=%v", lapsedAt, err)
-	}
 }
 
 func TestSetAccountLapseSignalRejectsInvalidSignal(t *testing.T) {
@@ -565,6 +554,7 @@ func TestSetAccountLapseSignalRejectsInvalidSignal(t *testing.T) {
 		asOf   time.Time
 	}{
 		{"reactivation without as-of", true, time.Time{}},
+		{"lapse without as-of", false, time.Time{}},
 		{"as-of beyond the skew bound", false, time.Now().UTC().Add(maxEntitlementSignalSkew + time.Minute)},
 		{"as-of before the Unix epoch", true, time.Unix(-1, 0)},
 	}
@@ -591,7 +581,7 @@ func TestSetAccountLapseSignalSurfacesAccountLookupStoreError(t *testing.T) {
 		t.Fatalf("close store: %v", err)
 	}
 
-	err := bridgeService.SetAccountLapseSignal(context.Background(), "managedacct1234", false, time.Time{})
+	err := bridgeService.SetAccountLapseSignal(context.Background(), "managedacct1234", false, time.Now().UTC())
 	if err == nil || errors.Is(err, ErrInvalidManagedAccount) {
 		t.Fatalf("expected a store error from the account lookup, got %v", err)
 	}
@@ -617,7 +607,7 @@ func TestSetAccountLapseSignalSurfacesWriteStoreErrors(t *testing.T) {
 
 		failAccountsUpdates(t, dbPath)
 
-		err := bridgeService.SetAccountLapseSignal(ctx, accountID, false, time.Time{})
+		err := bridgeService.SetAccountLapseSignal(ctx, accountID, false, time.Now().UTC())
 		if err == nil || errors.Is(err, ErrInvalidManagedAccount) {
 			t.Fatalf("expected a store error from the lapse write, got %v", err)
 		}
@@ -651,7 +641,7 @@ func TestSetAccountLapseSignalSurfacesWriteStoreErrors(t *testing.T) {
 
 		dropTable(t, dbPath, "sessions")
 
-		err := bridgeService.SetAccountLapseSignal(ctx, accountID, false, time.Time{})
+		err := bridgeService.SetAccountLapseSignal(ctx, accountID, false, time.Now().UTC())
 		if err == nil || errors.Is(err, ErrInvalidManagedAccount) {
 			t.Fatalf("expected a store error from the session revocation, got %v", err)
 		}

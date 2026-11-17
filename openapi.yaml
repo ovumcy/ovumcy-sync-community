@@ -1059,11 +1059,11 @@ paths:
         mint alone never clears a lapse.
 
         Signals are ordered by `as_of`, the managed service's observation
-        instant (RFC 3339). It is required for `active: true` and optional
-        for `active: false`. A reactivation is applied only when its `as_of`
-        is strictly newer than the last applied signal; a lapse is applied
-        unless its `as_of` is strictly older (ties go to the lapse, and a
-        lapse without `as_of` is never stale). A refused signal answers 409
+        instant (RFC 3339). It is required for both values of `active`; a
+        signal without it is refused with 400 `invalid_entitlement_signal`.
+        A reactivation is applied only when its `as_of` is strictly newer
+        than the last applied signal; a lapse is applied unless its `as_of`
+        is strictly older (ties go to the lapse). A refused signal answers 409
         and changes nothing, so a delayed or retried reactivation can never
         undo a newer lapse. An `as_of` more than 5 minutes ahead of this
         server's clock is refused with 400.
@@ -1109,7 +1109,7 @@ paths:
                   summary: active=true
                   value: { status: lapse_cleared }
         "400":
-          description: "account_id fails the managed-account id pattern or names an existing non-managed account, or the signal is invalid (`active` missing or null, `active: true` without `as_of`, or an `as_of` before the Unix epoch or more than 5 minutes ahead of this server's clock)."
+          description: "account_id fails the managed-account id pattern or names an existing non-managed account, or the signal is invalid (`active` missing or null, `as_of` missing, or an `as_of` before the Unix epoch or more than 5 minutes ahead of this server's clock)."
           content:
             application/json:
               schema:
@@ -1902,8 +1902,8 @@ components:
         as_of:
           type: string
           format: date-time
-          description: The managed service's observation instant, used to order signals. Required when active is true; optional for a lapse.
-      required: [active]
+          description: The managed service's observation instant, used to order signals. Required for both a lapse and a reactivation.
+      required: [active, as_of]
       additionalProperties: false
 
     CapabilityDocument:
