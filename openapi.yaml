@@ -901,7 +901,12 @@ paths:
         exchange. A mint never reverses an entitlement lapse: a lapsed
         account answers 409 until a reactivation signal
         (`POST /managed/accounts/{account_id}/premium` with `active: true`)
-        clears the lapse; the next mint then restores `premium_active`.
+        clears the lapse or the account is erased; the next mint then
+        restores `premium_active` (after an erase it creates a new, empty
+        account). A lapse is stored on the account row, so one sent while
+        the account does not exist here is not remembered: the caller must
+        re-send the account's entitlement state after a mint that may have
+        created it. This server cannot enforce that re-send.
       security:
         - managedBridgeAuth: []
       requestBody:
@@ -1078,7 +1083,13 @@ paths:
         untouched. An account this server has never heard of, or one that is
         gone by the time the write runs, is a benign no-op success in either
         direction — the managed caller does not need to know whether this
-        server has ever seen the account.
+        server has ever seen the account. Such a no-op records nothing: a
+        lapse sent while the account does not exist here (before its first
+        `POST /managed/session`, or after it was erased) is not remembered,
+        and the next mint creates the account unlapsed. The success answer
+        does not say whether the signal was recorded, so the caller must
+        re-send the account's current entitlement state after a mint that
+        may have created the account; this server cannot enforce that.
       security:
         - managedBridgeAuth: []
       parameters:
@@ -1096,7 +1107,7 @@ paths:
               $ref: "#/components/schemas/ManagedAccountPremiumRequest"
       responses:
         "200":
-          description: Lapse signal processed (recorded, retracted, or already in that state).
+          description: Lapse signal processed (recorded, retracted, already in that state, or the account does not exist here and nothing was stored).
           content:
             application/json:
               schema:

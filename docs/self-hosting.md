@@ -275,6 +275,8 @@ When a managed account's subscription lapses, the separate managed-auth service 
 
 From then on `POST /managed/session` answers `409 managed_account_lapsed`: a delayed or retried mint can never reverse a lapse. The way back is `{"active": true, "as_of": "<RFC 3339>"}`, accepted only when `as_of` is strictly newer than the lapse; the next mint then restores `premium_active`. A signal older than one already applied answers `409 stale_entitlement_signal` and changes nothing.
 
+A lapse lives on the account row, so it does not outlast the account: a signal for an account this server does not hold (never minted, or already erased) stores nothing, and the next mint creates the account unlapsed. The managed caller must re-send the entitlement state after such a mint; this server cannot enforce that.
+
 The retained data is erased only after `LAPSED_ACCOUNT_GRACE_PERIOD` (default 60 days) has elapsed.
 
 `serve` does this itself, every `LAPSED_ACCOUNT_SWEEP_INTERVAL` (default `24h`), starting ten minutes after boot (or one interval, if shorter), so a server restarted more often than the interval still sweeps. Nothing to schedule: the retention window the paragraph above promises is enforced by the running server, not by an operator remembering to wire a timer. `LAPSED_ACCOUNT_SWEEP_LIMIT` sets the page size a run lists candidates in, and every run pages until it has erased each eligible account (unset uses the store's default page size), and `LAPSED_ACCOUNT_SWEEP_INTERVAL=0` turns the in-process sweep off entirely — which is also the rollback lever, effective on restart with no new image.

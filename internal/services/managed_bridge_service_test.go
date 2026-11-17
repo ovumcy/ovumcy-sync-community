@@ -336,6 +336,80 @@ func TestSetAccountLapseSignalUnknownAccountIsIdempotentNoOp(t *testing.T) {
 	}
 }
 
+// TestLapseForAbsentAccountIsNotRememberedUntilResent pins the documented
+// bridge gap: a lapse for an account absent here (never minted, or erased)
+// records nothing, the next mint creates it unlapsed, and only a lapse
+// re-sent after that mint applies.
+func TestLapseForAbsentAccountIsNotRememberedUntilResent(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		erased  bool
+		account string
+	}{
+		{name: "never minted", account: "lapsedbeforemint1"},
+		{name: "erased", erased: true, account: "lapsedaftererase1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := openTestStore(t)
+			authService := NewAuthService(store, 24*time.Hour)
+			bridgeService := NewManagedBridgeService(store, authService)
+
+			ctx := context.Background()
+			lapseAsOf := time.Now().UTC().Add(-time.Hour)
+
+			if tc.erased {
+				if _, err := bridgeService.CreateManagedSession(ctx, tc.account); err != nil {
+					t.Fatalf("mint before erase: %v", err)
+				}
+				if err := bridgeService.SetAccountLapseSignal(ctx, tc.account, false, lapseAsOf.Add(-time.Hour)); err != nil {
+					t.Fatalf("lapse before erase: %v", err)
+				}
+				if err := bridgeService.PurgeManagedAccount(ctx, tc.account); err != nil {
+					t.Fatalf("erase: %v", err)
+				}
+			}
+
+			if err := bridgeService.SetAccountLapseSignal(ctx, tc.account, false, lapseAsOf); err != nil {
+				t.Fatalf("lapse while absent: %v", err)
+			}
+			minted, err := bridgeService.CreateManagedSession(ctx, tc.account)
+			if err != nil {
+				t.Fatalf("expected the mint to succeed after an unrecorded lapse, got %v", err)
+			}
+			if minted.SessionToken == "" {
+				t.Fatal("expected a session token from the mint")
+			}
+			if lapsedAt, err := store.GetAccountLapsedAt(ctx, tc.account); err != nil || lapsedAt != nil {
+				t.Fatalf("expected no lapse recorded by the signal sent while absent, got %v err=%v", lapsedAt, err)
+			}
+			account, err := store.FindAccountByID(ctx, tc.account)
+			if err != nil {
+				t.Fatalf("find account after mint: %v", err)
+			}
+			if !account.PremiumActive {
+				t.Fatal("expected the mint to create the account with premium_active")
+			}
+
+			if err := bridgeService.SetAccountLapseSignal(ctx, tc.account, false, lapseAsOf); err != nil {
+				t.Fatalf("re-sent lapse after mint: %v", err)
+			}
+			if lapsedAt, err := store.GetAccountLapsedAt(ctx, tc.account); err != nil || lapsedAt == nil {
+				t.Fatalf("expected the re-sent lapse to be recorded, got %v err=%v", lapsedAt, err)
+			}
+			account, err = store.FindAccountByID(ctx, tc.account)
+			if err != nil {
+				t.Fatalf("find account after re-sent lapse: %v", err)
+			}
+			if account.PremiumActive {
+				t.Fatal("expected the re-sent lapse to clear premium_active")
+			}
+			if _, err := authService.Authenticate(ctx, minted.SessionToken); !errors.Is(err, ErrUnauthorized) {
+				t.Fatalf("expected the re-sent lapse to revoke the minted session, got %v", err)
+			}
+		})
+	}
+}
+
 // TestSetAccountLapseSignalRefusesSelfHostedAccount asserts the bridge
 // credential can never mark a self-hosted account lapsed, revoke its
 // sessions, or touch its premium_active flag, even when handed that
