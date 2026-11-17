@@ -578,11 +578,14 @@ func TestApplyEntitlementSignalOrdersAndRevokesInOneTransaction(t *testing.T) {
 		t.Fatalf("expected a retried reactivation to be a no-op success, got %v", err)
 	}
 
-	// A legacy lapse (no AsOf) stamped earlier than the stored point applies
-	// without moving the ordering point back, so the older reactivation that
-	// follows is still stale.
-	if err := store.ApplyEntitlementSignal(ctx, managedID, EntitlementSignal{ReceivedAt: lapseAsOf}); err != nil {
-		t.Fatalf("apply legacy lapse: %v", err)
+	// A lapse observed before the stored point on a reactivated account is
+	// stale and changes nothing, so the older reactivation that follows is
+	// still stale.
+	if err := store.ApplyEntitlementSignal(ctx, managedID, EntitlementSignal{AsOf: lapseAsOf, ReceivedAt: now}); !errors.Is(err, ErrStaleEntitlementSignal) {
+		t.Fatalf("expected a lapse older than the stored point to be stale, got %v", err)
+	}
+	if got, err := store.GetAccountLapsedAt(ctx, managedID); err != nil || got != nil {
+		t.Fatalf("expected the stale lapse to leave lapsed_at cleared, got %v err=%v", got, err)
 	}
 	if err := store.ApplyEntitlementSignal(ctx, managedID, EntitlementSignal{Active: true, AsOf: now.Add(-time.Minute), ReceivedAt: now}); !errors.Is(err, ErrStaleEntitlementSignal) {
 		t.Fatalf("expected a reactivation older than the stored point to be stale, got %v", err)
@@ -603,12 +606,68 @@ func TestApplyEntitlementSignalOrdersAndRevokesInOneTransaction(t *testing.T) {
 	}
 
 	for _, id := range []string{selfHostedID, "missing-account"} {
-		if err := store.ApplyEntitlementSignal(ctx, id, EntitlementSignal{ReceivedAt: now}); !errors.Is(err, ErrNotFound) {
+		if err := store.ApplyEntitlementSignal(ctx, id, EntitlementSignal{AsOf: now, ReceivedAt: now}); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("expected ErrNotFound for %s, got %v", id, err)
 		}
 	}
 	if got, err := store.GetAccountLapsedAt(ctx, selfHostedID); err != nil || got != nil {
 		t.Fatalf("expected the self-hosted account untouched, got %v err=%v", got, err)
+	}
+}
+
+// TestApplyEntitlementSignalRefusesAZeroAsOf pins that the store never orders
+// a signal by its receive time: a lapse or reactivation without AsOf is
+// refused with ErrInvalidEntitlementSignal before anything is read or
+// written, on a live account and on an already lapsed one, and it leaves the
+// sessions, lapsed_at and premium_active as they were.
+func TestApplyEntitlementSignalRefusesAZeroAsOf(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	const liveID = "managed-zero-asof-live"
+	const lapsedID = "managed-zero-asof-lapsed"
+	for _, id := range []string{liveID, lapsedID} {
+		createLapseTestAccount(t, store, id, "managed")
+		if _, err := store.CreateSession(ctx, models.Session{
+			ID:         id + "-session",
+			AccountID:  id,
+			TokenHash:  id + "-token-hash",
+			CreatedAt:  now,
+			LastSeenAt: now,
+			ExpiresAt:  now.Add(24 * time.Hour),
+		}); err != nil {
+			t.Fatalf("create session for %s: %v", id, err)
+		}
+	}
+	lapsedAt := now.Add(-time.Hour)
+	if err := store.SetAccountLapsed(ctx, lapsedID, lapsedAt); err != nil {
+		t.Fatalf("set lapse: %v", err)
+	}
+
+	for _, id := range []string{liveID, lapsedID} {
+		for _, active := range []bool{false, true} {
+			signal := EntitlementSignal{Active: active, ReceivedAt: now}
+			if err := store.ApplyEntitlementSignal(ctx, id, signal); !errors.Is(err, ErrInvalidEntitlementSignal) {
+				t.Fatalf("%s active=%v: expected ErrInvalidEntitlementSignal, got %v", id, active, err)
+			}
+		}
+		if _, err := store.FindSessionByTokenHash(ctx, id+"-token-hash"); err != nil {
+			t.Fatalf("%s: expected the session to survive a refused signal, got %v", id, err)
+		}
+	}
+	if got, err := store.GetAccountLapsedAt(ctx, liveID); err != nil || got != nil {
+		t.Fatalf("expected the live account to stay unlapsed, got %v err=%v", got, err)
+	}
+	if got, err := store.GetAccountLapsedAt(ctx, lapsedID); err != nil || got == nil || !got.Equal(lapsedAt) {
+		t.Fatalf("expected lapsed_at to stay %s, got %v err=%v", lapsedAt, got, err)
+	}
+	account, err := store.FindAccountByID(ctx, liveID)
+	if err != nil {
+		t.Fatalf("find live account: %v", err)
+	}
+	if !account.PremiumActive {
+		t.Fatal("expected premium_active untouched by a refused signal")
 	}
 }
 

@@ -204,14 +204,19 @@ func asOfAfterNow() string {
 }
 
 func TestServerManagedAccountPremiumRejectsInvalidSignal(t *testing.T) {
-	handler := newTestServer(t)
+	store := newTestStore(t, ":memory:")
+	handler := newTestServerWithOptions(t, serverTestOptions{store: store})
 
 	const accountID = "managedacct1234"
-	provisionManagedAccountWithData(t, handler, accountID)
+	session := provisionManagedAccountWithData(t, handler, accountID)
 
 	for _, body := range []map[string]any{
 		{"active": true},
 		{"active": false},
+		{"active": true, "as_of": nil},
+		{"active": false, "as_of": nil},
+		{"active": true, "as_of": "0001-01-01T00:00:00Z"},
+		{"active": false, "as_of": "0001-01-01T00:00:00Z"},
 		{"active": false, "as_of": time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano)},
 	} {
 		response := performJSONRequest(
@@ -227,6 +232,13 @@ func TestServerManagedAccountPremiumRejectsInvalidSignal(t *testing.T) {
 		decodeResponse(t, response.Body.Bytes(), &payload)
 		if payload["error"] != "invalid_entitlement_signal" {
 			t.Fatalf("unexpected payload for %#v: %#v", body, payload)
+		}
+
+		// A refused signal changes nothing: the session survives and no
+		// purge clock starts.
+		performJSONRequest(t, handler, http.MethodGet, "/auth/session", nil, session, http.StatusOK)
+		if lapsedAt, err := store.GetAccountLapsedAt(context.Background(), accountID); err != nil || lapsedAt != nil {
+			t.Fatalf("body %#v: expected lapsed_at to stay empty, got %v err=%v", body, lapsedAt, err)
 		}
 	}
 }

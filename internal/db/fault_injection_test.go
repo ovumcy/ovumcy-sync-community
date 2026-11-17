@@ -1120,10 +1120,10 @@ func TestLapseMarkerMethodsReturnErrorWhenAccountsTableIsDropped(t *testing.T) {
 		t.Fatal("expected error listing lapsed managed account ids after accounts table is dropped")
 	}
 
-	if err := store.ApplyEntitlementSignal(ctx, target.ID, EntitlementSignal{ReceivedAt: time.Now().UTC()}); err == nil {
+	if err := store.ApplyEntitlementSignal(ctx, target.ID, EntitlementSignal{AsOf: time.Now().UTC(), ReceivedAt: time.Now().UTC()}); err == nil {
 		t.Fatal("expected error applying an entitlement signal after accounts table is dropped")
-	} else if errors.Is(err, ErrNotFound) {
-		t.Fatalf("expected a store-failure error, not ErrNotFound, got %v", err)
+	} else if errors.Is(err, ErrNotFound) || errors.Is(err, ErrInvalidEntitlementSignal) {
+		t.Fatalf("expected a store-failure error, not ErrNotFound or a refused signal, got %v", err)
 	}
 }
 
@@ -1160,13 +1160,13 @@ func TestApplyEntitlementSignalSurfacesStoreFailures(t *testing.T) {
 		if err := store.Close(); err != nil {
 			t.Fatalf("close store: %v", err)
 		}
-		if err := store.ApplyEntitlementSignal(ctx, "managed-closed", EntitlementSignal{ReceivedAt: now}); err == nil || errors.Is(err, ErrNotFound) {
+		if err := store.ApplyEntitlementSignal(ctx, "managed-closed", EntitlementSignal{AsOf: now, ReceivedAt: now}); err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, ErrInvalidEntitlementSignal) {
 			t.Fatalf("expected a begin error on a closed store, got %v", err)
 		}
 	})
 
 	for _, signal := range []EntitlementSignal{
-		{ReceivedAt: now},
+		{AsOf: now, ReceivedAt: now},
 		{Active: true, AsOf: now, ReceivedAt: now},
 	} {
 		store, dbPath := newFileBackedTestStore(t)
@@ -1174,7 +1174,7 @@ func TestApplyEntitlementSignalSurfacesStoreFailures(t *testing.T) {
 		createLapseTestAccount(t, store, accountID, "managed")
 		failAccountsUpdates(t, dbPath)
 
-		if err := store.ApplyEntitlementSignal(ctx, accountID, signal); err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, ErrStaleEntitlementSignal) {
+		if err := store.ApplyEntitlementSignal(ctx, accountID, signal); err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, ErrStaleEntitlementSignal) || errors.Is(err, ErrInvalidEntitlementSignal) {
 			t.Fatalf("active=%v: expected an update failure, got %v", signal.Active, err)
 		}
 		if got, err := store.GetAccountLapsedAt(ctx, accountID); err != nil || got != nil {
