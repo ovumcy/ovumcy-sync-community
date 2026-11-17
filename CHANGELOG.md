@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`latest` image tag followed every commit to main.** A self-hoster pulling `latest` could receive forward-only migrations no release had announced, and two publish runs could interleave their tag writes. `latest` now moves only on a `vX.Y.Z` release tag (never a pre-release), releases also get `X.Y.Z` and `X.Y` tags, main builds keep the `main` tag, and publish runs for one ref queue instead of overlapping.
+
 - **A flood of `/readyz` probes could queue every request behind it.** `/readyz` is public and exempt from rate limits, and each probe ran two schema queries on the store's single connection. One readiness answer is now reused for one second, and concurrent probes share the check in flight, so probes cost at most one check per second however fast they arrive. Closing the store drops the cached answer.
 
 - **Expiry checks misordered instants within one second.** Stored timestamps are RFC3339Nano, which drops trailing zeros, and SQL compared them as text, so `…:05Z` sorted after `…:05.5Z`. A reset token could still be claimed for up to a second after it expired, and the expired-row and lapsed-account sweeps could skip a row for that second. Every instant compare in SQL now goes through `julianday()`.

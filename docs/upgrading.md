@@ -15,7 +15,9 @@ symmetric — read "Rollback limits" before you start. Background:
 3. **Read the release notes** for the target version for new or changed environment variables.
 4. **Pin the image by digest.** Resolve the tag you intend to run to its `sha256:` digest and
    reference `ghcr.io/ovumcy/ovumcy-sync-community@sha256:<digest>` in your compose file, so what
-   you verified is what runs.
+   you verified is what runs. Release tags are `X.Y.Z`, `vX.Y.Z`, `X.Y` and `latest`; `latest`
+   and `X.Y` move only when a release is tagged. `main` is the unreleased tip of the main branch
+   and may carry migrations no release has announced: do not run it in production.
 5. **Verify the signature and provenance** of that image as described in "Verifying Release
    Integrity" in [self-hosting.md](self-hosting.md) (cosign v3 or newer; `gh attestation verify`
    for provenance and SBOMs). Do not copy the commands here; that section is the reference.

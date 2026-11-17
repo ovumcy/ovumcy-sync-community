@@ -14,6 +14,12 @@ on:
 permissions:
   contents: read
 
+# Two publish runs for one ref must not interleave their tag writes; queue, never cancel
+# a run that may already have promoted and signed a digest.
+concurrency:
+  group: docker-image-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -78,8 +84,16 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository }}
+          # `latest` moves only on a release tag vX.Y.Z (no pre-release suffix):
+          # a main build may carry forward-only migrations no release has
+          # announced, and a self-hoster on `latest` must not receive them.
+          # main builds keep the `main` tag.
+          flavor: |
+            latest=false
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
             type=ref,event=branch
             type=ref,event=tag
             type=sha
