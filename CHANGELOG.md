@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Optional per-run cap on the lapsed-account sweep, and an abort on repeated delete failures.** `LAPSED_ACCOUNT_SWEEP_MAX_DELETES` (and `purge-lapsed-accounts -max-deletes N`) stops a run after erasing N accounts, so a host clock that jumps past the grace period no longer erases every in-grace lapsed account in one run; a capped run is logged and the CLI prints `lapsed_account_sweep_capped=true`. The default, `0`, stays unbounded. Independently, a run now ends after five delete failures in a row instead of walking every candidate against a faulty database; the candidates stay eligible for the next run.
+
 ### Changed
 
 - **Breaking for clients: request bodies must be declared `application/json`, and login, device id and label have maximum lengths.** A request with a body and any other (or no) `Content-Type` now answers 415 `unsupported_media_type`, before any rate limiter — a cross-site page could otherwise POST `text/plain` without a CORS preflight and spend a victim's per-IP auth bucket. Requests without a body (logout, a session-only device removal) need no content type. Registration rejects a login over 254 bytes (400 `invalid_registration_input`), and device attach rejects an id over 128 bytes or a label over 64 (400 `invalid_device`). Existing accounts still sign in and existing devices can still be removed, because login and removal do not re-check the lengths. Re-attaching a device stored with a longer id or label is refused. Client note: send `Content-Type: application/json` on every request that carries a body, and keep device labels to 64 bytes.

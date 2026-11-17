@@ -20,6 +20,9 @@ type LapsedAccountSweepResult struct {
 	Examined          int
 	Deleted           int
 	DeletedAccountIDs []string
+	// Capped is true when the run stopped at the per-run delete cap with at
+	// least one further candidate left unexamined for the next run.
+	Capped bool
 }
 
 // LapsedAccountSweepService is the sync-side half of the entitlement-lapse
@@ -54,10 +57,24 @@ type lapsedSweepStore interface {
 	DeleteLapsedManagedAccount(ctx context.Context, accountID string, cutoff time.Time) error
 }
 
+// maxConsecutiveLapsedDeleteFailures is how many delete failures in a row
+// (a benign db.ErrNotFound or a success resets the count) end one run: a
+// persistent storage fault — a locked or read-only database — would
+// otherwise make the run walk every remaining candidate, each attempt
+// possibly waiting out the busy timeout. The candidates stay eligible, so the
+// next scheduled run retries them.
+const maxConsecutiveLapsedDeleteFailures = 5
+
+// ErrLapsedSweepAborted is joined into the error Run returns when it stopped
+// after maxConsecutiveLapsedDeleteFailures consecutive delete failures.
+var ErrLapsedSweepAborted = errors.New("lapsed account sweep aborted after repeated delete failures")
+
 type LapsedAccountSweepService struct {
 	store       lapsedSweepStore
 	now         func() time.Time
 	gracePeriod time.Duration
+	// maxDeletes caps the accounts one Run erases; 0 means unbounded.
+	maxDeletes int
 }
 
 // NewLapsedAccountSweepService wires the service over the store and the
@@ -69,6 +86,17 @@ func NewLapsedAccountSweepService(store *db.Store, gracePeriod time.Duration) *L
 		now:         time.Now,
 		gracePeriod: gracePeriod,
 	}
+}
+
+// WithMaxDeletesPerRun sets an optional brake: one Run erases at most n
+// accounts and reports LapsedAccountSweepResult.Capped when more were still
+// eligible. It exists because the drain erases every eligible account per run,
+// so a host clock that jumps past the grace period would otherwise erase every
+// in-grace lapsed account in a single run. n <= 0 (the default) is unbounded.
+// The cap counts deletions only, so a dry run is never capped.
+func (s *LapsedAccountSweepService) WithMaxDeletesPerRun(n int) *LapsedAccountSweepService {
+	s.maxDeletes = max(n, 0)
+	return s
 }
 
 // Run drains every lapsed account eligible at one cutoff: it lists candidates
@@ -102,7 +130,14 @@ func NewLapsedAccountSweepService(store *db.Store, gracePeriod time.Duration) *L
 // continues past it, mirroring PartnerGuestGCService.Run in ovumcy-managed:
 // one uncooperative row must never block cleanup of the rest of the batch,
 // and nothing about a failed delete changes the candidate's eligibility for
-// the next scheduled run.
+// the next scheduled run — until maxConsecutiveLapsedDeleteFailures of them
+// fail in a row, which ends the run with ErrLapsedSweepAborted joined into the
+// error (the failures point at the store, not at one row). The abort adds no
+// account id or other field to any message.
+//
+// With a per-run cap (WithMaxDeletesPerRun) the run stops before the next
+// delete once the cap is reached, with Capped set; the remaining candidates
+// stay eligible for the next run.
 func (s *LapsedAccountSweepService) Run(ctx context.Context, limit int, dryRun bool) (LapsedAccountSweepResult, error) {
 	if limit <= 0 {
 		limit = db.DefaultLapsedAccountSweepLimit
@@ -112,6 +147,7 @@ func (s *LapsedAccountSweepService) Run(ctx context.Context, limit int, dryRun b
 	var result LapsedAccountSweepResult
 	var deleteErrs []error
 	var after db.LapsedCandidate
+	consecutiveFailures := 0
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -126,6 +162,10 @@ func (s *LapsedAccountSweepService) Run(ctx context.Context, limit int, dryRun b
 			if err := ctx.Err(); err != nil {
 				return result, errors.Join(append(deleteErrs, err)...)
 			}
+			if !dryRun && s.maxDeletes > 0 && result.Deleted >= s.maxDeletes {
+				result.Capped = true
+				return result, errors.Join(deleteErrs...)
+			}
 			result.Examined++
 
 			if dryRun {
@@ -134,11 +174,17 @@ func (s *LapsedAccountSweepService) Run(ctx context.Context, limit int, dryRun b
 
 			if err := s.store.DeleteLapsedManagedAccount(ctx, candidate.ID, cutoff); err != nil {
 				if errors.Is(err, db.ErrNotFound) {
+					consecutiveFailures = 0
 					continue
 				}
 				deleteErrs = append(deleteErrs, fmt.Errorf("delete lapsed account: %w", err))
+				consecutiveFailures++
+				if consecutiveFailures >= maxConsecutiveLapsedDeleteFailures {
+					return result, errors.Join(append(deleteErrs, ErrLapsedSweepAborted)...)
+				}
 				continue
 			}
+			consecutiveFailures = 0
 			result.Deleted++
 			result.DeletedAccountIDs = append(result.DeletedAccountIDs, candidate.ID)
 		}

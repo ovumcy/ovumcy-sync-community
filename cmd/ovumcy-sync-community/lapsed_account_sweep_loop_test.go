@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
+	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -95,6 +99,52 @@ func TestLapsedAccountSweepLoopRunsTheSweepForReal(t *testing.T) {
 	}
 	if sweeper.limits[0] != 25 {
 		t.Fatalf("expected the configured limit 25 to reach the sweep, got %d", sweeper.limits[0])
+	}
+}
+
+// lockedBuffer is a log sink the loop's goroutine and the test can share.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// TestLapsedAccountSweepLoopLogsACappedRunWithoutAccountIDs pins that an
+// operator can tell a run stopped at the per-run delete cap from a complete
+// one, and that the stop line names no account id.
+func TestLapsedAccountSweepLoopLogsACappedRunWithoutAccountIDs(t *testing.T) {
+	sink := &lockedBuffer{}
+	log.SetOutput(sink)
+	defer log.SetOutput(os.Stderr)
+
+	sweeper := newRecordingSweeper(services.LapsedAccountSweepResult{
+		Examined: 2,
+		Deleted:  2,
+		Capped:   true,
+	}, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go runLapsedAccountSweepLoop(ctx, sweeper, time.Millisecond, 0)
+
+	// The second run proves the first one's logging has finished.
+	sweeper.waitForRun(t)
+	sweeper.waitForRun(t)
+	cancel()
+
+	if !strings.Contains(sink.String(), "stopped at the per-run delete cap (2 deleted)") {
+		t.Fatalf("expected the capped run to be logged, got %q", sink.String())
 	}
 }
 
