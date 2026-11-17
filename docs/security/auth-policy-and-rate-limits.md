@@ -86,7 +86,9 @@ Notes on the table:
 
 - `GET /healthz`, `GET /readyz`: polled on a fixed interval by the container `HEALTHCHECK` and by uptime
   monitors. A 429 would be reported as an outage and could get a healthy server restarted. Both are
-  cheap.
+  cheap: `/healthz` touches nothing, and `/readyz` reuses one schema check for a second, with
+  concurrent probes sharing the check in flight, so a probe flood cannot hold the single database
+  connection.
 - `GET /metrics`: a scrape endpoint, off unless `METRICS_ENABLED`, always gated by `METRICS_BEARER_TOKEN`
   (startup refuses `METRICS_ENABLED=true` without it).
 - `/managed/*`: unreachable without the operator-held `MANAGED_BRIDGE_TOKEN` (at least 32 bytes,

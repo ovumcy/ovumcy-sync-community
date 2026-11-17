@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A flood of `/readyz` probes could queue every request behind it.** `/readyz` is public and exempt from rate limits, and each probe ran two schema queries on the store's single connection. One readiness answer is now reused for one second, and concurrent probes share the check in flight, so probes cost at most one check per second however fast they arrive. Closing the store drops the cached answer.
+
 - **Expiry checks misordered instants within one second.** Stored timestamps are RFC3339Nano, which drops trailing zeros, and SQL compared them as text, so `…:05Z` sorted after `…:05.5Z`. A reset token could still be claimed for up to a second after it expired, and the expired-row and lapsed-account sweeps could skip a row for that second. Every instant compare in SQL now goes through `julianday()`.
 
 - **SIGTERM closed the database under live requests.** `serve` returned as soon as graceful shutdown began, so the database closed while in-flight handlers were still running; a password change or reset caught mid-way could commit its new hash and fail to revoke the old sessions. `serve` now waits for the HTTP drain (up to 10 s) and for the in-process sweeps to stop before closing the database.
