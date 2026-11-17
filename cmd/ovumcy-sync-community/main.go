@@ -70,6 +70,8 @@ func runMigrate(cfg config.Config) error {
 	// already bounded by busy_timeout; SIGINT/SIGTERM cancel the run.
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	// After the first signal, restore default handling so a second one kills.
+	context.AfterFunc(ctx, cancel)
 	if err := store.ApplyMigrations(ctx); err != nil {
 		return fmt.Errorf("apply migrations: %w", err)
 	}
