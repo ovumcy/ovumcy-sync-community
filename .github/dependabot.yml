@@ -27,6 +27,13 @@ updates:
       interval: "weekly"
     open-pull-requests-limit: 5
 
+  # Images in the compose files and the Traefik example are digest-pinned too.
+  - package-ecosystem: "docker-compose"
+    directories: ["/", "/docs/examples/reverse-proxy/traefik"]
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
   # The ClusterFuzzLite build base is digest-pinned (OpenSSF Scorecard
   # Pinned-Dependencies); keep that pin maintained instead of letting it rot.
   - package-ecosystem: "docker"

@@ -1,11 +1,17 @@
 services:
   init-data-perms:
-    image: busybox:1.36
+    image: busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
     # The app runs as nonroot uid 65532 (distroless); ensure the bind-mounted
     # ./data is writable by it before the app starts. Runs once and exits.
     command: ["sh", "-c", "mkdir -p /data && chown -R 65532:65532 /data"]
     volumes:
       - ./data:/data
+    read_only: true
+    # chown needs CHOWN, and DAC_OVERRIDE to walk a ./data a previous run left
+    # owned by 65532; nothing else.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
     restart: "no"
 
   ovumcy-sync-community:
@@ -43,4 +49,11 @@ services:
       - "127.0.0.1:8080:8080"
     volumes:
       - ./data:/data
+    # The database, its WAL and journal all live under /data; the rest of the
+    # filesystem stays immutable. /tmp covers SQLite temp files.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     restart: unless-stopped
