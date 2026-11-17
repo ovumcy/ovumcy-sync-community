@@ -30,10 +30,18 @@ func TestStoreTransactionsTakeTheWriteLockAtBegin(t *testing.T) {
 	t.Cleanup(func() {
 		_ = other.Close()
 	})
+	// One connection, so a ROLLBACK reaches the BEGIN it undoes.
+	conn, err := other.Conn(ctx)
+	if err != nil {
+		t.Fatalf("second handle connection: %v", err)
+	}
+	defer func() {
+		_ = conn.Close()
+	}()
 
-	_, err = other.ExecContext(ctx, `BEGIN IMMEDIATE`)
+	_, err = conn.ExecContext(ctx, `BEGIN IMMEDIATE`)
 	if err == nil {
-		_, _ = other.ExecContext(ctx, `ROLLBACK`)
+		_, _ = conn.ExecContext(ctx, `ROLLBACK`)
 		t.Fatal("a second writer began while a Store transaction was open: BeginTx did not take the write lock")
 	}
 	if !strings.Contains(strings.ToLower(err.Error()), "busy") && !strings.Contains(strings.ToLower(err.Error()), "locked") {
