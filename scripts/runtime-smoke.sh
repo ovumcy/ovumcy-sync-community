@@ -36,8 +36,11 @@ cleanup() {
 trap cleanup EXIT
 
 docker volume create "${VOLUME_NAME}" >/dev/null
-docker run --rm -v "${VOLUME_NAME}:/data" "${IMAGE}" migrate
-docker run -d --rm --name "${CONTAINER_NAME}" \
+# The same confinement docker-compose.yml applies, so the smoke proves the app
+# runs under it.
+HARDEN=(--read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges:true)
+docker run --rm "${HARDEN[@]}" -v "${VOLUME_NAME}:/data" "${IMAGE}" migrate
+docker run -d --rm --name "${CONTAINER_NAME}" "${HARDEN[@]}" \
   -e "METRICS_ENABLED=${METRICS_ENABLED}" \
   -e "METRICS_BEARER_TOKEN=${METRICS_BEARER_TOKEN}" \
   -e "FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY}" \
