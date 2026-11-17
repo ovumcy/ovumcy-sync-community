@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"go/ast"
@@ -200,6 +201,9 @@ func TestTextInstantCompareDetector(t *testing.T) {
 		"it's\nWHERE expires_at < ?",
 		`WHERE created_at NOT BETWEEN ? AND ?`,
 		`WHERE CAST(expires_at AS REAL) < ?`,
+		`WHERE (SELECT login FROM accounts WHERE julianday(lapsed_at) > julianday(?)) > julianday(?)`,
+		`WHERE julianday(created_at) || '' > julianday(?)`,
+		`SELECT MAX(julianday(created_at, updated_at`,
 	} {
 		if len(textInstantCompares(sql)) == 0 {
 			t.Errorf("detector missed a text instant compare: %q", sql)
@@ -224,6 +228,8 @@ func TestTextInstantCompareDetector(t *testing.T) {
 		`WHERE julianday(expires_at) + 1 > julianday(?)`,
 		"it's\n-- rows where expires_at < now\nSELECT 1",
 		`WHERE note = 'it''s' /* expires_at < now */ AND julianday(expires_at) > julianday(?)`,
+		`WHERE (SELECT MAX(julianday(created_at)) FROM devices WHERE account_id = ?) > julianday(?)`,
+		`SELECT id, ROW_NUMBER() OVER (ORDER BY julianday(created_at) ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM devices`,
 	} {
 		if matches := textInstantCompares(sql); len(matches) != 0 {
 			t.Errorf("detector flagged %q in %q", matches, sql)
@@ -252,10 +258,12 @@ type sqlToken struct {
 var (
 	instantColumn   = regexp.MustCompile(`^(?:\w+\.)*\w+_at$`)
 	instantCompares = map[string]bool{"<": true, "<=": true, ">": true, ">=": true}
-	// operandBoundaries end a compared operand at nesting depth 0.
+	// operandBoundaries, with instantCompares, end a compared operand at
+	// nesting depth 0. ROWS, RANGE and GROUPS keep a window frame's BETWEEN
+	// from reading the ORDER BY key as its operand.
 	operandBoundaries = map[string]bool{
 		",": true, ";": true, "=": true, "==": true, "<>": true, "!=": true,
-		"<": true, "<=": true, ">": true, ">=": true,
+		"ROWS": true, "RANGE": true, "GROUPS": true,
 		"AND": true, "OR": true, "NOT": true, "WHERE": true, "ON": true, "WHEN": true,
 		"THEN": true, "ELSE": true, "END": true, "CASE": true, "SELECT": true,
 		"SET": true, "FROM": true, "AS": true, "HAVING": true, "BETWEEN": true,
@@ -299,7 +307,11 @@ func textInstantCompares(sql string) []string {
 				matches = append(matches, joinSQL(tokens[leftEnd-len(left):and+1+len(high)]))
 			}
 		case (isSQLKeyword(token, "MAX") || isSQLKeyword(token, "MIN")) && isSQLCall(tokens, i):
-			call := tokens[i : closingParen(tokens, i+1)+1]
+			end := closingParen(tokens, i+1)
+			if end < 0 {
+				end = len(tokens) - 1
+			}
+			call := tokens[i : end+1]
 			if hasBareInstant(call[2:]) {
 				matches = append(matches, joinSQL(call))
 			}
@@ -338,8 +350,8 @@ func hasBareInstant(tokens []sqlToken) bool {
 			continue
 		}
 		if isSQLCall(tokens, i) {
-			if isSQLKeyword(tokens[i], "julianday") {
-				i = closingParen(tokens, i+1)
+			if end := closingParen(tokens, i+1); end >= 0 && isSQLKeyword(tokens[i], "julianday") {
+				i = end
 			}
 			continue
 		}
@@ -350,13 +362,36 @@ func hasBareInstant(tokens []sqlToken) bool {
 	return false
 }
 
+// hasJuliandayCall reports a julianday() call that yields the operand's value:
+// one outside a subquery's FROM tail, in an operand no top-level || turns
+// into text.
 func hasJuliandayCall(tokens []sqlToken) bool {
-	for i := range tokens {
-		if isSQLKeyword(tokens[i], "julianday") && isSQLCall(tokens, i) {
-			return true
+	found := false
+	// One frame per open parenthesis: 'g' a group or call, 's' a subquery's
+	// select list, 'r' the rest of that subquery.
+	var frames []byte
+	for i, token := range tokens {
+		switch {
+		case token.text == "(":
+			frame := byte('g')
+			if i+1 < len(tokens) && isSQLKeyword(tokens[i+1], "SELECT") {
+				frame = 's'
+			}
+			frames = append(frames, frame)
+		case token.text == ")":
+			if len(frames) > 0 {
+				frames = frames[:len(frames)-1]
+			}
+		case len(frames) > 0 && frames[len(frames)-1] == 's' && isSQLKeyword(token, "FROM"):
+			frames[len(frames)-1] = 'r'
+		case bytes.IndexByte(frames, 'r') >= 0:
+		case token.text == "||" && len(frames) == 0:
+			return false
+		case isSQLKeyword(token, "julianday") && isSQLCall(tokens, i):
+			found = true
 		}
 	}
-	return false
+	return found
 }
 
 func isNumericLiteral(tokens []sqlToken) bool {
@@ -431,7 +466,7 @@ scan:
 }
 
 // closingParen returns the index of the parenthesis that closes
-// tokens[open], or the last index when it is never closed.
+// tokens[open], or -1 when it is never closed.
 func closingParen(tokens []sqlToken, open int) int {
 	depth := 0
 	for i := open; i < len(tokens); i++ {
@@ -444,7 +479,7 @@ func closingParen(tokens []sqlToken, open int) int {
 			}
 		}
 	}
-	return len(tokens) - 1
+	return -1
 }
 
 func isSQLCall(tokens []sqlToken, i int) bool {
@@ -458,7 +493,7 @@ func isSQLKeyword(token sqlToken, keyword string) bool {
 func isOperandBoundary(token sqlToken) bool {
 	switch token.kind {
 	case sqlSymbol:
-		return operandBoundaries[token.text]
+		return operandBoundaries[token.text] || instantCompares[token.text]
 	case sqlWord:
 		return operandBoundaries[strings.ToUpper(token.text)]
 	}
