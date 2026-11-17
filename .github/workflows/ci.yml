@@ -197,9 +197,34 @@ jobs:
         # Explicit -timeout above Go's 10m default: instrumented under -race the
         # internal/api and internal/services suites (bcrypt cost 12 on every
         # account) run close to the wall, and the default limit leaves no
-        # headroom; internal/services alone reached 22-25 min under -race. This
-        # only widens the deadline; it never relaxes the race detector itself.
-        run: go test -race -timeout=45m ./...
+        # headroom. This only widens the deadline; it never relaxes the race
+        # detector itself.
+        #
+        # internal/services runs its tests one after another and reached 39 min
+        # (2337 s) on main, then hit the 45m deadline twice on slower runners.
+        # It is split by test name into two halves that run beside the rest of
+        # the module, so the lane stays one required check named `race`. The
+        # two -run patterns are complements over Test*, so every test runs
+        # exactly once; the package has no Fuzz or Example functions.
+        run: |
+          logs="$RUNNER_TEMP/race"
+          mkdir -p "$logs"
+          go test -race -timeout=45m $(go list ./... | grep -v '/internal/services$') > "$logs/rest.log" 2>&1 &
+          rest=$!
+          go test -race -timeout=45m -run '^Test[A-L]' ./internal/services > "$logs/services-a-l.log" 2>&1 &
+          first=$!
+          go test -race -timeout=45m -run '^Test[^A-L]' ./internal/services > "$logs/services-rest.log" 2>&1 &
+          second=$!
+          status=0
+          wait "$rest" || status=1
+          wait "$first" || status=1
+          wait "$second" || status=1
+          for log in "$logs"/*.log; do
+            echo "::group::$(basename "$log")"
+            cat "$log"
+            echo "::endgroup::"
+          done
+          exit "$status"
 
   coverage-upload:
     name: coverage-upload
