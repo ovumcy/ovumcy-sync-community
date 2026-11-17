@@ -55,15 +55,20 @@ func countAccountRows(t *testing.T, store *Store, table string, accountID string
 }
 
 // TestAccountChildTablesCoverEveryAccountKeyedTable reads the migrated schema
-// for every table with an account_id column: a new per-account table that is
-// not added to accountChildTables would survive every account erase.
+// for every table with an account_id column or a foreign key to accounts: a
+// new per-account table that is not added to accountChildTables would survive
+// every account erase.
 func TestAccountChildTablesCoverEveryAccountKeyedTable(t *testing.T) {
 	store := openTestStore(t)
 
 	rows, err := store.db.QueryContext(
 		context.Background(),
 		`SELECT m.name FROM sqlite_master AS m, pragma_table_info(m.name) AS c
-		 WHERE m.type = 'table' AND c.name = 'account_id' ORDER BY m.name`,
+		 WHERE m.type = 'table' AND c.name = 'account_id'
+		 UNION
+		 SELECT m.name FROM sqlite_master AS m, pragma_foreign_key_list(m.name) AS f
+		 WHERE m.type = 'table' AND f."table" = 'accounts'
+		 ORDER BY 1`,
 	)
 	if err != nil {
 		t.Fatalf("list account-keyed tables: %v", err)
@@ -84,7 +89,7 @@ func TestAccountChildTablesCoverEveryAccountKeyedTable(t *testing.T) {
 		t.Fatalf("account-keyed tables rows: %v", err)
 	}
 
-	listed := slices.Sorted(slices.Values(accountChildTables))
+	listed := slices.Sorted(slices.Values(accountChildTables[:]))
 	if !slices.Equal(keyed, listed) {
 		t.Fatalf("tables keyed by account_id %v, accountChildTables %v: every account-keyed table must be erased with the account", keyed, listed)
 	}
