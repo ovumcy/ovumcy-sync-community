@@ -452,6 +452,25 @@ func dropColumn(t *testing.T, dbPath, table, column string) {
 	if _, err := raw.Exec(`PRAGMA busy_timeout = 5000;`); err != nil {
 		t.Fatalf("configure raw sqlite: %v", err)
 	}
+	// DROP COLUMN refuses a column an index uses, so drop those indexes first.
+	rows, err := raw.Query(`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND sql LIKE '%' || ? || '%'`, table, column)
+	if err != nil {
+		t.Fatalf("list %s indexes: %v", table, err)
+	}
+	var indexes []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan %s index: %v", table, err)
+		}
+		indexes = append(indexes, name)
+	}
+	_ = rows.Close()
+	for _, name := range indexes {
+		if _, err := raw.Exec("DROP INDEX " + name); err != nil { // #nosec G202 -- name comes from sqlite_master of the test database
+			t.Fatalf("drop index %s: %v", name, err)
+		}
+	}
 	if _, err := raw.Exec("ALTER TABLE " + table + " DROP COLUMN " + column); err != nil { // #nosec G202 -- table/column are test-fixture constants chosen by the test, never user input
 		t.Fatalf("drop %s.%s column: %v", table, column, err)
 	}
