@@ -624,19 +624,25 @@ func (s *AuthService) DeleteAccount(ctx context.Context, accountID string, stepU
 	return stepUpWriteError(err)
 }
 
-func (s *AuthService) CreateSessionForAccount(
+// CreateSessionForUnlapsedManagedAccount mints the managed-bridge session in
+// the same statement that checks the account is still unlapsed, so a lapse
+// racing the mint either refuses it (ErrManagedAccountLapsed) or revokes the
+// session it produced.
+func (s *AuthService) CreateSessionForUnlapsedManagedAccount(
 	ctx context.Context,
 	accountID string,
 ) (AuthResult, error) {
-	account, err := s.store.FindAccountByID(ctx, accountID)
+	session, result, err := s.newSession(accountID, s.now().UTC())
 	if err != nil {
+		return AuthResult{}, err // codecov:ignore -- newSession fails only on a crypto-primitive error that cannot occur in practice (see its own codecov:ignore annotations).
+	}
+	if err := s.store.CreateSessionForUnlapsedManagedAccount(ctx, session); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			return AuthResult{}, ErrUnauthorized
+			return AuthResult{}, ErrManagedAccountLapsed
 		}
 		return AuthResult{}, err
 	}
-
-	return s.createSession(ctx, account.ID, s.now().UTC())
+	return result, nil
 }
 
 func (s *AuthService) createSession(

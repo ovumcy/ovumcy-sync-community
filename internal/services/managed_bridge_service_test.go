@@ -464,13 +464,11 @@ func TestSetAccountLapseSignalActiveTrueRetractsWithoutTouchingSessionsOrPremium
 		t.Fatalf("expected lapsed_at set before retraction, got %v err=%v", lapsedAt, err)
 	}
 
-	// A session minted directly via CreateSessionForAccount (unlike the
-	// full managed-bridge mint, this does NOT touch premium_active or
-	// lapsed_at — see AuthService.CreateSessionForAccount) exists
-	// concurrently with the still-set lapse marker. Retraction must leave it
-	// alone: SetAccountLapseSignal(active=true) only ever clears the marker,
-	// it never revokes sessions.
-	concurrentSession, err := authService.CreateSessionForAccount(ctx, accountID)
+	// A session inserted without the mint's lapse guard exists alongside the
+	// still-set lapse marker. Retraction must leave it alone:
+	// SetAccountLapseSignal(active=true) only ever clears the marker, it
+	// never revokes sessions.
+	concurrentSession, err := authService.createSession(ctx, accountID, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("create concurrent session for account: %v", err)
 	}
