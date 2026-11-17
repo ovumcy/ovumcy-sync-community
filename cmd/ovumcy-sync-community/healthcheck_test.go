@@ -71,6 +71,13 @@ func TestRunHealthcheckProbesTheBoundAddress(t *testing.T) {
 	}
 }
 
+func TestRunHealthcheckAcceptsZonedIPv6Host(t *testing.T) {
+	err := runHealthcheck("[fe80::1%nonexistent0]:1", 200*time.Millisecond)
+	if err != nil && strings.Contains(err.Error(), "invalid URL") {
+		t.Fatalf("zoned host produced an unparseable URL: %v", err)
+	}
+}
+
 func TestRunHealthcheckSucceedsOnHealthyServer(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != healthcheckPath {
