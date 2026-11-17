@@ -10,8 +10,8 @@ import (
 )
 
 // TestExpiredRowsSweepRemovesAnUnreadableExpiry pins that a row whose
-// expires_at julianday() cannot read (NULL) is swept: every lookup already
-// treats it as expired, so without the IS NULL arm it would stay forever.
+// expires_at julianday() cannot read (NULL) is swept: no lookup can use it,
+// so without the IS NULL arm it would stay forever.
 func TestExpiredRowsSweepRemovesAnUnreadableExpiry(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()

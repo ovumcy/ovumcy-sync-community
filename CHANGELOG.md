@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Rows with an unreadable expiry were never swept.** A session, reset token or TOTP challenge whose stored `expires_at` SQLite cannot read as a date was already refused at every lookup, but the expired-rows sweep skipped it, so it stayed in the database forever. The sweep now removes it. The managed-bridge purge also checks `mode = 'managed'` in the delete statement itself, and a new sync blob's `created_at` is written in the same RFC 3339 format as every other timestamp.
+- **Rows with an unreadable expiry were never swept.** A session, reset token or TOTP challenge whose stored `expires_at` SQLite cannot read as a date could not be used (its lookup failed), but the expired-rows sweep skipped it, so it stayed in the database forever. The sweep now removes it. The managed-bridge purge also checks `mode = 'managed'` in the delete statement itself, and a new sync blob's `created_at` is written in the same RFC 3339 format as every other timestamp.
 
 - **`latest` image tag followed every commit to main.** A self-hoster pulling `latest` could receive forward-only migrations no release had announced, and two publish runs could interleave their tag writes. `latest` now moves only on a `vX.Y.Z` release tag (never a pre-release), releases also get `X.Y.Z` and `X.Y` tags, main builds keep the `main` tag, and publish runs for one ref queue instead of overlapping.
 
