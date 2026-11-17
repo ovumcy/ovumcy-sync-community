@@ -27,7 +27,10 @@ TRUSTED_PROXY_CIDRS=<nginx's own address as the app sees it, e.g. 172.30.0.2/32>
 
 With nginx in a container, pin it to a fixed address on its Docker network (`ipv4_address`) and
 list only that address; `docker network inspect <network>` shows it. With nginx on the host, the
-app sees the Docker bridge gateway (often `172.17.0.1/32`) as the peer; list that one address. Trusting the whole subnet lets any other container on
+app sees the gateway of the network its container is attached to as the peer, and lists that one
+address. A compose project gets its own network, so this is usually not the default bridge's
+`172.17.0.1`: read the gateway with `docker network inspect <network> --format
+'{{(index .IPAM.Config 0).Gateway}}'`. Trusting the whole subnet lets any other container on
 that network choose its own rate-limit key, and a public range is never right.
 Without it every user shares one rate-limit bucket and gets `429 rate_limited`.
 
