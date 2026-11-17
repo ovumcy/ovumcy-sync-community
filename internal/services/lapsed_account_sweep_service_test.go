@@ -483,3 +483,47 @@ func TestLapsedAccountSweepServiceTreatsMintRacedCandidateAsBenignSkip(t *testin
 		t.Fatalf("expected the raced account's device to survive, got count=%d err=%v", count, err)
 	}
 }
+
+// secondListFailsSweepStore lists the first page from the real store and
+// fails every later listing.
+type secondListFailsSweepStore struct {
+	inner *db.Store
+	lists int
+}
+
+func (s *secondListFailsSweepStore) ListLapsedManagedAccountIDs(ctx context.Context, cutoff time.Time, after db.LapsedCandidate, limit int) ([]db.LapsedCandidate, error) {
+	s.lists++
+	if s.lists > 1 {
+		return nil, errors.New("injected listing failure")
+	}
+	return s.inner.ListLapsedManagedAccountIDs(ctx, cutoff, after, limit)
+}
+
+func (s *secondListFailsSweepStore) DeleteLapsedManagedAccount(ctx context.Context, accountID string, cutoff time.Time) error {
+	return s.inner.DeleteLapsedManagedAccount(ctx, accountID, cutoff)
+}
+
+// TestLapsedAccountSweepServiceLaterListFailureKeepsEarlierPages proves a
+// listing failure after the first page returns the error together with what
+// the earlier pages deleted, so the report and the log still name them.
+func TestLapsedAccountSweepServiceLaterListFailureKeepsEarlierPages(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	authService := NewAuthService(store, 24*time.Hour)
+	syncService := NewSyncService(store, SyncOptions{MaxDevices: 5, MaxBlobBytes: 16 << 20})
+	bridgeService := NewManagedBridgeService(store, authService)
+	sweepService := NewLapsedAccountSweepService(store, lapsedSweepGracePeriod)
+
+	seedLapsedCandidateWithFullData(t, store, authService, syncService, bridgeService, "managedlistfail01", 91*24*time.Hour)
+	seedLapsedCandidateWithFullData(t, store, authService, syncService, bridgeService, "managedlistfail02", 90*24*time.Hour)
+	sweepService.store = &secondListFailsSweepStore{inner: store}
+
+	result, err := sweepService.Run(ctx, 1, false)
+	if err == nil || !strings.Contains(err.Error(), "list lapsed account candidates") {
+		t.Fatalf("expected the wrapped listing error, got %v", err)
+	}
+	if result.Examined != 1 || result.Deleted != 1 || len(result.DeletedAccountIDs) != 1 || result.DeletedAccountIDs[0] != "managedlistfail01" {
+		t.Fatalf("expected the first page's delete kept in the result, got %#v", result)
+	}
+}

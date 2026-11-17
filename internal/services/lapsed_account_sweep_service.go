@@ -77,8 +77,9 @@ func NewLapsedAccountSweepService(store *db.Store, gracePeriod time.Duration) *L
 // at the moment its own delete transaction runs, until a page comes back
 // short. Each page starts after the previous page's last candidate, so a
 // candidate that was skipped (dry run, raced reactivation, delete error) is
-// behind the cursor and never listed twice in one run, and the drain
-// terminates because the cursor only advances through a finite set. The cutoff
+// behind the cursor and never listed twice in one run. The drain ends once
+// no eligible account is left ahead of the cursor; only lapses recorded
+// during the run with an earlier instant than the cutoff can extend it. The cutoff
 // (now - gracePeriod) is computed once at the start of Run and reused for
 // both the candidate listing and every per-candidate delete-time re-check,
 // so a run that takes a while never spuriously excludes a candidate purely
