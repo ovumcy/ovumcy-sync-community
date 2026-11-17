@@ -147,14 +147,22 @@ func TestBlobAndRecoveryRepositoriesReturnNotFoundBeforeWrite(t *testing.T) {
 	}
 }
 
-// TestDeleteAccountErasesEveryChildRowAndIsIdempotent seeds one row in every
-// table that carries an account_id (session, device, encrypted blob,
-// recovery key package, password reset token, TOTP challenge) plus a second,
-// untouched account acting as a control. It asserts DeleteAccount erases all
-// of the target account's rows in one call, leaves the other account's rows
-// completely alone, and that calling DeleteAccount again on the now-gone
-// account is a no-op rather than an error (idempotent repeat semantics).
-func TestDeleteAccountErasesEveryChildRowAndIsIdempotent(t *testing.T) {
+// TestEveryAccountEraseErasesEveryChildRowAndIsIdempotent runs each live
+// account erase over one row in every table that carries an account_id plus a
+// second, untouched account acting as a control. It asserts the erase removes
+// all of the target account's rows in one call, leaves the other account's
+// rows completely alone, and that repeating it on the now-gone account is
+// ErrNotFound, which callers map to an idempotent success.
+func TestEveryAccountEraseErasesEveryChildRowAndIsIdempotent(t *testing.T) {
+	for _, tc := range accountErases {
+		t.Run(tc.name, func(t *testing.T) {
+			assertAccountEraseErasesEveryChildRow(t, tc)
+		})
+	}
+}
+
+func assertAccountEraseErasesEveryChildRow(t *testing.T, tc accountErase) {
+	t.Helper()
 	store := openTestStore(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
@@ -168,10 +176,15 @@ func TestDeleteAccountErasesEveryChildRowAndIsIdempotent(t *testing.T) {
 			Login:            accountID + "@example.com",
 			PasswordHash:     "hash",
 			RecoveryCodeHash: "recovery-hash",
-			Mode:             "self_hosted",
+			Mode:             tc.mode,
 			CreatedAt:        now,
 		}); err != nil {
 			t.Fatalf("create account %s: %v", accountID, err)
+		}
+		if tc.lapsed {
+			if err := store.SetAccountLapsed(ctx, accountID, now.Add(-2*time.Hour)); err != nil {
+				t.Fatalf("set account lapsed for %s: %v", accountID, err)
+			}
 		}
 
 		if _, err := store.CreateSession(ctx, models.Session{
@@ -237,10 +250,29 @@ func TestDeleteAccountErasesEveryChildRowAndIsIdempotent(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("create totp challenge for %s: %v", accountID, err)
 		}
+
+		if _, _, err := store.ReserveTOTPAttempt(ctx, accountID, now, 15*time.Minute, 10); err != nil {
+			t.Fatalf("create totp failure window for %s: %v", accountID, err)
+		}
 	}
 
-	if err := store.DeleteAccount(ctx, targetAccountID); err != nil {
-		t.Fatalf("delete account: %v", err)
+	for _, table := range accountChildTables {
+		if rows := countAccountRows(t, store, table, targetAccountID); rows == 0 {
+			t.Fatalf("seed covers no %s row; seed one so the erase is checked against it", table)
+		}
+	}
+
+	if err := tc.erase(ctx, store, targetAccountID); err != nil {
+		t.Fatalf("erase account: %v", err)
+	}
+
+	for _, table := range accountChildTables {
+		if rows := countAccountRows(t, store, table, targetAccountID); rows != 0 {
+			t.Fatalf("expected the target's %s rows erased, found %d", table, rows)
+		}
+		if rows := countAccountRows(t, store, table, otherAccountID); rows == 0 {
+			t.Fatalf("expected the bystander's %s rows intact, found none", table)
+		}
 	}
 
 	if _, err := store.FindAccountByID(ctx, targetAccountID); !errors.Is(err, ErrNotFound) {
@@ -286,7 +318,7 @@ func TestDeleteAccountErasesEveryChildRowAndIsIdempotent(t *testing.T) {
 	// not ErrNotFound bubbling up unexpectedly for callers that treat
 	// ErrNotFound as "already erased" — this asserts the raw repository
 	// contract that the service layer maps to a friendlier success.
-	if err := store.DeleteAccount(ctx, targetAccountID); !errors.Is(err, ErrNotFound) {
+	if err := tc.erase(ctx, store, targetAccountID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound on repeat delete, got %v", err)
 	}
 }

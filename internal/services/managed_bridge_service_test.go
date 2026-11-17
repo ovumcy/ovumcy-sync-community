@@ -199,7 +199,7 @@ func TestManagedBridgePurgeSurfacesAccountDeleteStoreError(t *testing.T) {
 
 	// Drop a child table the account-delete transaction writes to while leaving
 	// the accounts row intact: the lookup and managed-mode guard pass, then
-	// DeleteAccount fails with a generic store error. The purge must surface it
+	// DeleteManagedAccount fails with a generic store error. The purge must surface it
 	// instead of swallowing it as an idempotent no-op.
 	dropTable(t, dbPath, "sessions")
 

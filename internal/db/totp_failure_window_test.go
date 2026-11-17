@@ -105,26 +105,6 @@ func TestConcurrentReserveTOTPAttemptNeverExceedsTheCap(t *testing.T) {
 	}
 }
 
-func TestDeleteAccountErasesTheTOTPFailureWindow(t *testing.T) {
-	store := openTestStore(t)
-	ctx := context.Background()
-	createWindowTestAccount(t, store, "erased-account")
-	if _, _, err := store.ReserveTOTPAttempt(ctx, "erased-account", time.Now().UTC(), 15*time.Minute, 10); err != nil {
-		t.Fatalf("reserve: %v", err)
-	}
-
-	if err := store.DeleteAccount(ctx, "erased-account"); err != nil {
-		t.Fatalf("delete account: %v", err)
-	}
-	var rows int
-	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM totp_failure_windows`).Scan(&rows); err != nil {
-		t.Fatalf("count: %v", err)
-	}
-	if rows != 0 {
-		t.Fatalf("expected the failure window erased with the account, found %d rows", rows)
-	}
-}
-
 func TestTOTPFailureWindowSurfacesStoreErrors(t *testing.T) {
 	store, dbPath := newFileBackedTestStore(t)
 	ctx := context.Background()

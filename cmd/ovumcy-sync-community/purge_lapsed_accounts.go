@@ -18,7 +18,7 @@ import (
 // POST /managed/accounts/{account_id}/premium with {"active": false}, see
 // services.ManagedBridgeService.SetAccountLapseSignal) is older than
 // cfg.LapsedAccountGracePeriod, via the same whole-account transactional
-// purge DeleteAccount uses. See services.LapsedAccountSweepService and
+// purge every account erase uses. See services.LapsedAccountSweepService and
 // db.Store.DeleteLapsedManagedAccount for the delete-time re-check that
 // makes this safe against a resubscribe (a reactivation signal) racing the sweep.
 //

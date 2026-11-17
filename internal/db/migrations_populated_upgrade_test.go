@@ -111,7 +111,7 @@ func TestMigratingAPopulatedFirstReleaseDatabaseKeepsEveryRow(t *testing.T) {
 		t.Fatalf("write blob after upgrade: %v", err)
 	}
 
-	if err := store.DeleteAccount(ctx, "v1-account"); err != nil {
+	if err := store.DeleteAccountForSession(ctx, "v1-account", "v1-password-hash", "v1-token-hash"); err != nil {
 		t.Fatalf("delete migrated account: %v", err)
 	}
 	if _, err := store.FindAccountByID(ctx, "v1-account"); !errors.Is(err, ErrNotFound) {

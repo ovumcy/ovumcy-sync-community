@@ -89,7 +89,7 @@ func (s *ManagedBridgeService) CreateManagedSession(
 // PurgeManagedAccount permanently erases the managed account and every row
 // this server holds for it — sessions, devices, the encrypted sync blob, the
 // wrapped recovery-key package, pending password-reset tokens, and TOTP
-// challenges — via Store.DeleteAccount's single transaction. It is the
+// challenges — via Store.DeleteManagedAccount's single transaction. It is the
 // sync-plane half of managed-cloud account deletion: the separate managed
 // service calls it before purging its own database so no ciphertext is ever
 // orphaned here.
