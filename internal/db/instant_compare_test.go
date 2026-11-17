@@ -3,9 +3,12 @@ package db
 import (
 	"context"
 	"errors"
-	"os"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -113,24 +116,120 @@ func TestInstantComparesHoldWithinOneSecond(t *testing.T) {
 	})
 }
 
-// TestNoTextInstantCompareInSQL keeps the next query from comparing or
-// ordering a stored *_at column as text; wrap both sides in julianday().
+// TestNoTextInstantCompareInSQL keeps the next query from comparing, ordering
+// or aggregating a stored *_at column as text; wrap both sides in julianday().
+// It reads every string literal of this package's production sources and
+// every migration, so a column-to-column or literal compare is caught as well
+// as a ?-bound one.
 func TestNoTextInstantCompareInSQL(t *testing.T) {
-	textCompare := regexp.MustCompile(`\b\w+_at\s*(<=|>=|<|>)\s*\?|\?\s*(<=|>=|<|>)\s*\w+_at\b|ORDER BY\s+\w+_at\b`)
 	sources, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatalf("glob sources: %v", err)
 	}
+	fset := token.NewFileSet()
+	instantQueries := 0
 	for _, source := range sources {
 		if strings.HasSuffix(source, "_test.go") {
 			continue
 		}
-		body, err := os.ReadFile(source) // #nosec G304 -- names come from a glob of this package's own directory
+		file, err := parser.ParseFile(fset, source, nil, parser.SkipObjectResolution)
 		if err != nil {
-			t.Fatalf("read %s: %v", source, err)
+			t.Fatalf("parse %s: %v", source, err)
 		}
-		for _, match := range textCompare.FindAllString(string(body), -1) {
-			t.Errorf("%s: instant compared as text: %q", source, match)
+		ast.Inspect(file, func(node ast.Node) bool {
+			literal, ok := node.(*ast.BasicLit)
+			if !ok || literal.Kind != token.STRING {
+				return true
+			}
+			text, err := strconv.Unquote(literal.Value)
+			if err != nil {
+				t.Fatalf("%s: unquote literal: %v", fset.Position(literal.Pos()), err)
+			}
+			if strings.Contains(text, "julianday(") {
+				instantQueries++
+			}
+			for _, match := range textInstantCompares(text) {
+				t.Errorf("%s: instant compared as text: %q", fset.Position(literal.Pos()), match)
+			}
+			return true
+		})
+	}
+	if instantQueries == 0 {
+		t.Fatal("scanned no julianday() query: the source walk is reading the wrong files")
+	}
+
+	migrations, err := migrationFiles.ReadDir("migrations")
+	if err != nil {
+		t.Fatalf("read migrations: %v", err)
+	}
+	for _, entry := range migrations {
+		body, err := migrationFiles.ReadFile("migrations/" + entry.Name())
+		if err != nil {
+			t.Fatalf("read %s: %v", entry.Name(), err)
+		}
+		for _, match := range textInstantCompares(string(body)) {
+			t.Errorf("migrations/%s: instant compared as text: %q", entry.Name(), match)
 		}
 	}
+}
+
+// TestTextInstantCompareDetector pins the detector itself, so a pattern edit
+// cannot turn TestNoTextInstantCompareInSQL into a check that never fails.
+func TestTextInstantCompareDetector(t *testing.T) {
+	for _, sql := range []string{
+		`WHERE expires_at <= ?`,
+		`WHERE ? > expires_at`,
+		`WHERE s.expires_at < CURRENT_TIMESTAMP`,
+		`WHERE lapsed_at < accounts.created_at`,
+		`WHERE created_at BETWEEN ? AND ?`,
+		`SELECT MAX(updated_at) FROM encrypted_blobs`,
+		`ORDER BY created_at DESC`,
+		`ORDER BY device_id, d.last_seen_at LIMIT ?`,
+	} {
+		if len(textInstantCompares(sql)) == 0 {
+			t.Errorf("detector missed a text instant compare: %q", sql)
+		}
+	}
+	for _, sql := range []string{
+		`WHERE julianday(expires_at) <= julianday(?) OR julianday(expires_at) IS NULL`,
+		`WHERE julianday(s.expires_at) > julianday(?)`,
+		`ORDER BY julianday(created_at), device_id`,
+		`SET consumed_at = ? WHERE consumed_at IS NULL`,
+		`lapsed_at = COALESCE(lapsed_at, ?)`,
+		"-- rows expire when expires_at < now\nSELECT 1",
+		`window_started_unix < ?`,
+	} {
+		if matches := textInstantCompares(sql); len(matches) != 0 {
+			t.Errorf("detector flagged %q in %q", matches, sql)
+		}
+	}
+}
+
+const bareInstantColumn = `(?:\w+\.)?\w+_at`
+
+var (
+	sqlLineComment     = regexp.MustCompile(`--[^\n]*`)
+	instantLeftOfCmp   = regexp.MustCompile(`(?i)(?:^|[^\w.(])` + bareInstantColumn + `\s*(?:<=|>=|<|>|\bBETWEEN\b)`)
+	instantRightOfCmp  = regexp.MustCompile(`(?:<=|>=|<|>)\s*` + bareInstantColumn + `\b`)
+	instantAggregate   = regexp.MustCompile(`(?i)\b(?:MAX|MIN)\s*\(\s*` + bareInstantColumn + `\s*\)`)
+	orderByTerms       = regexp.MustCompile(`(?is)\bORDER\s+BY\s+(.*?)(?:\bLIMIT\b|\)|;|$)`)
+	bareInstantOrdered = regexp.MustCompile(`(?i)^` + bareInstantColumn + `(?:\s+(?:ASC|DESC))?$`)
+)
+
+// textInstantCompares returns each fragment of sql that compares, orders or
+// aggregates a bare *_at column, one not wrapped in julianday().
+func textInstantCompares(sql string) []string {
+	sql = sqlLineComment.ReplaceAllString(sql, "")
+	var matches []string
+	for _, pattern := range []*regexp.Regexp{instantLeftOfCmp, instantRightOfCmp, instantAggregate} {
+		matches = append(matches, pattern.FindAllString(sql, -1)...)
+	}
+	for _, clause := range orderByTerms.FindAllStringSubmatch(sql, -1) {
+		for _, term := range strings.Split(clause[1], ",") {
+			if term = strings.TrimSpace(term); bareInstantOrdered.MatchString(term) {
+				matches = append(matches, "ORDER BY "+term)
+			}
+		}
+	}
+	return matches
 }
