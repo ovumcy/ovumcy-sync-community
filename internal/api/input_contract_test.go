@@ -56,6 +56,35 @@ func TestEmptyBodyNeedsNoContentType(t *testing.T) {
 	}
 }
 
+// TestManagedBridgeBodiesNeedJSONContentType: the bridge routes sit behind the
+// same gate, so a non-JSON body never reaches the bridge-token check; a
+// bodiless purge is not asked for a content type.
+func TestManagedBridgeBodiesNeedJSONContentType(t *testing.T) {
+	handler := newTestServer(t)
+	send := func(method string, path string, body string, contentType string) int {
+		request := httptest.NewRequest(method, path, strings.NewReader(body))
+		request.RemoteAddr = "203.0.113.61:4000"
+		request.Header.Set("Authorization", "Bearer test-managed-bridge-token")
+		if contentType != "" {
+			request.Header.Set("Content-Type", contentType)
+		}
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		return recorder.Code
+	}
+
+	for _, path := range []string{"/managed/session", "/managed/accounts/managedacct1234/premium"} {
+		for _, contentType := range []string{"text/plain", ""} {
+			if got := send(http.MethodPost, path, `{"active":false}`, contentType); got != http.StatusUnsupportedMediaType {
+				t.Fatalf("POST %s with Content-Type %q: status %d, want 415", path, contentType, got)
+			}
+		}
+	}
+	if got := send(http.MethodDelete, "/managed/accounts/managedacct1234", "", ""); got == http.StatusUnsupportedMediaType {
+		t.Fatalf("bodiless purge: status 415, want the route's own answer")
+	}
+}
+
 func TestRegisterCapsTheLoginLength(t *testing.T) {
 	handler := newTestServer(t)
 	domain := "@example.com"
