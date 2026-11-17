@@ -50,10 +50,12 @@ services:
     volumes:
       - ./data:/data
     # The database, its WAL and journal all live under /data; the rest of the
-    # filesystem stays immutable. /tmp covers SQLite temp files.
+    # filesystem stays immutable. /tmp covers SQLite temp files; tmpfs is RAM,
+    # and an uncapped one may grow to half the host's memory, so a runaway
+    # temp spill fails with SQLITE_FULL instead.
     read_only: true
     tmpfs:
-      - /tmp
+      - /tmp:size=64m
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     # Longer than the server's 10 s request drain plus the sweep loops' stop,
