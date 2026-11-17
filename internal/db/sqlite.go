@@ -94,7 +94,13 @@ func createPlainDBFileOwnerOnly(path string) error {
 // an Exec configured: from then on writes would run with foreign keys off and
 // no busy wait. secure_delete zeroes freed pages, so a deleted account's
 // ciphertext and hashes do not linger in a copied database file.
-const connectionPragmas = "_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=secure_delete(1)"
+//
+// _txlock=immediate makes every BeginTx a BEGIN IMMEDIATE: the write lock is
+// taken (or waited for, under busy_timeout) at begin. A deferred transaction
+// that reads, and then writes after another process (`migrate`,
+// `purge-lapsed-accounts`, a backup) committed, fails with SQLITE_BUSY_SNAPSHOT,
+// which busy_timeout cannot wait out.
+const connectionPragmas = "_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=secure_delete(1)&_txlock=immediate"
 
 // sqliteDSN appends connectionPragmas to the configured path. modernc.org/sqlite
 // splits the DSN at the first '?' and opens everything before it as a plain
