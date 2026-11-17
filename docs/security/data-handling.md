@@ -34,7 +34,7 @@ decrypted payloads.
 
 | Data | Leaves the database when |
 | --- | --- |
-| Everything for an account | The account is deleted: one transaction removes rows from `sessions`, `devices`, `encrypted_blobs`, `recovery_key_packages`, `password_reset_tokens`, `totp_challenges` and `totp_failure_windows`, then the `accounts` row (`Store.DeleteAccount`, `internal/db/repositories.go`) |
+| Everything for an account | The account is deleted: one transaction removes rows from `sessions`, `devices`, `encrypted_blobs`, `recovery_key_packages`, `password_reset_tokens`, `totp_challenges` and `totp_failure_windows`, then the `accounts` row. `DELETE /account` (`Store.DeleteAccountForSession`), the managed-bridge purge (`Store.DeleteManagedAccount`) and the lapsed-account sweep (`Store.DeleteLapsedManagedAccount`) all clear the same table list (`accountChildTables`, `internal/db/repositories.go`) |
 | A managed account on bridge request | `DELETE /managed/accounts/{account_id}` behind the managed-bridge token purges the account |
 | A single session | Logout, a password change (every other session), or a recovery-based reset |
 | Expired sessions, reset tokens, TOTP challenges | The expired-rows sweep removes rows past `expires_at`. Interval `EXPIRED_ROWS_SWEEP_INTERVAL` (default 24 h; the in-process sweep can be disabled), batch size `EXPIRED_ROWS_SWEEP_LIMIT` (0 uses the built-in default); each run repeats batches until every expired row is gone. Expiry is already enforced at use time, so an expired row is unusable before it is erased |

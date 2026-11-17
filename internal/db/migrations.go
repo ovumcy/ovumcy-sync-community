@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		}
 
 		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit migration %s: %w", version, err) // codecov:ignore -- on this store's single-connection sqlite (WAL, busy_timeout) a COMMIT whose statements all succeeded has no deterministically injectable in-process failure; needs a fake driver, the same deviation documented for DeleteAccount's and DeleteLapsedManagedAccount's commit branches in repositories.go.
+			return fmt.Errorf("commit migration %s: %w", version, err) // codecov:ignore -- on this store's single-connection sqlite (WAL, busy_timeout) a COMMIT whose statements all succeeded has no deterministically injectable in-process failure; needs a fake driver, the same deviation documented for DeleteManagedAccount's and DeleteLapsedManagedAccount's commit branches in repositories.go.
 		}
 	}
 

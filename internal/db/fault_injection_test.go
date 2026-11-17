@@ -993,26 +993,25 @@ func TestDeviceAndSessionQueriesReturnErrorWhenTablesAreDropped(t *testing.T) {
 	}
 }
 
-// TestDeleteAccountReturnsErrorAndRollsBackWhenAChildTableIsDropped
-// exercises DeleteAccount's per-child-table error branch inside its
-// transaction loop. DeleteAccount deletes from sessions, devices,
-// encrypted_blobs, recovery_key_packages, password_reset_tokens, and
-// totp_challenges (in that order) before deleting the accounts row itself,
-// all inside one transaction. Dropping "sessions" — the first table in the
+// TestDeleteManagedAccountReturnsErrorAndRollsBackWhenAChildTableIsDropped
+// exercises deleteAccountChildRows' per-table error branch inside the erase
+// transaction, which clears every accountChildTables table before deleting
+// the accounts row itself. Dropping "sessions" — the first table in the
 // loop — via a second connection means the very first child delete inside
 // the transaction fails, so the whole call must return an error and the
 // deferred tx.Rollback() must leave every already-processed row (there are
 // none yet, since sessions is first) and the account row itself untouched.
-func TestDeleteAccountReturnsErrorAndRollsBackWhenAChildTableIsDropped(t *testing.T) {
+func TestDeleteManagedAccountReturnsErrorAndRollsBackWhenAChildTableIsDropped(t *testing.T) {
 	store, dbPath := newFileBackedTestStore(t)
 	ctx := context.Background()
-	target := seedFaultInjectionAccount(t, store, "account-target")
+	const targetID = "account-target"
+	createLapseTestAccount(t, store, targetID, "managed")
 
 	dropTable(t, dbPath, "sessions")
 
-	err := store.DeleteAccount(ctx, target.ID)
+	err := store.DeleteManagedAccount(ctx, targetID)
 	if err == nil {
-		t.Fatal("expected DeleteAccount to fail when a child table is dropped")
+		t.Fatal("expected DeleteManagedAccount to fail when a child table is dropped")
 	}
 	if !strings.Contains(err.Error(), "delete account sessions rows") {
 		t.Fatalf("expected the sessions child-delete error to surface, got %v", err)
@@ -1020,7 +1019,7 @@ func TestDeleteAccountReturnsErrorAndRollsBackWhenAChildTableIsDropped(t *testin
 
 	// The account row itself must survive: the failed child delete must not
 	// have been partially committed ahead of the transaction aborting.
-	if _, findErr := store.FindAccountByID(ctx, target.ID); findErr != nil {
+	if _, findErr := store.FindAccountByID(ctx, targetID); findErr != nil {
 		t.Fatalf("expected account row to survive the rolled-back delete, got %v", findErr)
 	}
 }
@@ -1334,19 +1333,19 @@ func TestUpdateAccountRecoveryCodeHashFailsAtBeginTransactionOnClosedStore(t *te
 	}
 }
 
-// TestDeleteAccountFailsAtBeginTransactionOnClosedStore exercises
-// DeleteAccount's BeginTx error branch, mirroring
+// TestDeleteManagedAccountFailsAtBeginTransactionOnClosedStore exercises
+// DeleteManagedAccount's BeginTx error branch, mirroring
 // TestDeleteLapsedManagedAccountFaultInjection's identical "closed store"
-// sub-test for its sibling method: BeginTx is DeleteAccount's very first
-// store call, so closing the store faults it directly with no earlier
+// sub-test for its sibling method: BeginTx is DeleteManagedAccount's very
+// first store call, so closing the store faults it directly with no earlier
 // branch in the way.
-func TestDeleteAccountFailsAtBeginTransactionOnClosedStore(t *testing.T) {
+func TestDeleteManagedAccountFailsAtBeginTransactionOnClosedStore(t *testing.T) {
 	store := openTestStore(t)
 	if err := store.Close(); err != nil {
 		t.Fatalf("close store: %v", err)
 	}
 
-	err := store.DeleteAccount(context.Background(), "account-target")
+	err := store.DeleteManagedAccount(context.Background(), "account-target")
 	if err == nil || errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected a store-failure error from BeginTx on a closed store, got %v", err)
 	}

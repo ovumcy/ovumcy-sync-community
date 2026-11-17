@@ -82,8 +82,9 @@ func requireLiveSession(ctx context.Context, tx *sql.Tx, accountID string, sessi
 	return nil
 }
 
-// DeleteAccountForSession is DeleteAccount for a session-authenticated caller:
-// the erase runs only while requireStepUpState holds, in the same transaction.
+// DeleteAccountForSession erases every row this server holds for accountID
+// (deleteAccountRows) for a session-authenticated caller: the erase runs only
+// while requireStepUpState holds, in the same transaction.
 func (s *Store) DeleteAccountForSession(
 	ctx context.Context,
 	accountID string,
@@ -106,7 +107,7 @@ func (s *Store) DeleteAccountForSession(
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit delete account: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteAccount's COMMIT branch in fault_injection_test.go.
+		return fmt.Errorf("commit delete account: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteManagedAccount's COMMIT branch in fault_injection_test.go.
 	}
 	return nil
 }
@@ -137,7 +138,7 @@ func (s *Store) UpsertRecoveryKeyPackageForSession(
 	}
 
 	if err := tx.Commit(); err != nil {
-		return models.RecoveryKeyPackage{}, fmt.Errorf("commit upsert recovery key package: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteAccount's COMMIT branch in fault_injection_test.go.
+		return models.RecoveryKeyPackage{}, fmt.Errorf("commit upsert recovery key package: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteManagedAccount's COMMIT branch in fault_injection_test.go.
 	}
 	return stored, nil
 }

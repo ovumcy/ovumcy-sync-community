@@ -262,7 +262,7 @@ func (s *Store) ResetAccountCredentials(
 	}
 
 	if err := tx.Commit(); err != nil {
-		return "", fmt.Errorf("commit reset account credentials: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteAccount's COMMIT branch in fault_injection_test.go.
+		return "", fmt.Errorf("commit reset account credentials: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteManagedAccount's COMMIT branch in fault_injection_test.go.
 	}
 
 	return accountID, nil
@@ -337,7 +337,7 @@ func (s *Store) UpdateAccountRecoveryCodeHash(
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit update account recovery code: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteAccount's COMMIT branch in fault_injection_test.go.
+		return fmt.Errorf("commit update account recovery code: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteManagedAccount's COMMIT branch in fault_injection_test.go.
 	}
 
 	return nil
@@ -426,46 +426,17 @@ func (s *Store) ChangeAccountPassword(
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit change account password: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteAccount's COMMIT branch in fault_injection_test.go.
+		return fmt.Errorf("commit change account password: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteManagedAccount's COMMIT branch in fault_injection_test.go.
 	}
 	return nil
 }
 
-// DeleteAccount erases every row this server holds for accountID: the
-// account row itself plus every child row keyed by account_id (sessions,
-// devices, the encrypted sync blob, the wrapped recovery-key package,
-// pending password reset tokens, and TOTP login challenges).
-//
-// All deletes run inside one transaction so a failure partway through never
-// leaves a partially-erased account: either every row is gone or none are.
-// `accounts.id` cascades (ON DELETE CASCADE) to every one of those tables
-// already, so the child deletes here are defense-in-depth against future
-// schema drift rather than the only thing standing between us and orphaned
-// rows — the explicit statements keep the erased-rows contract legible and
-// independently verifiable without relying on cascade behavior alone.
-//
-// Returns ErrNotFound when the account no longer exists (RowsAffected == 0
-// on the `accounts` delete), which the caller uses to make deletion
-// idempotent: a repeat call after a successful delete is a no-op, not an
-// error.
-func (s *Store) DeleteAccount(ctx context.Context, accountID string) error {
-	return s.deleteAccount(ctx, accountID, deleteAnyAccountSQL)
-}
-
-// DeleteManagedAccount is DeleteAccount for the bridge purge: the account row
-// goes only while mode = 'managed', so the bridge credential cannot erase a
+// DeleteManagedAccount erases accountID for the bridge purge: every row this
+// server holds for it (deleteAccountRows), in one transaction, but the account
+// row goes only while mode = 'managed', so the bridge credential cannot erase a
 // self-hosted account even if the caller's own mode check is wrong.
 // ErrNotFound when the account is gone or not managed; nothing is erased then.
 func (s *Store) DeleteManagedAccount(ctx context.Context, accountID string) error {
-	return s.deleteAccount(ctx, accountID, deleteManagedAccountSQL)
-}
-
-const (
-	deleteAnyAccountSQL     = `DELETE FROM accounts WHERE id = ?`
-	deleteManagedAccountSQL = `DELETE FROM accounts WHERE id = ? AND mode = 'managed'`
-)
-
-func (s *Store) deleteAccount(ctx context.Context, accountID, accountDelete string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin delete account: %w", err)
@@ -474,7 +445,7 @@ func (s *Store) deleteAccount(ctx context.Context, accountID, accountDelete stri
 		_ = tx.Rollback()
 	}()
 
-	if err := deleteAccountRows(ctx, tx, accountID, accountDelete); err != nil {
+	if err := deleteAccountRows(ctx, tx, accountID, deleteManagedAccountSQL); err != nil {
 		return err
 	}
 
@@ -485,32 +456,55 @@ func (s *Store) deleteAccount(ctx context.Context, accountID, accountDelete stri
 	return nil
 }
 
-// deleteAccountRows is DeleteAccount's body, run inside the caller's
-// transaction. ErrNotFound when accountDelete removes no account row; the
-// caller's rollback then restores the child rows.
-func deleteAccountRows(ctx context.Context, tx *sql.Tx, accountID, accountDelete string) error {
-	childTables := []string{
-		"sessions",
-		"devices",
-		"encrypted_blobs",
-		"recovery_key_packages",
-		"password_reset_tokens",
-		"totp_challenges",
-		"totp_failure_windows",
-	}
-	for _, table := range childTables {
+const (
+	deleteAnyAccountSQL     = `DELETE FROM accounts WHERE id = ?`
+	deleteManagedAccountSQL = `DELETE FROM accounts WHERE id = ? AND mode = 'managed'`
+)
+
+// accountChildTables is every table keyed by account_id: the one list every
+// account erase clears. `accounts.id` cascades (ON DELETE CASCADE) to each of
+// them already, so the explicit deletes are defense-in-depth against schema
+// drift that keep the erased-rows contract legible without relying on cascade
+// alone. TestAccountChildTablesCoverEveryAccountKeyedTable fails when a table
+// keyed by account_id is missing here.
+var accountChildTables = []string{
+	"sessions",
+	"devices",
+	"encrypted_blobs",
+	"recovery_key_packages",
+	"password_reset_tokens",
+	"totp_challenges",
+	"totp_failure_windows",
+}
+
+// deleteAccountChildRows deletes accountID's rows from every accountChildTables
+// table inside the caller's transaction; the caller's final accounts-row
+// delete decides whether they reach disk, and a miss there rolls them back.
+func deleteAccountChildRows(ctx context.Context, tx *sql.Tx, accountID string) error {
+	for _, table := range accountChildTables {
 		if _, err := tx.ExecContext(
 			ctx,
-			`DELETE FROM `+table+` WHERE account_id = ?`, // #nosec G202 -- table ranges only over the fixed childTables allowlist above, never user input; account_id is bound as a placeholder
+			`DELETE FROM `+table+` WHERE account_id = ?`, // #nosec G202 -- table ranges only over the fixed accountChildTables allowlist, never user input; account_id is bound as a placeholder
 			accountID,
 		); err != nil {
 			return fmt.Errorf("delete account %s rows: %w", table, err)
 		}
 	}
+	return nil
+}
+
+// deleteAccountRows erases every row this server holds for accountID inside
+// the caller's transaction: the child rows, then the account row through
+// accountDelete. ErrNotFound when accountDelete removes no account row; the
+// caller's rollback then restores the child rows.
+func deleteAccountRows(ctx context.Context, tx *sql.Tx, accountID, accountDelete string) error {
+	if err := deleteAccountChildRows(ctx, tx, accountID); err != nil {
+		return err
+	}
 
 	result, err := tx.ExecContext(ctx, accountDelete, accountID)
 	if err != nil {
-		return fmt.Errorf("delete account row: %w", err) // codecov:ignore -- isolating this specific step needs "accounts" to exist for all 7 child-table deletes above to succeed, then vanish only for this one; dropping "accounts" wholesale instead fails the very first child delete (confirmed empirically: with foreign_keys=ON, SQLite rejects DML against a child table whose FK-referenced table is gone, even though the statement never touches the FK column), same as TestDeleteAccountReturnsErrorAndRollsBackWhenAChildTableIsDropped. Needs a fake driver.
+		return fmt.Errorf("delete account row: %w", err) // codecov:ignore -- isolating this specific step needs "accounts" to exist for all 7 child-table deletes above to succeed, then vanish only for this one; dropping "accounts" wholesale instead fails the very first child delete (confirmed empirically: with foreign_keys=ON, SQLite rejects DML against a child table whose FK-referenced table is gone, even though the statement never touches the FK column), same as TestDeleteManagedAccountReturnsErrorAndRollsBackWhenAChildTableIsDropped. Needs a fake driver.
 	}
 
 	affected, err := result.RowsAffected()
@@ -546,7 +540,7 @@ const DefaultLapsedAccountSweepLimit = 500
 // self-hosted account lapsed even if the id collides — the same defense
 // PurgeManagedAccount already applies to deletion. Returns ErrNotFound when
 // accountID does not exist or is not a managed account (RowsAffected == 0);
-// callers use this the same way DeleteAccount's callers use ErrNotFound, to
+// callers use this the same way DeleteManagedAccount's callers use ErrNotFound, to
 // make the write idempotent for an account this server has never heard of.
 func (s *Store) SetAccountLapsed(ctx context.Context, accountID string, lapsedAt time.Time) error {
 	result, err := s.db.ExecContext(
@@ -799,7 +793,7 @@ func (s *Store) ListLapsedManagedAccountIDs(ctx context.Context, cutoff time.Tim
 	return candidates, nil
 }
 
-// DeleteLapsedManagedAccount erases accountID exactly like DeleteAccount —
+// DeleteLapsedManagedAccount erases accountID like DeleteManagedAccount —
 // every row this server holds for it, in one transaction — but ONLY when it
 // is still a managed account whose lapsed_at marker is set and strictly
 // older than cutoff at the moment the transaction runs. This is the
@@ -824,30 +818,8 @@ func (s *Store) DeleteLapsedManagedAccount(ctx context.Context, accountID string
 		_ = tx.Rollback()
 	}()
 
-	// Deliberate inline copy of DeleteAccount's child-table loop (same
-	// tables, same order, same #nosec rationale) rather than a shared
-	// helper, so the long-stable DeleteAccount above stays byte-identical
-	// and this function's erasure contract is self-contained. Keep the two
-	// lists in sync; each side's erases-every-row test pins its copy
-	// (TestDeleteAccountErasesEveryChildRowAndIsIdempotent there, the
-	// repository and sweep lapse tests here).
-	childTables := []string{
-		"sessions",
-		"devices",
-		"encrypted_blobs",
-		"recovery_key_packages",
-		"password_reset_tokens",
-		"totp_challenges",
-		"totp_failure_windows",
-	}
-	for _, table := range childTables {
-		if _, err := tx.ExecContext(
-			ctx,
-			`DELETE FROM `+table+` WHERE account_id = ?`, // #nosec G202 -- table ranges only over the fixed childTables allowlist above, never user input; account_id is bound as a placeholder
-			accountID,
-		); err != nil {
-			return fmt.Errorf("delete account %s rows: %w", table, err)
-		}
+	if err := deleteAccountChildRows(ctx, tx, accountID); err != nil {
+		return err
 	}
 
 	result, err := tx.ExecContext(
@@ -990,7 +962,7 @@ func (s *Store) ConsumeTOTPChallengeAndCreateSession(
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit consume totp challenge: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteAccount's COMMIT branch in fault_injection_test.go.
+		return fmt.Errorf("commit consume totp challenge: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteManagedAccount's COMMIT branch in fault_injection_test.go.
 	}
 	return nil
 }
@@ -1138,7 +1110,7 @@ func (s *Store) DisableTOTP(
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit disable totp: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteAccount's COMMIT branch in fault_injection_test.go.
+		return fmt.Errorf("commit disable totp: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteManagedAccount's COMMIT branch in fault_injection_test.go.
 	}
 	return nil
 }
@@ -1192,7 +1164,7 @@ func (s *Store) StorePendingTOTPSecret(
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit store pending totp secret: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteAccount's COMMIT branch in fault_injection_test.go.
+		return fmt.Errorf("commit store pending totp secret: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteManagedAccount's COMMIT branch in fault_injection_test.go.
 	}
 	return nil
 }
@@ -1311,7 +1283,7 @@ func (s *Store) EnableTOTPAndRotateRecoveryCode(
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit enable totp: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteAccount's COMMIT branch in fault_injection_test.go.
+		return fmt.Errorf("commit enable totp: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteManagedAccount's COMMIT branch in fault_injection_test.go.
 	}
 
 	return nil
@@ -1857,7 +1829,7 @@ RETURNING device_id`,
 	}
 
 	if err := tx.Commit(); err != nil {
-		return models.Device{}, fmt.Errorf("commit attach device: %w", err) // codecov:ignore -- on this store's single-connection sqlite (WAL, busy_timeout) a COMMIT whose statements all succeeded has no deterministically injectable in-process failure; needs a fake driver, the same deviation documented for DeleteAccount's commit branch.
+		return models.Device{}, fmt.Errorf("commit attach device: %w", err) // codecov:ignore -- on this store's single-connection sqlite (WAL, busy_timeout) a COMMIT whose statements all succeeded has no deterministically injectable in-process failure; needs a fake driver, the same deviation documented for DeleteManagedAccount's commit branch.
 	}
 	return attached, nil
 }
@@ -1908,7 +1880,7 @@ func (s *Store) DeleteDevice(ctx context.Context, accountID string, sessionToken
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit delete device: %w", err) // codecov:ignore -- on this store's sqlite a COMMIT whose statements all succeeded has no deterministically injectable in-process failure; needs a fake driver, the same deviation documented for DeleteAccount's commit branch.
+		return fmt.Errorf("commit delete device: %w", err) // codecov:ignore -- on this store's sqlite a COMMIT whose statements all succeeded has no deterministically injectable in-process failure; needs a fake driver, the same deviation documented for DeleteManagedAccount's commit branch.
 	}
 
 	return nil
@@ -1990,7 +1962,7 @@ WHERE excluded.generation > encrypted_blobs.generation
 	}
 
 	if err := tx.Commit(); err != nil {
-		return models.EncryptedBlob{}, fmt.Errorf("commit upsert blob: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteAccount's COMMIT branch in fault_injection_test.go.
+		return models.EncryptedBlob{}, fmt.Errorf("commit upsert blob: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteManagedAccount's COMMIT branch in fault_injection_test.go.
 	}
 	return blob, nil
 }
