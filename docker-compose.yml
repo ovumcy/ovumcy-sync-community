@@ -56,4 +56,7 @@ services:
       - /tmp
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+    # Longer than the server's 10 s request drain plus the sweep loops' stop,
+    # so SIGKILL never lands mid-shutdown (Docker's default grace is 10 s).
+    stop_grace_period: 30s
     restart: unless-stopped
