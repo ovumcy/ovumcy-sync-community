@@ -351,6 +351,56 @@ func TestRunPurgeLapsedAccountsLimitFlagIsTheBatchSize(t *testing.T) {
 	}
 }
 
+// TestRunPurgeLapsedAccountsMaxDeletesFlagCapsTheRun pins -max-deletes as the
+// per-run brake: with a cap of 1 over two eligible accounts only the first is
+// erased and the report says the run was capped; the configured default
+// applies when the flag is omitted, an explicit 0 lifts it, and a negative
+// value is refused before the database is opened.
+func TestRunPurgeLapsedAccountsMaxDeletesFlagCapsTheRun(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "maxdeletes.sqlite")
+	seedLapsedManagedAccount(t, dbPath, "purgeclicap000001", 90*24*time.Hour)
+	seedLapsedManagedAccount(t, dbPath, "purgeclicap000002", 91*24*time.Hour)
+	seedLapsedManagedAccount(t, dbPath, "purgeclicap000003", 92*24*time.Hour)
+
+	cfg := testConfigForDBPath(dbPath)
+
+	var buf bytes.Buffer
+	if err := runPurgeLapsedAccounts(cfg, []string{"-max-deletes=1"}, &buf); err != nil {
+		t.Fatalf("runPurgeLapsedAccounts returned error: %v", err)
+	}
+	for _, want := range []string{
+		"lapsed_account_sweep_deleted=1\n",
+		"lapsed_account_sweep_capped=true\n",
+	} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("expected the capped run to report %q, got %q", want, buf.String())
+		}
+	}
+
+	cfg.LapsedAccountSweepMaxDeletes = 1
+	buf.Reset()
+	if err := runPurgeLapsedAccounts(cfg, nil, &buf); err != nil {
+		t.Fatalf("runPurgeLapsedAccounts returned error: %v", err)
+	}
+	if !strings.Contains(buf.String(), "lapsed_account_sweep_deleted=1\n") ||
+		!strings.Contains(buf.String(), "lapsed_account_sweep_capped=true\n") {
+		t.Fatalf("expected the configured cap to apply without the flag, got %q", buf.String())
+	}
+
+	buf.Reset()
+	if err := runPurgeLapsedAccounts(cfg, []string{"-max-deletes=0"}, &buf); err != nil {
+		t.Fatalf("runPurgeLapsedAccounts returned error: %v", err)
+	}
+	if !strings.Contains(buf.String(), "lapsed_account_sweep_deleted=1\n") ||
+		strings.Contains(buf.String(), "lapsed_account_sweep_capped") {
+		t.Fatalf("expected an explicit 0 to drain the last account uncapped, got %q", buf.String())
+	}
+
+	if err := runPurgeLapsedAccounts(cfg, []string{"-max-deletes=-1"}, &buf); err == nil {
+		t.Fatal("expected a negative -max-deletes to be refused")
+	}
+}
+
 // TestRunPurgeLapsedAccountsReportsPartialProgressOnRunError proves the
 // "print progress before the error" convention (mirroring
 // runReminderSweepLoop / gc-guest-accounts in the ovumcy-managed peer):

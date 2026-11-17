@@ -183,7 +183,8 @@ func runServe(cfg config.Config) error {
 		defer background.Done()
 		runLapsedAccountSweepLoop(
 			backgroundCtx,
-			services.NewLapsedAccountSweepService(store, cfg.LapsedAccountGracePeriod),
+			services.NewLapsedAccountSweepService(store, cfg.LapsedAccountGracePeriod).
+				WithMaxDeletesPerRun(cfg.LapsedAccountSweepMaxDeletes),
 			cfg.LapsedAccountSweepInterval,
 			cfg.LapsedAccountSweepLimit,
 		)
@@ -273,6 +274,12 @@ func runLapsedAccountSweepLoop(
 				for _, accountID := range result.DeletedAccountIDs {
 					log.Printf("lapsed-account sweep deleted account_id=%s", accountID)
 				}
+			}
+			if result.Capped {
+				log.Printf(
+					"lapsed-account sweep stopped at the per-run delete cap (%d deleted); the rest waits for the next run",
+					result.Deleted,
+				)
 			}
 			if err != nil {
 				log.Printf("lapsed-account sweep: %v", err)

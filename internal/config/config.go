@@ -77,6 +77,13 @@ type Config struct {
 	// sweep run lists candidates in; the run pages until it has drained every
 	// eligible account.
 	LapsedAccountSweepLimit int
+	// LapsedAccountSweepMaxDeletes, from LAPSED_ACCOUNT_SWEEP_MAX_DELETES
+	// (default 0 = unbounded), caps how many accounts one sweep run erases.
+	// The run otherwise drains every eligible account, so a host clock that
+	// jumps past the grace period would erase every in-grace lapsed account in
+	// one run; a cap spreads that over runs and leaves time to react. The
+	// purge-lapsed-accounts -max-deletes flag overrides it for one CLI run.
+	LapsedAccountSweepMaxDeletes int
 	// ExpiredRowsSweepInterval, from EXPIRED_ROWS_SWEEP_INTERVAL (default
 	// 24h), paces the in-process deletion of rows whose expiry has passed —
 	// sessions, password-reset tokens, and TOTP challenges. Every read path
@@ -154,6 +161,13 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	// 0 — explicit or unset — keeps the unbounded drain; only negative values
+	// and parse failures are rejected.
+	lapsedAccountSweepMaxDeletes, err := nonNegativeIntFromEnv("LAPSED_ACCOUNT_SWEEP_MAX_DELETES", 0)
+	if err != nil {
+		return Config{}, err
+	}
+
 	expiredRowsSweepInterval, err := durationFromEnv("EXPIRED_ROWS_SWEEP_INTERVAL", 24*time.Hour)
 	if err != nil {
 		return Config{}, err
@@ -198,6 +212,8 @@ func Load() (Config, error) {
 		ExpiredRowsSweepLimit:      expiredRowsSweepLimit,
 		HTTPReadTimeout:            httpReadTimeout,
 		HTTPWriteTimeout:           httpWriteTimeout,
+
+		LapsedAccountSweepMaxDeletes: lapsedAccountSweepMaxDeletes,
 	}
 
 	if err := cfg.Validate(); err != nil {

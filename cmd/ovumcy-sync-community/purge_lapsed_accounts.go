@@ -38,6 +38,9 @@ import (
 //	-limit N     page size the run lists candidates in; the run still drains
 //	             every eligible account (0 or omitted =
 //	             db.DefaultLapsedAccountSweepLimit)
+//	-max-deletes N  stop after erasing N accounts (0 = unbounded; omitted =
+//	             LAPSED_ACCOUNT_SWEEP_MAX_DELETES); a capped run also prints
+//	             lapsed_account_sweep_capped=true
 //
 // On a setup failure (bad flags, cannot open the database, schema not at this
 // build's version) nothing
@@ -56,8 +59,12 @@ func runPurgeLapsedAccounts(cfg config.Config, args []string, w io.Writer) error
 	flagSet.SetOutput(io.Discard)
 	dryRun := flagSet.Bool("dry-run", false, "report eligible lapsed accounts without deleting them")
 	limit := flagSet.Int("limit", 0, "candidate lapsed accounts listed per page; every run drains all eligible (0 = default)")
+	maxDeletes := flagSet.Int("max-deletes", cfg.LapsedAccountSweepMaxDeletes, "stop after erasing this many accounts (0 = unbounded)")
 	if err := flagSet.Parse(args); err != nil {
 		return err
+	}
+	if *maxDeletes < 0 {
+		return errors.New("-max-deletes must not be negative")
 	}
 	// Flag parsing stops at the first non-flag, so a typo like `dry-run` would
 	// otherwise be ignored and the purge would run for real.
@@ -85,7 +92,8 @@ func runPurgeLapsedAccounts(cfg config.Config, args []string, w io.Writer) error
 		return errSchemaNotCurrent
 	}
 
-	sweepService := services.NewLapsedAccountSweepService(store, cfg.LapsedAccountGracePeriod)
+	sweepService := services.NewLapsedAccountSweepService(store, cfg.LapsedAccountGracePeriod).
+		WithMaxDeletesPerRun(*maxDeletes)
 	result, runErr := sweepService.Run(ctx, *limit, *dryRun)
 
 	if _, err := fmt.Fprintf(
@@ -97,6 +105,12 @@ func runPurgeLapsedAccounts(cfg config.Config, args []string, w io.Writer) error
 	}
 	for _, accountID := range result.DeletedAccountIDs {
 		if _, err := fmt.Fprintf(w, "lapsed_account_sweep_deleted_account_id=%s\n", accountID); err != nil {
+			return err
+		}
+	}
+
+	if result.Capped {
+		if _, err := fmt.Fprint(w, "lapsed_account_sweep_capped=true\n"); err != nil {
 			return err
 		}
 	}

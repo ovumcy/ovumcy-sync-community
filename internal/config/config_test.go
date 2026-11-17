@@ -443,6 +443,42 @@ func TestLoadRejectsUnparsableLapsedAccountSweepSettings(t *testing.T) {
 	})
 }
 
+func TestLoadLapsedAccountSweepMaxDeletes(t *testing.T) {
+	t.Run("defaults to unbounded", func(t *testing.T) {
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		if cfg.LapsedAccountSweepMaxDeletes != 0 {
+			t.Fatalf("expected the default cap 0 (unbounded), got %d", cfg.LapsedAccountSweepMaxDeletes)
+		}
+	})
+
+	t.Run("reads the configured cap", func(t *testing.T) {
+		t.Setenv("LAPSED_ACCOUNT_SWEEP_MAX_DELETES", "25")
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		if cfg.LapsedAccountSweepMaxDeletes != 25 {
+			t.Fatalf("expected cap 25, got %d", cfg.LapsedAccountSweepMaxDeletes)
+		}
+	})
+
+	for name, value := range map[string]string{"unparsable": "many", "negative": "-1"} {
+		t.Run(name+" is rejected", func(t *testing.T) {
+			t.Setenv("LAPSED_ACCOUNT_SWEEP_MAX_DELETES", value)
+
+			if _, err := Load(); err == nil {
+				t.Fatalf("expected %q to be rejected", value)
+			} else if !strings.Contains(err.Error(), "LAPSED_ACCOUNT_SWEEP_MAX_DELETES") {
+				t.Fatalf("expected the offending variable to be named, got %v", err)
+			}
+		})
+	}
+}
+
 func TestLoadExpiredRowsSweepConfig(t *testing.T) {
 	t.Run("defaults", func(t *testing.T) {
 		cfg, err := Load()
