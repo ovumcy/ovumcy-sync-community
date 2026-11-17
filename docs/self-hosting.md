@@ -42,7 +42,7 @@ This service itself does not terminate TLS. Production deployments should not ex
 
 ## Recommended Environment Baseline
 
-- `BIND_ADDR=:8080` address the server listens on; keep the host part empty in the container, since the built-in healthcheck probes `127.0.0.1`
+- `BIND_ADDR=:8080` address the server listens on; the built-in healthcheck probes this address, or loopback when the host part is empty, `0.0.0.0` or `::`
 - `DB_PATH=/data/ovumcy-sync-community.sqlite`
 - `SESSION_TTL=720h`
 - `MAX_DEVICES=5`
