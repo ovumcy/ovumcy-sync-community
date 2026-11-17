@@ -139,3 +139,32 @@ func TestSQLiteDSNAppendsPragmasAfterAnExistingQuery(t *testing.T) {
 		}
 	}
 }
+
+// TestOpenRefusesAPathThatSetsTxLock pins that a configured path cannot
+// override connectionPragmas' _txlock=immediate: the driver reads the first
+// _txlock in the DSN, which is the path's own.
+func TestOpenRefusesAPathThatSetsTxLock(t *testing.T) {
+	dir := t.TempDir()
+	for _, query := range []string{"_txlock=deferred", "mode=rwc&_txlock=immediate", "_txlock="} {
+		dbPath := filepath.Join(dir, "sync.sqlite")
+		store, err := Open(dbPath + "?" + query)
+		if err == nil {
+			_ = store.Close()
+			t.Fatalf("Open(%q) succeeded, want a refusal", query)
+		}
+		if !strings.Contains(err.Error(), "_txlock") {
+			t.Fatalf("Open(%q) error = %v, want it to name _txlock", query, err)
+		}
+		if _, statErr := os.Stat(dbPath); !os.IsNotExist(statErr) {
+			t.Fatalf("Open(%q) created %s before refusing (stat err %v)", query, dbPath, statErr)
+		}
+	}
+
+	store, err := Open(filepath.Join(dir, "plain.sqlite") + "?mode=rwc")
+	if err != nil {
+		t.Fatalf("Open with a query that leaves _txlock alone: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+}

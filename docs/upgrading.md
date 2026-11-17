@@ -36,7 +36,11 @@ symmetric — read "Rollback limits" before you start. Background:
 
    Use the same `-f` files you normally run with. `migrate` logs `applied database migrations`
    on success. If it refuses with `database schema is ahead of this binary`, you are starting an
-   older image than the one that last touched the database.
+   older image than the one that last touched the database. `migrate` has no time limit, since
+   building an index over a large table can take minutes; stop it with Ctrl-C or SIGTERM, which
+   rolls back only the migration in progress. Run one `migrate` at a time. A second run that
+   waits more than 5 s for the first one's lock exits with `database is locked`, leaving no
+   migration half-applied; run it again once the first has finished.
 4. Start `serve`: `docker compose up -d`.
 5. Check readiness. `GET /readyz` must answer `200` (it also compares the applied migrations with
    what the binary embeds), and `docker compose ps` should show `healthy` once the 20 s start
