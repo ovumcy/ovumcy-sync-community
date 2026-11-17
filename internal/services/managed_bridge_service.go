@@ -17,7 +17,7 @@ var ErrInvalidManagedAccount = errors.New("invalid_managed_account")
 // lapse is recorded. Only an ordered reactivation signal clears the lapse.
 var ErrManagedAccountLapsed = errors.New("managed_account_lapsed")
 
-// ErrInvalidEntitlementSignal: a reactivation without an as-of instant, or
+// ErrInvalidEntitlementSignal: a lapse or reactivation without an as-of instant, or
 // an as-of instant before the Unix epoch or beyond maxEntitlementSignalSkew
 // ahead of this server's clock.
 var ErrInvalidEntitlementSignal = errors.New("invalid_entitlement_signal")

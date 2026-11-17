@@ -484,7 +484,7 @@ func TestCreateManagedSessionAfterLapseIsRefusedUntilReactivation(t *testing.T) 
 // TestSetAccountLapseSignalOrdersSignalsByAsOf pins the ordering contract: a
 // reactivation must be strictly newer than the applied lapse, a lapse older
 // than an applied reactivation changes nothing (sessions survive), ties go
-// to the lapse, and a lapse without as-of is never stale.
+// to the lapse.
 func TestSetAccountLapseSignalOrdersSignalsByAsOf(t *testing.T) {
 	store := openTestStore(t)
 	authService := NewAuthService(store, 24*time.Hour)
