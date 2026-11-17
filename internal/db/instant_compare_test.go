@@ -103,11 +103,11 @@ func TestInstantComparesHoldWithinOneSecond(t *testing.T) {
 			t.Fatalf("lapse account: %v", err)
 		}
 
-		ids, err := store.ListLapsedManagedAccountIDs(ctx, later, 0)
+		ids, err := store.ListLapsedManagedAccountIDs(ctx, later, LapsedCandidate{}, 0)
 		if err != nil {
 			t.Fatalf("list lapsed accounts: %v", err)
 		}
-		if len(ids) != 1 || ids[0] != accountID {
+		if len(ids) != 1 || ids[0].ID != accountID {
 			t.Fatalf("expected %q past the cutoff, got %#v", accountID, ids)
 		}
 		if err := store.DeleteLapsedManagedAccount(ctx, accountID, later); err != nil {

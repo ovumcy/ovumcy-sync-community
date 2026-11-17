@@ -85,7 +85,7 @@ All loops run inside `serve` and stop with the server's shutdown signal (`runSer
 
 | Work | Where | Cadence |
 | --- | --- | --- |
-| Lapsed-account sweep: erases managed accounts whose lapse marker is older than the grace period | `runLapsedAccountSweepLoop`, `services.LapsedAccountSweepService` | `LAPSED_ACCOUNT_SWEEP_INTERVAL` (default 24h), grace `LAPSED_ACCOUNT_GRACE_PERIOD` (default 60 days), per-run cap `LAPSED_ACCOUNT_SWEEP_LIMIT` (0 means the store default, 500) |
+| Lapsed-account sweep: erases managed accounts whose lapse marker is older than the grace period | `runLapsedAccountSweepLoop`, `services.LapsedAccountSweepService` | `LAPSED_ACCOUNT_SWEEP_INTERVAL` (default 24h), grace `LAPSED_ACCOUNT_GRACE_PERIOD` (default 60 days), page size `LAPSED_ACCOUNT_SWEEP_LIMIT` (0 means the store default, 500); a run drains every eligible account page by page |
 | Expired-rows sweep: deletes expired sessions, password-reset tokens and TOTP challenges | `runExpiredRowsSweepLoop`, `services.ExpiredRowsSweepService` | `EXPIRED_ROWS_SWEEP_INTERVAL` (default 24h), batch size `EXPIRED_ROWS_SWEEP_LIMIT` (0 means the store default, 500); a run drains each table batch by batch |
 | Rate-limiter sweep: drops fully elapsed entries | `maybeSweepLocked` in `internal/security/rate_limiter.go` | Not a goroutine: amortized inside `Allow`, once every 1024 calls |
 
@@ -101,7 +101,7 @@ Expiry is enforced at read time regardless, so the sweeps only bound table growt
 | `migrate` | Applies embedded forward-only migrations and records them in `schema_migrations` |
 | `serve` | Opens the database, refuses to start if the schema is not initialized, starts the HTTP server and the sweep loops |
 | `healthcheck` | Used by the container `HEALTHCHECK` (`Dockerfile`); probes the local server's `/readyz` and exits non-zero on a non-2xx answer |
-| `purge-lapsed-accounts` | On-demand run of the lapsed-account purge; flags `-dry-run` and `-limit N`; refuses a database whose schema is not current instead of migrating it |
+| `purge-lapsed-accounts` | On-demand run of the lapsed-account purge; flags `-dry-run` and `-limit N` (page size; a run drains every eligible account); refuses a database whose schema is not current instead of migrating it |
 
 ## Data model
 

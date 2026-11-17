@@ -620,12 +620,12 @@ func TestListAndDeleteLapsedManagedAccountRespectCutoffAndManagedScope(t *testin
 		t.Fatalf("lapse within-grace account: %v", err)
 	}
 
-	candidateIDs, err := store.ListLapsedManagedAccountIDs(ctx, cutoff, 0)
+	candidates, err := store.ListLapsedManagedAccountIDs(ctx, cutoff, LapsedCandidate{}, 0)
 	if err != nil {
 		t.Fatalf("list lapsed managed account ids: %v", err)
 	}
-	if len(candidateIDs) != 1 || candidateIDs[0] != pastGraceID {
-		t.Fatalf("expected only %q as a candidate, got %#v", pastGraceID, candidateIDs)
+	if len(candidates) != 1 || candidates[0].ID != pastGraceID {
+		t.Fatalf("expected only %q as a candidate, got %#v", pastGraceID, candidates)
 	}
 
 	// Within-grace: not eligible yet, delete is refused and the account

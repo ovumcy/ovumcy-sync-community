@@ -56,7 +56,7 @@ This service itself does not terminate TLS. Production deployments should not ex
 - `FIELD_ENCRYPTION_KEY=` optional hex-encoded master key (>=32 bytes / 64 hex chars) that enables the TOTP second-factor surface; leave unset to disable 2FA entirely (see *Optional Two-Factor Authentication* below)
 - `TOTP_ISSUER=ovumcy-sync-community` optional label embedded in `otpauth://` provisioning URIs so authenticator apps know which instance the secret belongs to
 - `LAPSED_ACCOUNT_GRACE_PERIOD=1440h` (60 days) how long a managed account's data is kept after the managed bridge signals an entitlement lapse, before it is erased (at least `24h`); irrelevant unless you run the managed bridge (see *Entitlement-Lapse Cleanup* below)
-- `LAPSED_ACCOUNT_SWEEP_INTERVAL=24h` how often `serve` purges accounts past that window on its own; `0` disables the in-process sweep and leaves `purge-lapsed-accounts` as the only trigger. `LAPSED_ACCOUNT_SWEEP_LIMIT` caps candidates per run (`0` or unset = store default)
+- `LAPSED_ACCOUNT_SWEEP_INTERVAL=24h` how often `serve` purges accounts past that window on its own; `0` disables the in-process sweep and leaves `purge-lapsed-accounts` as the only trigger. `LAPSED_ACCOUNT_SWEEP_LIMIT` sets the accounts per listing page; each run pages until every eligible account is erased (`0` or unset = store default)
 - `EXPIRED_ROWS_SWEEP_INTERVAL=24h` how often `serve` deletes expired sessions, password-reset tokens, and TOTP challenges. Expiry is already enforced at use time on every read path, so this is data minimization, not a security switch; `0` disables the sweep. `EXPIRED_ROWS_SWEEP_LIMIT` sets the rows per delete batch; each run repeats batches until the backlog is gone (`0` or unset = store default)
 - `HTTP_READ_TIMEOUT=10s` / `HTTP_WRITE_TIMEOUT=15s` per-request read/write windows. A full `MAX_BLOB_BYTES` transfer must fit inside them — at the defaults a 16 MiB blob needs roughly 1.7 MB/s of client bandwidth — so widen both on deployments syncing large blobs over slow links; zero is rejected (a zero `net/http` timeout means no timeout at all)
 
@@ -277,14 +277,14 @@ From then on `POST /managed/session` answers `409 managed_account_lapsed`: a del
 
 The retained data is erased only after `LAPSED_ACCOUNT_GRACE_PERIOD` (default 60 days) has elapsed.
 
-`serve` does this itself, every `LAPSED_ACCOUNT_SWEEP_INTERVAL` (default `24h`), starting ten minutes after boot (or one interval, if shorter), so a server restarted more often than the interval still sweeps. Nothing to schedule: the retention window the paragraph above promises is enforced by the running server, not by an operator remembering to wire a timer. `LAPSED_ACCOUNT_SWEEP_LIMIT` caps how many candidates one run examines (unset uses the store's default page size), and `LAPSED_ACCOUNT_SWEEP_INTERVAL=0` turns the in-process sweep off entirely — which is also the rollback lever, effective on restart with no new image.
+`serve` does this itself, every `LAPSED_ACCOUNT_SWEEP_INTERVAL` (default `24h`), starting ten minutes after boot (or one interval, if shorter), so a server restarted more often than the interval still sweeps. Nothing to schedule: the retention window the paragraph above promises is enforced by the running server, not by an operator remembering to wire a timer. `LAPSED_ACCOUNT_SWEEP_LIMIT` sets the page size a run lists candidates in, and every run pages until it has erased each eligible account (unset uses the store's default page size), and `LAPSED_ACCOUNT_SWEEP_INTERVAL=0` turns the in-process sweep off entirely — which is also the rollback lever, effective on restart with no new image.
 
 The same work is available on demand as a subcommand, for a one-off run, a dry-run audit, or as the sole trigger on a deployment that keeps the interval at `0`:
 
 ```bash
 ovumcy-sync-community purge-lapsed-accounts            # deletes eligible accounts
 ovumcy-sync-community purge-lapsed-accounts -dry-run    # report only, deletes nothing
-ovumcy-sync-community purge-lapsed-accounts -limit 200  # cap how many candidates one run examines
+ovumcy-sync-community purge-lapsed-accounts -limit 200  # list candidates 200 at a time; the run still drains all
 ```
 
 The subcommand never migrates: against a database whose schema is not at its build's version it exits with an error and changes nothing. Run `migrate` with the same build first.

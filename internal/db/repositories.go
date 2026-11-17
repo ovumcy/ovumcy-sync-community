@@ -744,22 +744,39 @@ func (s *Store) GetAccountLapsedAt(ctx context.Context, accountID string) (*time
 	return &parsed, nil
 }
 
-// ListLapsedManagedAccountIDs returns up to limit managed account ids whose
+// LapsedCandidate is one row ListLapsedManagedAccountIDs returns. LapsedAt is
+// the stored lapsed_at text, kept only so the candidate can be passed back as
+// the next page's keyset cursor; callers never parse it.
+type LapsedCandidate struct {
+	ID       string
+	LapsedAt string
+}
+
+// ListLapsedManagedAccountIDs returns up to limit managed accounts whose
 // lapsed_at marker is set and strictly older than cutoff (lapsed_at <
-// cutoff), oldest lapse first. A non-positive limit falls back to
-// DefaultLapsedAccountSweepLimit. mode = 'managed' is an explicit
-// defense-in-depth filter, not the only thing keeping self-hosted accounts
-// out of this list — SetAccountLapsed's own WHERE clause means a
+// cutoff), ordered by (lapse instant, id) and starting strictly after the
+// candidate after. The zero LapsedCandidate starts at the oldest lapse, and
+// passing a page's last element pages forward: the keyset never revisits a
+// row, so a caller that skips a candidate (dry run, raced reactivation,
+// delete error) cannot be handed it again within one drain. A non-positive
+// limit falls back to DefaultLapsedAccountSweepLimit. mode = 'managed' is an
+// explicit defense-in-depth filter, not the only thing keeping self-hosted
+// accounts out of this list — SetAccountLapsed's own WHERE clause means a
 // self-hosted account's lapsed_at can never be non-NULL in the first place.
-func (s *Store) ListLapsedManagedAccountIDs(ctx context.Context, cutoff time.Time, limit int) ([]string, error) {
+func (s *Store) ListLapsedManagedAccountIDs(ctx context.Context, cutoff time.Time, after LapsedCandidate, limit int) ([]LapsedCandidate, error) {
 	if limit <= 0 {
 		limit = DefaultLapsedAccountSweepLimit
 	}
 
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id FROM accounts WHERE mode = 'managed' AND lapsed_at IS NOT NULL AND julianday(lapsed_at) < julianday(?) ORDER BY julianday(lapsed_at) LIMIT ?`,
+		`SELECT id, lapsed_at FROM accounts
+		WHERE mode = 'managed' AND lapsed_at IS NOT NULL AND julianday(lapsed_at) < julianday(?1)
+		  AND (?2 = '' OR julianday(lapsed_at) > julianday(?2) OR (julianday(lapsed_at) = julianday(?2) AND id > ?3))
+		ORDER BY julianday(lapsed_at), id LIMIT ?4`,
 		cutoff.UTC().Format(time.RFC3339Nano),
+		after.LapsedAt,
+		after.ID,
 		limit,
 	)
 	if err != nil {
@@ -767,19 +784,19 @@ func (s *Store) ListLapsedManagedAccountIDs(ctx context.Context, cutoff time.Tim
 	}
 	defer func() { _ = rows.Close() }()
 
-	ids := make([]string, 0)
+	candidates := make([]LapsedCandidate, 0)
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var candidate LapsedCandidate
+		if err := rows.Scan(&candidate.ID, &candidate.LapsedAt); err != nil {
 			return nil, fmt.Errorf("scan lapsed managed account id: %w", err)
 		}
-		ids = append(ids, id)
+		candidates = append(candidates, candidate)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("list lapsed managed account ids rows: %w", err) // codecov:ignore -- a mid-iteration step failure is not deterministically injectable in-process: a dropped table or pre-canceled context fails QueryContext first (covered), and row-shape corruption surfaces at rows.Scan (covered); needs a fake driver.
 	}
 
-	return ids, nil
+	return candidates, nil
 }
 
 // DeleteLapsedManagedAccount erases accountID exactly like DeleteAccount —

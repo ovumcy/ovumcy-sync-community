@@ -73,8 +73,9 @@ type Config struct {
 	// no new image.
 	LapsedAccountSweepInterval time.Duration
 	// LapsedAccountSweepLimit, from LAPSED_ACCOUNT_SWEEP_LIMIT (default 0 =
-	// the store's own default page size), caps how many candidate accounts one
-	// in-process sweep run examines.
+	// the store's own default page size), is the page size one in-process
+	// sweep run lists candidates in; the run pages until it has drained every
+	// eligible account.
 	LapsedAccountSweepLimit int
 	// ExpiredRowsSweepInterval, from EXPIRED_ROWS_SWEEP_INTERVAL (default
 	// 24h), paces the in-process deletion of rows whose expiry has passed —

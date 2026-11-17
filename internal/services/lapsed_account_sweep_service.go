@@ -50,7 +50,7 @@ type LapsedAccountSweepResult struct {
 // outside a single Run call, while the delete still exercises the real
 // in-transaction re-check that refuses the no-longer-lapsed account.
 type lapsedSweepStore interface {
-	ListLapsedManagedAccountIDs(ctx context.Context, cutoff time.Time, limit int) ([]string, error)
+	ListLapsedManagedAccountIDs(ctx context.Context, cutoff time.Time, after db.LapsedCandidate, limit int) ([]db.LapsedCandidate, error)
 	DeleteLapsedManagedAccount(ctx context.Context, accountID string, cutoff time.Time) error
 }
 
@@ -71,9 +71,14 @@ func NewLapsedAccountSweepService(store *db.Store, gracePeriod time.Duration) *L
 	}
 }
 
-// Run lists up to limit candidate lapsed accounts (a non-positive limit
-// defaults per db.Store.ListLapsedManagedAccountIDs) and deletes every one
-// still eligible at the moment its own delete transaction runs. The cutoff
+// Run drains every lapsed account eligible at one cutoff: it lists candidates
+// in pages of limit (a non-positive limit defaults per
+// db.Store.ListLapsedManagedAccountIDs) and deletes every one still eligible
+// at the moment its own delete transaction runs, until a page comes back
+// short. Each page starts after the previous page's last candidate, so a
+// candidate that was skipped (dry run, raced reactivation, delete error) is
+// behind the cursor and never listed twice in one run, and the drain
+// terminates because the cursor only advances through a finite set. The cutoff
 // (now - gracePeriod) is computed once at the start of Run and reused for
 // both the candidate listing and every per-candidate delete-time re-check,
 // so a run that takes a while never spuriously excludes a candidate purely
@@ -84,8 +89,10 @@ func NewLapsedAccountSweepService(store *db.Store, gracePeriod time.Duration) *L
 // When dryRun is true, candidates are counted into Examined but never
 // deleted, so Deleted stays 0 and DeletedAccountIDs stays empty.
 //
-// Failure policy: the initial listing failing is infrastructure trouble, so
-// Run aborts immediately and returns the error with an empty result. A
+// Failure policy: a listing failing is infrastructure trouble, so Run stops
+// and returns the error with whatever earlier pages already did (an empty
+// result when the first page fails). A cancelled ctx stops the run before
+// the next listing or delete, with the same partial result. A
 // per-candidate delete that reports db.ErrNotFound is the benign, by-design
 // outcome the delete-time re-check exists to produce (the account vanished,
 // or a reactivation raced the sweep and made it ineligible again) — not a failure —
@@ -96,33 +103,48 @@ func NewLapsedAccountSweepService(store *db.Store, gracePeriod time.Duration) *L
 // and nothing about a failed delete changes the candidate's eligibility for
 // the next scheduled run.
 func (s *LapsedAccountSweepService) Run(ctx context.Context, limit int, dryRun bool) (LapsedAccountSweepResult, error) {
-	cutoff := s.now().UTC().Add(-s.gracePeriod)
-
-	candidateIDs, err := s.store.ListLapsedManagedAccountIDs(ctx, cutoff, limit)
-	if err != nil {
-		return LapsedAccountSweepResult{}, fmt.Errorf("list lapsed account candidates: %w", err)
+	if limit <= 0 {
+		limit = db.DefaultLapsedAccountSweepLimit
 	}
+	cutoff := s.now().UTC().Add(-s.gracePeriod)
 
 	var result LapsedAccountSweepResult
 	var deleteErrs []error
+	var after db.LapsedCandidate
 
-	for _, accountID := range candidateIDs {
-		result.Examined++
-
-		if dryRun {
-			continue
+	for {
+		if err := ctx.Err(); err != nil {
+			return result, errors.Join(append(deleteErrs, err)...)
+		}
+		page, err := s.store.ListLapsedManagedAccountIDs(ctx, cutoff, after, limit)
+		if err != nil {
+			return result, errors.Join(append(deleteErrs, fmt.Errorf("list lapsed account candidates: %w", err))...)
 		}
 
-		if err := s.store.DeleteLapsedManagedAccount(ctx, accountID, cutoff); err != nil {
-			if errors.Is(err, db.ErrNotFound) {
+		for _, candidate := range page {
+			if err := ctx.Err(); err != nil {
+				return result, errors.Join(append(deleteErrs, err)...)
+			}
+			result.Examined++
+
+			if dryRun {
 				continue
 			}
-			deleteErrs = append(deleteErrs, fmt.Errorf("delete lapsed account: %w", err))
-			continue
-		}
-		result.Deleted++
-		result.DeletedAccountIDs = append(result.DeletedAccountIDs, accountID)
-	}
 
-	return result, errors.Join(deleteErrs...)
+			if err := s.store.DeleteLapsedManagedAccount(ctx, candidate.ID, cutoff); err != nil {
+				if errors.Is(err, db.ErrNotFound) {
+					continue
+				}
+				deleteErrs = append(deleteErrs, fmt.Errorf("delete lapsed account: %w", err))
+				continue
+			}
+			result.Deleted++
+			result.DeletedAccountIDs = append(result.DeletedAccountIDs, candidate.ID)
+		}
+
+		if len(page) < limit {
+			return result, errors.Join(deleteErrs...)
+		}
+		after = page[len(page)-1]
+	}
 }

@@ -1117,7 +1117,7 @@ func TestLapseMarkerMethodsReturnErrorWhenAccountsTableIsDropped(t *testing.T) {
 		t.Fatalf("expected a store-failure error, not ErrNotFound, got %v", err)
 	}
 
-	if _, err := store.ListLapsedManagedAccountIDs(ctx, time.Now().UTC(), 0); err == nil {
+	if _, err := store.ListLapsedManagedAccountIDs(ctx, time.Now().UTC(), LapsedCandidate{}, 0); err == nil {
 		t.Fatal("expected error listing lapsed managed account ids after accounts table is dropped")
 	}
 
@@ -1232,7 +1232,7 @@ func TestListLapsedManagedAccountIDsSurfacesScanErrorOnNullAccountID(t *testing.
 		t.Fatalf("insert NULL-id managed row: %v", err)
 	}
 
-	_, err = store.ListLapsedManagedAccountIDs(ctx, time.Now().UTC(), 0)
+	_, err = store.ListLapsedManagedAccountIDs(ctx, time.Now().UTC(), LapsedCandidate{}, 0)
 	if err == nil {
 		t.Fatal("expected a scan error listing a NULL-id managed row")
 	}
