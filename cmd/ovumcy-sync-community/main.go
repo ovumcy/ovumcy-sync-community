@@ -166,7 +166,9 @@ func runServe(cfg config.Config) error {
 		stopBackground()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_ = server.Shutdown(ctx)
+		if err := server.Shutdown(ctx); err != nil {
+			log.Printf("shutdown: in-flight requests not drained: %v", err)
+		}
 		background.Wait()
 		close(drained)
 	}()
