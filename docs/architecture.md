@@ -86,7 +86,7 @@ All loops run inside `serve` and stop with the server's shutdown signal (`runSer
 | Work | Where | Cadence |
 | --- | --- | --- |
 | Lapsed-account sweep: erases managed accounts whose lapse marker is older than the grace period | `runLapsedAccountSweepLoop`, `services.LapsedAccountSweepService` | `LAPSED_ACCOUNT_SWEEP_INTERVAL` (default 24h), grace `LAPSED_ACCOUNT_GRACE_PERIOD` (default 60 days), per-run cap `LAPSED_ACCOUNT_SWEEP_LIMIT` (0 means the store default, 500) |
-| Expired-rows sweep: deletes expired sessions, password-reset tokens and TOTP challenges | `runExpiredRowsSweepLoop`, `services.ExpiredRowsSweepService` | `EXPIRED_ROWS_SWEEP_INTERVAL` (default 24h), per-run cap `EXPIRED_ROWS_SWEEP_LIMIT` |
+| Expired-rows sweep: deletes expired sessions, password-reset tokens and TOTP challenges | `runExpiredRowsSweepLoop`, `services.ExpiredRowsSweepService` | `EXPIRED_ROWS_SWEEP_INTERVAL` (default 24h), batch size `EXPIRED_ROWS_SWEEP_LIMIT` (0 means the store default, 500); a run drains each table batch by batch |
 | Rate-limiter sweep: drops fully elapsed entries | `maybeSweepLocked` in `internal/security/rate_limiter.go` | Not a goroutine: amortized inside `Allow`, once every 1024 calls |
 
 The first run of each loop happens ten minutes after boot (or one interval, if shorter), and a non-positive interval disables the loop.
