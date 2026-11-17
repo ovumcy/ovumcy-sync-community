@@ -7,10 +7,11 @@
 
 services:
   traefik:
-    image: traefik:v3.6
+    image: traefik:v3.6@sha256:31267173a15b4944e797a76ffd9c419707c8d8b32fe5b610f80cd0cfa05f372d
     command:
-      - --providers.docker=true
-      - --providers.docker.exposedbydefault=false
+      # Routes come from a file, not Docker discovery: no Docker socket in a
+      # container that faces the internet.
+      - --providers.file.filename=/etc/traefik/dynamic.yml
       - --entrypoints.web.address=:80
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
       - --entrypoints.web.http.redirections.entrypoint.scheme=https
@@ -25,9 +26,17 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    environment:
+      SYNC_HOST: "${SYNC_HOST:?set SYNC_HOST to the public hostname, e.g. sync.example.com}"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./docs/examples/reverse-proxy/traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
       - traefik-acme:/acme
+    read_only: true
+    # Traefik runs as root in its image and binds 80/443: that is the one
+    # capability it keeps.
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
     networks:
       edge:
         ipv4_address: "${SYNC_PROXY_IP:-172.30.98.10}"
@@ -42,31 +51,6 @@ services:
     ports: !reset []
     networks:
       - edge
-    labels:
-      - traefik.enable=true
-      - traefik.http.services.ovumcy-sync.loadbalancer.server.port=8080
-
-      # Public API.
-      - traefik.http.routers.ovumcy-sync.rule=Host(`${SYNC_HOST}`)
-      - traefik.http.routers.ovumcy-sync.entrypoints=websecure
-      - traefik.http.routers.ovumcy-sync.tls.certresolver=le
-      - traefik.http.routers.ovumcy-sync.service=ovumcy-sync
-      - traefik.http.routers.ovumcy-sync.middlewares=ovumcy-sync-body
-
-      # /metrics and the managed bridge are never public: higher priority
-      # router, answered by the same service but with an IP allowlist that
-      # matches nothing, giving 403.
-      - traefik.http.routers.ovumcy-sync-internal.rule=Host(`${SYNC_HOST}`) && (Path(`/metrics`) || Path(`/managed`) || PathPrefix(`/managed/`))
-      - traefik.http.routers.ovumcy-sync-internal.priority=100
-      - traefik.http.routers.ovumcy-sync-internal.entrypoints=websecure
-      - traefik.http.routers.ovumcy-sync-internal.tls.certresolver=le
-      - traefik.http.routers.ovumcy-sync-internal.service=ovumcy-sync
-      - traefik.http.routers.ovumcy-sync-internal.middlewares=ovumcy-sync-deny
-
-      # Body limit: 32 MiB (the app accepts about 21.3 MiB for a 16 MiB blob).
-      - traefik.http.middlewares.ovumcy-sync-body.buffering.maxrequestbodybytes=33554432
-      - traefik.http.middlewares.ovumcy-sync-body.buffering.memrequestbodybytes=1048576
-      - traefik.http.middlewares.ovumcy-sync-deny.ipallowlist.sourcerange=192.0.2.1/32
 
 networks:
   edge:

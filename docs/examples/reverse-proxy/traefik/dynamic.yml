@@ -1,0 +1,41 @@
+# Traefik dynamic configuration for ovumcy-sync-community, loaded by the file
+# provider in docker-compose.traefik.yml. Go templating reads SYNC_HOST from
+# Traefik's environment.
+
+http:
+  routers:
+    ovumcy-sync:
+      rule: 'Host(`{{ env "SYNC_HOST" }}`)'
+      entryPoints: [websecure]
+      tls:
+        certResolver: le
+      service: ovumcy-sync
+      middlewares: [ovumcy-sync-body]
+
+    # /metrics and the managed bridge are never public: a higher-priority
+    # router answered by the same service, behind an IP allowlist that matches
+    # nothing, giving 403.
+    ovumcy-sync-internal:
+      rule: 'Host(`{{ env "SYNC_HOST" }}`) && (Path(`/metrics`) || Path(`/managed`) || PathPrefix(`/managed/`))'
+      priority: 100
+      entryPoints: [websecure]
+      tls:
+        certResolver: le
+      service: ovumcy-sync
+      middlewares: [ovumcy-sync-deny]
+
+  services:
+    ovumcy-sync:
+      loadBalancer:
+        servers:
+          - url: "http://ovumcy-sync-community:8080"
+
+  middlewares:
+    # Body limit: 32 MiB (the app accepts about 21.3 MiB for a 16 MiB blob).
+    ovumcy-sync-body:
+      buffering:
+        maxRequestBodyBytes: 33554432
+        memRequestBodyBytes: 1048576
+    ovumcy-sync-deny:
+      ipAllowList:
+        sourceRange: ["192.0.2.1/32"]

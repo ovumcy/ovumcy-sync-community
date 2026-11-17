@@ -3,7 +3,8 @@
 A reference compose override: Traefik terminates TLS (Let's Encrypt, TLS-ALPN challenge), sends the
 real client address upstream, limits request bodies, and answers `/metrics` and `/managed/*` with `403`.
 [docker-compose.traefik.yml](docker-compose.traefik.yml) is meant to be layered on the base
-`docker-compose.yml`; the app container listens on plain HTTP `:8080`.
+`docker-compose.yml`; the app container listens on plain HTTP `:8080`. Routes, the body limit and the
+`403` allowlist live in [dynamic.yml](dynamic.yml), which Traefik's file provider loads.
 
 ## Use
 
@@ -35,5 +36,8 @@ The override drops the base file's `127.0.0.1:8080` host mapping (`ports: !reset
   containing only a documentation address (`192.0.2.1/32`), so every real caller gets `403`. Scrape
   metrics from inside the Docker network; the managed bridge's one caller reaches the app over the
   private network, never through the public edge.
-- The Docker socket is mounted read-only for provider discovery; that is still sensitive access.
-  Use a socket proxy if that matters in your environment.
+- **No Docker socket.** Routes come from the file provider, not Docker discovery: read-only or not,
+  the socket gives a compromised edge container control of the host's Docker daemon.
+- **Container hardening.** Traefik, Caddy and the app run with a read-only root filesystem, every
+  capability dropped (the proxies keep `NET_BIND_SERVICE` for ports 80 and 443) and
+  `no-new-privileges`. Every image is pinned by digest and kept current by Dependabot.

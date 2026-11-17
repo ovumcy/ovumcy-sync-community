@@ -12,7 +12,7 @@ services:
       - edge
 
   caddy:
-    image: caddy:2.10.2-alpine
+    image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
     depends_on:
       - ovumcy-sync-community
     environment:
@@ -26,6 +26,14 @@ services:
       - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
+    read_only: true
+    tmpfs:
+      - /tmp
+    # Caddy runs as root in its image and binds 80/443: that is the one
+    # capability it keeps.
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
     networks:
       edge:
         ipv4_address: "${SYNC_PROXY_IP:-172.30.99.10}"
