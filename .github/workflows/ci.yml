@@ -206,24 +206,21 @@ jobs:
         # the module, so the lane stays one required check named `race`. The
         # two -run patterns are complements over Test*, so every test runs
         # exactly once; the package has no Fuzz or Example functions.
+        # Output streams live with a per-shard prefix, so a cancelled job still
+        # shows where each shard was; pipefail gives each subshell go's status.
         run: |
-          logs="$RUNNER_TEMP/race"
-          mkdir -p "$logs"
-          go test -race -timeout=45m $(go list ./... | grep -v '/internal/services$') > "$logs/rest.log" 2>&1 &
+          set -o pipefail
+          packages=$(go list ./... | grep -v '/internal/services$')
+          ( go test -race -timeout=45m $packages 2>&1 | sed -u 's/^/[rest] /' ) &
           rest=$!
-          go test -race -timeout=45m -run '^Test[A-L]' ./internal/services > "$logs/services-a-l.log" 2>&1 &
+          ( go test -race -timeout=45m -run '^Test[A-L]' ./internal/services 2>&1 | sed -u 's/^/[services A-L] /' ) &
           first=$!
-          go test -race -timeout=45m -run '^Test[^A-L]' ./internal/services > "$logs/services-rest.log" 2>&1 &
+          ( go test -race -timeout=45m -run '^Test[^A-L]' ./internal/services 2>&1 | sed -u 's/^/[services M-Z] /' ) &
           second=$!
           status=0
           wait "$rest" || status=1
           wait "$first" || status=1
           wait "$second" || status=1
-          for log in "$logs"/*.log; do
-            echo "::group::$(basename "$log")"
-            cat "$log"
-            echo "::endgroup::"
-          done
           exit "$status"
 
   coverage-upload:
