@@ -83,7 +83,7 @@ func (s *ManagedBridgeService) CreateManagedSession(
 		return AuthResult{}, err // codecov:ignore -- UpsertManagedAccount's generic ExecContext-error branch needs the accounts table gone or otherwise faulted, but the FindAccountByID lookup just above already touches accounts as this function's first store call, so isolating a second, later accounts-table failure needs a fake driver (same same-table-multi-step limitation as the RowsAffected/COMMIT deviations in internal/db/fault_injection_test.go).
 	}
 
-	return s.auth.CreateSessionForAccount(ctx, accountID)
+	return s.auth.CreateSessionForUnlapsedManagedAccount(ctx, accountID)
 }
 
 // PurgeManagedAccount permanently erases the managed account and every row

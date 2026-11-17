@@ -113,6 +113,49 @@ func TestCreateTOTPChallengeForVerifiedPasswordRequiresUnchangedHash(t *testing.
 	}
 }
 
+func TestCreateSessionForUnlapsedManagedAccountRefusesALapse(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedGuardAccount(t, store, "selfhosted-account")
+	if _, err := store.UpsertManagedAccount(ctx, models.Account{
+		ID:            "managedacct1234",
+		Login:         "managed:managedacct1234",
+		PasswordHash:  "managed_service_only",
+		Mode:          "managed",
+		PremiumActive: true,
+		CreatedAt:     time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("upsert managed account: %v", err)
+	}
+
+	if err := store.CreateSessionForUnlapsedManagedAccount(ctx, guardSession("managedacct1234", "live")); err != nil {
+		t.Fatalf("insert on an unlapsed account: %v", err)
+	}
+	if _, err := store.FindSessionByTokenHash(ctx, "live"); err != nil {
+		t.Fatalf("expected the session stored: %v", err)
+	}
+	if err := store.CreateSessionForUnlapsedManagedAccount(ctx, guardSession("managedacct1234", "live")); err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected a duplicate token insert to fail as a store error, got %v", err)
+	}
+
+	now := time.Now().UTC()
+	if err := store.ApplyEntitlementSignal(ctx, "managedacct1234", EntitlementSignal{AsOf: now, ReceivedAt: now}); err != nil {
+		t.Fatalf("lapse: %v", err)
+	}
+	for _, tc := range []struct{ accountID, hash string }{
+		{"managedacct1234", "after-lapse"},
+		{"selfhosted-account", "self-hosted"},
+		{"missing", "nobody"},
+	} {
+		if err := store.CreateSessionForUnlapsedManagedAccount(ctx, guardSession(tc.accountID, tc.hash)); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("%s: expected ErrNotFound, got %v", tc.accountID, err)
+		}
+		if _, err := store.FindSessionByTokenHash(ctx, tc.hash); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("%s: expected no session stored, got %v", tc.accountID, err)
+		}
+	}
+}
+
 func TestConsumeTOTPChallengeAndCreateSessionYieldsOneSession(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()

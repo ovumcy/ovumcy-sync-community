@@ -540,19 +540,18 @@ func TestRevokeSessionSurfacesStoreError(t *testing.T) {
 	}
 }
 
-// TestCreateSessionForAccountSurfacesStoreError exercises
-// CreateSessionForAccount's FindAccountByID generic-error branch (distinct
-// from the existing TestAuthServiceCreateSessionForMissingAccountIsUnauthorized,
-// which only reaches the trivial ErrNotFound case).
-func TestCreateSessionForAccountSurfacesStoreError(t *testing.T) {
+// TestCreateSessionForUnlapsedManagedAccountSurfacesStoreError exercises the
+// guarded insert's generic-error branch: a store failure is surfaced, never
+// mistaken for a lapse.
+func TestCreateSessionForUnlapsedManagedAccountSurfacesStoreError(t *testing.T) {
 	store := openTestStore(t)
 	service := NewAuthService(store, 24*time.Hour)
 	if err := store.Close(); err != nil {
 		t.Fatalf("close store: %v", err)
 	}
 
-	_, err := service.CreateSessionForAccount(context.Background(), "any-account")
-	if err == nil || errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("expected a store-failure error, not ErrUnauthorized, got %v", err)
+	_, err := service.CreateSessionForUnlapsedManagedAccount(context.Background(), "managedacct1234")
+	if err == nil || errors.Is(err, ErrManagedAccountLapsed) {
+		t.Fatalf("expected a store-failure error, not ErrManagedAccountLapsed, got %v", err)
 	}
 }

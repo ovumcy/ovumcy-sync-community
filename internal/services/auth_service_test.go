@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -156,12 +157,34 @@ func TestAuthServiceRejectsEmptyAndExpiredSession(t *testing.T) {
 	}
 }
 
-func TestAuthServiceCreateSessionForMissingAccountIsUnauthorized(t *testing.T) {
+func TestAuthServiceManagedMintRefusesLapsedMissingAndSelfHostedAccounts(t *testing.T) {
 	store := openTestStore(t)
 	service := NewAuthService(store, 24*time.Hour)
+	bridge := NewManagedBridgeService(store, service)
+	ctx := context.Background()
+	const accountID = "managedacct1234"
 
-	if _, err := service.CreateSessionForAccount(context.Background(), "missing-account"); err != ErrUnauthorized {
-		t.Fatalf("expected ErrUnauthorized for missing account, got %v", err)
+	if _, err := bridge.CreateManagedSession(ctx, accountID); err != nil {
+		t.Fatalf("create managed session: %v", err)
+	}
+	// The lapse lands between the mint's upsert and its session insert.
+	if err := bridge.SetAccountLapseSignal(ctx, accountID, false, time.Now().UTC()); err != nil {
+		t.Fatalf("lapse account: %v", err)
+	}
+	if _, err := service.CreateSessionForUnlapsedManagedAccount(ctx, accountID); !errors.Is(err, ErrManagedAccountLapsed) {
+		t.Fatalf("expected ErrManagedAccountLapsed for a lapsed account, got %v", err)
+	}
+
+	if _, err := service.CreateSessionForUnlapsedManagedAccount(ctx, "missingacct1234"); !errors.Is(err, ErrManagedAccountLapsed) {
+		t.Fatalf("expected ErrManagedAccountLapsed for a missing account, got %v", err)
+	}
+
+	registered, err := service.Register(ctx, "selfhosted@example.com", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if _, err := service.CreateSessionForUnlapsedManagedAccount(ctx, registered.AccountID); !errors.Is(err, ErrManagedAccountLapsed) {
+		t.Fatalf("expected a refusal for a self-hosted account, got %v", err)
 	}
 }
 

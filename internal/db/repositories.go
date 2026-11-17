@@ -865,6 +865,29 @@ func (s *Store) CreateSession(ctx context.Context, session models.Session) (mode
 	return session, nil
 }
 
+// CreateSessionForUnlapsedManagedAccount inserts a managed-bridge session only
+// while the account is still a managed account with no entitlement lapse. A
+// lapse that commits first makes it insert nothing (ErrNotFound); one that
+// commits after deletes the session with the rest. Either way no session
+// minted across a lapse survives it.
+func (s *Store) CreateSessionForUnlapsedManagedAccount(ctx context.Context, session models.Session) error {
+	result, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO sessions (id, account_id, token_hash, created_at, last_seen_at, expires_at)
+		 SELECT ?, id, ?, ?, ?, ? FROM accounts WHERE id = ? AND mode = 'managed' AND lapsed_at IS NULL`,
+		session.ID,
+		session.TokenHash,
+		session.CreatedAt.UTC().Format(time.RFC3339Nano),
+		session.LastSeenAt.UTC().Format(time.RFC3339Nano),
+		session.ExpiresAt.UTC().Format(time.RFC3339Nano),
+		session.AccountID,
+	)
+	if err != nil {
+		return fmt.Errorf("insert session for unlapsed managed account: %w", err)
+	}
+	return requireOneRow(result, "insert session for unlapsed managed account")
+}
+
 // CreateSessionForVerifiedPassword inserts a password-only session only while
 // the account's password hash still equals verifiedHash and TOTP is still
 // off. A password change, reset or TOTP enrollment that commits first makes
