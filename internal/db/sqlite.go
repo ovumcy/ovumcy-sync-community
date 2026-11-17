@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -15,7 +16,20 @@ import (
 
 type Store struct {
 	db *sql.DB
+
+	// ready caches CheckReady's last answer; see readinessCacheTTL.
+	ready struct {
+		mu        sync.Mutex
+		checkedAt time.Time
+		err       error
+	}
 }
+
+// readinessCacheTTL is how long one CheckReady answer is reused. /readyz is
+// public and exempt from rate limits, and the pool holds one connection, so
+// without it a flood of probes queues every request behind schema queries.
+// One second is far below any healthcheck interval.
+const readinessCacheTTL = time.Second
 
 func Open(path string) (*Store, error) {
 	inMemory := isInMemoryPath(path)
@@ -94,6 +108,7 @@ func sqliteDSN(path string) string {
 }
 
 func (s *Store) Close() error {
+	defer s.forgetReadiness()
 	// PRAGMA wal_checkpoint(TRUNCATE) returns one row (busy, log,
 	// checkpointed) rather than signalling failure the way a normal
 	// statement does: busy != 0 means another connection's open read or
@@ -140,7 +155,33 @@ func (s *Store) SchemaReady(ctx context.Context) (bool, error) {
 // traffic on a schema no code in this build understands. The same name-set
 // comparison that refuses such a database at startup refuses it here, so the
 // process reports unready instead of healthy.
+//
+// Callers within readinessCacheTTL of a completed check share its answer, and
+// concurrent callers wait for the one check in flight instead of each queuing
+// its own statements. An answer cut short by the caller's own context is not
+// cached.
 func (s *Store) CheckReady(ctx context.Context) error {
+	s.ready.mu.Lock()
+	defer s.ready.mu.Unlock()
+	if !s.ready.checkedAt.IsZero() && time.Since(s.ready.checkedAt) < readinessCacheTTL {
+		return s.ready.err
+	}
+	err := s.checkReadyUncached(ctx)
+	if ctx.Err() == nil {
+		s.ready.checkedAt = time.Now()
+		s.ready.err = err
+	}
+	return err
+}
+
+func (s *Store) forgetReadiness() {
+	s.ready.mu.Lock()
+	s.ready.checkedAt = time.Time{}
+	s.ready.err = nil
+	s.ready.mu.Unlock()
+}
+
+func (s *Store) checkReadyUncached(ctx context.Context) error {
 	ready, err := schemaReady(ctx, s.db)
 	if err != nil {
 		return err

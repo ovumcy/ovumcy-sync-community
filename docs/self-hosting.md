@@ -42,6 +42,7 @@ This service itself does not terminate TLS. Production deployments should not ex
 
 ## Recommended Environment Baseline
 
+- `BIND_ADDR=:8080` address the server listens on; keep the host part empty in the container, since the built-in healthcheck probes `127.0.0.1`
 - `DB_PATH=/data/ovumcy-sync-community.sqlite`
 - `SESSION_TTL=720h`
 - `MAX_DEVICES=5`
@@ -51,6 +52,7 @@ This service itself does not terminate TLS. Production deployments should not ex
 - `METRICS_ENABLED=false`
 - `METRICS_BEARER_TOKEN=` bearer token for `GET /metrics` (at least 32 bytes, e.g. `openssl rand -hex 32`); required when `METRICS_ENABLED=true`
 - `TRUSTED_PROXY_CIDRS=` set this to your reverse-proxy IP or CIDR when you want forwarded client IPs to participate in auth rate limiting
+- `ALLOWED_ORIGINS=` explicit CORS allowlist; set it only when browser clients call the server directly
 - `FIELD_ENCRYPTION_KEY=` optional hex-encoded master key (>=32 bytes / 64 hex chars) that enables the TOTP second-factor surface; leave unset to disable 2FA entirely (see *Optional Two-Factor Authentication* below)
 - `TOTP_ISSUER=ovumcy-sync-community` optional label embedded in `otpauth://` provisioning URIs so authenticator apps know which instance the secret belongs to
 - `LAPSED_ACCOUNT_GRACE_PERIOD=1440h` (60 days) how long a managed account's data is kept after the managed bridge signals an entitlement lapse, before it is erased (at least `24h`); irrelevant unless you run the managed bridge (see *Entitlement-Lapse Cleanup* below)

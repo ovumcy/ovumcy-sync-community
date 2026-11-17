@@ -20,8 +20,10 @@ keys the auth rate limiter on the TCP peer, which is the proxy. All users then s
 
 **Fix.**
 
-1. Set `TRUSTED_PROXY_CIDRS` to the proxy's address or network as the app container sees it
-   (comma-separated, e.g. the Docker network subnet).
+1. Set `TRUSTED_PROXY_CIDRS` to the proxy's own address as the app container sees it
+   (comma-separated if there are several proxies). Pin the proxy to a fixed address on its Docker
+   network and list that address, not the subnet: any other container on a trusted subnet could
+   choose its own rate-limit key.
 2. Make the proxy send `X-Forwarded-For` carrying the real client address. The server walks that
    header from the right and uses the first address that is not itself a trusted proxy.
    `X-Real-IP` is never read. If the connecting peer is not trusted, the header is ignored.
