@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -47,6 +48,22 @@ func TestApplyMigrationSkipsAVersionAnotherRunnerRecorded(t *testing.T) {
 	}
 	if after := countMigrationRows(t, stale); after != before {
 		t.Fatalf("expected schema_migrations unchanged, got %d -> %d", before, after)
+	}
+}
+
+func TestApplyMigrationSurfacesAFailedRecheck(t *testing.T) {
+	store, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	// No schema_migrations table: the re-check read fails and nothing runs.
+	err = applyMigration(context.Background(), store.db, "0001_init.sql")
+	if err == nil || !strings.Contains(err.Error(), "re-check migration") {
+		t.Fatalf("expected the re-check error, got %v", err)
 	}
 }
 

@@ -36,15 +36,21 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		}
 	}
 
+	// A newer build's `migrate` may have run alongside this one and applied
+	// versions this build does not know; refuse that schema here too, rather
+	// than report success on it.
+	if _, _, err := migrationState(ctx, database); err != nil {
+		return err // codecov:ignore -- reachable only when another process records an unknown version between the check at the top and this one; the refusal itself is covered by the schema-ahead tests through the first call.
+	}
 	return nil
 }
 
 // applyMigration runs one embedded migration and records it in one
 // transaction. The pending list was read before the transaction began, so a
-// second `migrate` or `serve` on the same file may have applied the version
-// since; the transaction begins IMMEDIATE (the store's DSN), so the re-check
-// below is serialized against that other runner, and a version it finds
-// already recorded is skipped instead of failing on its DDL.
+// second `migrate` on the same file may have applied the version since; the
+// transaction begins IMMEDIATE (the store's DSN), so the re-check below is
+// serialized against that other runner, and a version it finds already
+// recorded is skipped instead of failing on its DDL.
 func applyMigration(ctx context.Context, database *sql.DB, version string) error {
 	sqlBytes, err := migrationFiles.ReadFile("migrations/" + version)
 	if err != nil {
@@ -53,7 +59,7 @@ func applyMigration(ctx context.Context, database *sql.DB, version string) error
 
 	tx, err := database.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin migration %s: %w", version, err) // codecov:ignore -- the "ensure schema_migrations" statement above is this function's first database call, so a closed store or canceled context already fails there (TestApplyMigrationsAndSchemaReadyReturnErrorsOnClosedStore); reaching this later BeginTx with an already-failing connection needs a fake driver or a synchronized concurrent transaction holding the store's sole connection (SetMaxOpenConns(1)), which would be a timing-fragile test.
+		return fmt.Errorf("begin migration %s: %w", version, err) // codecov:ignore -- applyMigrations' "ensure schema_migrations" statement runs first, so a closed store or canceled context already fails there (TestApplyMigrationsAndSchemaReadyReturnErrorsOnClosedStore); this BeginTx fails only on lock contention past busy_timeout from another process, which a deterministic in-process test cannot produce without a timing-fragile second writer.
 	}
 	defer func() {
 		_ = tx.Rollback()
@@ -61,7 +67,7 @@ func applyMigration(ctx context.Context, database *sql.DB, version string) error
 
 	var recorded int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, version).Scan(&recorded); err != nil {
-		return fmt.Errorf("re-check migration %s: %w", version, err) // codecov:ignore -- the transaction just began on the store's sole connection and schema_migrations was ensured by this function's caller; a failing read here needs a fake driver, the same deviation as the BeginTx branch above.
+		return fmt.Errorf("re-check migration %s: %w", version, err)
 	}
 	if recorded > 0 {
 		return nil
