@@ -31,36 +31,57 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		if _, done := applied[version]; done {
 			continue
 		}
-
-		sqlBytes, err := migrationFiles.ReadFile("migrations/" + version)
-		if err != nil {
-			return fmt.Errorf("read migration %s: %w", version, err) // codecov:ignore -- same //go:embed compile-time guarantee as migrationState's ReadDir call: a path just returned by ReadDir on this embedded filesystem cannot fail a subsequent ReadFile. Cannot occur in practice.
-		}
-
-		tx, err := database.BeginTx(ctx, nil)
-		if err != nil {
-			return fmt.Errorf("begin migration %s: %w", version, err) // codecov:ignore -- the "ensure schema_migrations" statement above is this function's first database call, so a closed store or canceled context already fails there (TestApplyMigrationsAndSchemaReadyReturnErrorsOnClosedStore); reaching this later BeginTx with an already-failing connection needs a fake driver or a synchronized concurrent transaction holding the store's sole connection (SetMaxOpenConns(1)), which would be a timing-fragile test.
-		}
-
-		if _, err := tx.ExecContext(ctx, string(sqlBytes)); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("apply migration %s: %w", version, err)
-		}
-
-		if _, err := tx.ExecContext(
-			ctx,
-			`INSERT INTO schema_migrations (version, applied_at) VALUES (?, CURRENT_TIMESTAMP)`,
-			version,
-		); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("record migration %s: %w", version, err)
-		}
-
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit migration %s: %w", version, err) // codecov:ignore -- on this store's single-connection sqlite (WAL, busy_timeout) a COMMIT whose statements all succeeded has no deterministically injectable in-process failure; needs a fake driver, the same deviation documented for DeleteManagedAccount's and DeleteLapsedManagedAccount's commit branches in repositories.go.
+		if err := applyMigration(ctx, database, version); err != nil {
+			return err
 		}
 	}
 
+	return nil
+}
+
+// applyMigration runs one embedded migration and records it in one
+// transaction. The pending list was read before the transaction began, so a
+// second `migrate` or `serve` on the same file may have applied the version
+// since; the transaction begins IMMEDIATE (the store's DSN), so the re-check
+// below is serialized against that other runner, and a version it finds
+// already recorded is skipped instead of failing on its DDL.
+func applyMigration(ctx context.Context, database *sql.DB, version string) error {
+	sqlBytes, err := migrationFiles.ReadFile("migrations/" + version)
+	if err != nil {
+		return fmt.Errorf("read migration %s: %w", version, err) // codecov:ignore -- same //go:embed compile-time guarantee as migrationState's ReadDir call: a path just returned by ReadDir on this embedded filesystem cannot fail a subsequent ReadFile. Cannot occur in practice.
+	}
+
+	tx, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin migration %s: %w", version, err) // codecov:ignore -- the "ensure schema_migrations" statement above is this function's first database call, so a closed store or canceled context already fails there (TestApplyMigrationsAndSchemaReadyReturnErrorsOnClosedStore); reaching this later BeginTx with an already-failing connection needs a fake driver or a synchronized concurrent transaction holding the store's sole connection (SetMaxOpenConns(1)), which would be a timing-fragile test.
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	var recorded int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, version).Scan(&recorded); err != nil {
+		return fmt.Errorf("re-check migration %s: %w", version, err) // codecov:ignore -- the transaction just began on the store's sole connection and schema_migrations was ensured by this function's caller; a failing read here needs a fake driver, the same deviation as the BeginTx branch above.
+	}
+	if recorded > 0 {
+		return nil
+	}
+
+	if _, err := tx.ExecContext(ctx, string(sqlBytes)); err != nil {
+		return fmt.Errorf("apply migration %s: %w", version, err)
+	}
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO schema_migrations (version, applied_at) VALUES (?, CURRENT_TIMESTAMP)`,
+		version,
+	); err != nil {
+		return fmt.Errorf("record migration %s: %w", version, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migration %s: %w", version, err) // codecov:ignore -- on this store's single-connection sqlite (WAL, busy_timeout) a COMMIT whose statements all succeeded has no deterministically injectable in-process failure; needs a fake driver, the same deviation documented for DeleteManagedAccount's and DeleteLapsedManagedAccount's commit branches in repositories.go.
+	}
 	return nil
 }
 
