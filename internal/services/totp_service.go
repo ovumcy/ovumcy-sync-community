@@ -22,7 +22,7 @@ var (
 	ErrTOTPLocked           = errors.New("totp_locked")
 )
 
-// TOTPLockedError reports a spent failed-TOTP window and when it ends.
+// TOTPLockedError reports a spent TOTP budget and when it opens again.
 // errors.Is(err, ErrTOTPLocked) matches it.
 type TOTPLockedError struct {
 	RetryAfter time.Duration
@@ -32,22 +32,14 @@ func (e *TOTPLockedError) Error() string { return ErrTOTPLocked.Error() }
 
 func (e *TOTPLockedError) Unwrap() error { return ErrTOTPLocked }
 
-// TOTPFailureWindow and maxTOTPAccountFailedAttempts bound code guesses per
-// account across every challenge, so logging in again (which mints a fresh
-// challenge with a fresh per-challenge budget) cannot reset the ceiling.
-// 10 per 15 minutes holds a password-holding attacker to about 960 guesses
-// a day, ~0.3 % against the 3 codes the skew window accepts. Only a
-// successful verify or a completed enrollment (a new secret) clears it.
+// pendingEnrollmentAttemptWindow and maxPendingEnrollmentAttempts give one
+// pending secret a lifetime of guesses on top of the rolling enrollment
+// budget: a rolling budget alone would let a stolen session pace its guesses
+// and never reach the burn. StartEnrollment and a completed enrollment clear it.
 const (
-	TOTPFailureWindow            = 15 * time.Minute
-	maxTOTPAccountFailedAttempts = 10
+	pendingEnrollmentAttemptWindow = 100 * 365 * 24 * time.Hour
+	maxPendingEnrollmentAttempts   = 10
 )
-
-// pendingEnrollmentAttemptWindow makes the enrollment-verify budget a lifetime
-// budget for one pending secret rather than a rolling one: a window that
-// restarted every 15 minutes would let a stolen session pace its guesses and
-// never reach the burn. StartEnrollment and a completed enrollment clear it.
-const pendingEnrollmentAttemptWindow = 100 * 365 * 24 * time.Hour
 
 // TOTPChallengeTTL is how long a login-second-factor challenge remains
 // usable. 5 minutes is long enough that an owner has time to open their
@@ -84,6 +76,7 @@ type TOTPService struct {
 	now       func() time.Time
 	newSecret func() ([]byte, error)
 	metrics   TOTPMetricsObserver
+	attempts  *totpAttemptLimiter
 }
 
 func NewTOTPService(
@@ -99,6 +92,7 @@ func NewTOTPService(
 		issuer:    issuer,
 		now:       time.Now,
 		newSecret: security.NewTOTPSecret,
+		attempts:  newTOTPAttemptLimiter(),
 	}
 }
 
@@ -270,15 +264,21 @@ func (s *TOTPService) CompleteEnrollment(
 	}
 
 	// A successful verify hands out a recovery code, so a session alone must
-	// not get unlimited guesses at a pending secret: each pending secret gets
-	// maxTOTPAccountFailedAttempts guesses in total, after which it is burnt
+	// not get unlimited guesses at a pending secret: each guess draws the
+	// enrollment budget, and each pending secret gets
+	// maxPendingEnrollmentAttempts guesses in total, after which it is burnt
 	// and guessing again needs the password (StartEnrollment).
 	if code == "" {
 		s.observeEnrollmentCompletion("invalid_code")
 		return "", ErrTOTPInvalidCode
 	}
 	now := s.now().UTC()
-	reserved, _, err := s.store.ReserveTOTPAttempt(ctx, accountID, now, pendingEnrollmentAttemptWindow, maxTOTPAccountFailedAttempts)
+	budget := s.budget(ctx, totpPurposeEnroll, accountID)
+	if _, err := budget.reserve(now); err != nil {
+		s.observeEnrollmentCompletion("locked")
+		return "", err
+	}
+	reserved, _, err := s.store.ReserveTOTPAttempt(ctx, accountID, now, pendingEnrollmentAttemptWindow, maxPendingEnrollmentAttempts)
 	if err != nil {
 		return "", err
 	}
@@ -339,8 +339,10 @@ func (s *TOTPService) CompleteEnrollment(
 		return "", err
 	}
 
-	// A new secret is a fresh guessing space; a window spent against the
+	// A new secret is a fresh guessing space; a budget spent against the
 	// previous one must not lock the owner out of the first login.
+	budget.succeedInSession()
+	s.clearAccountBudgets(ctx, accountID)
 	s.clearCodeFailures(ctx, accountID)
 
 	s.observeEnrollmentCompletion("ok")
@@ -447,8 +449,8 @@ func (s *TOTPService) disableConflict(
 }
 
 // VerifyAccountCode is the step-up check for an enrolled account on a route
-// that already verified the password: it meters the attempt in the
-// per-account window, verifies the code, and claims its step so the same
+// that already verified the password: it draws the attempt from the in-session
+// step-up budget, verifies the code, and claims its step so the same
 // code cannot be replayed on any other TOTP path.
 func (s *TOTPService) VerifyAccountCode(ctx context.Context, account models.Account, code string) error {
 	if !s.Configured() {
@@ -474,7 +476,8 @@ func (s *TOTPService) verifyAccountCode(ctx context.Context, account models.Acco
 	}
 
 	now := s.now().UTC()
-	if err := s.reserveCodeAttempt(ctx, account.ID, now); err != nil {
+	budget := s.budget(ctx, totpPurposeStepUp, account.ID)
+	if _, err := budget.reserve(now); err != nil {
 		return err
 	}
 
@@ -490,7 +493,7 @@ func (s *TOTPService) verifyAccountCode(ctx context.Context, account models.Acco
 	if !claimed {
 		return ErrTOTPReplayed
 	}
-	s.clearCodeFailures(ctx, account.ID)
+	budget.succeedInSession()
 	return nil
 }
 
@@ -593,10 +596,10 @@ func (s *TOTPService) VerifyChallenge(
 		return AuthResult{}, fmt.Errorf("%w: %v", ErrTOTPSecretDecrypt, err)
 	}
 
-	if err := s.reserveCodeAttempt(ctx, account.ID, now); err != nil {
-		if errors.Is(err, ErrTOTPLocked) {
-			s.observeChallengeCompletion("locked")
-		}
+	budget := s.budget(ctx, totpPurposeSignIn, account.ID)
+	reservation, err := budget.reserve(now)
+	if err != nil {
+		s.observeChallengeCompletion("locked")
 		return AuthResult{}, err
 	}
 
@@ -636,7 +639,7 @@ func (s *TOTPService) VerifyChallenge(
 		s.observeChallengeCompletion("replayed")
 		return AuthResult{}, ErrTOTPReplayed
 	}
-	s.clearCodeFailures(ctx, account.ID)
+	budget.succeedSignIn(reservation)
 
 	result, err := s.auth.createSessionConsumingChallenge(ctx, account.ID, security.HashToken(challengeID))
 	if err != nil {
@@ -650,28 +653,18 @@ func (s *TOTPService) VerifyChallenge(
 	return result, nil
 }
 
-// reserveCodeAttempt spends one slot of the account's failed-TOTP window
-// before a code is checked against an enrolled secret; a spent window
-// returns *TOTPLockedError.
-func (s *TOTPService) reserveCodeAttempt(ctx context.Context, accountID string, now time.Time) error {
-	reserved, windowEndsAt, err := s.store.ReserveTOTPAttempt(
-		ctx,
-		accountID,
-		now,
-		TOTPFailureWindow,
-		maxTOTPAccountFailedAttempts,
-	)
-	if err != nil {
-		return err
-	}
-	if !reserved {
-		return &TOTPLockedError{RetryAfter: windowEndsAt.Sub(now)}
-	}
-	return nil
+// clearAccountBudgets drops the account buckets of the budgets that check a
+// code against the enrolled secret, and this caller's client buckets of them:
+// failures counted against a previous secret say nothing about the new one.
+func (s *TOTPService) clearAccountBudgets(ctx context.Context, accountID string) {
+	signIn := s.budget(ctx, totpPurposeSignIn, accountID)
+	stepUp := s.budget(ctx, totpPurposeStepUp, accountID)
+	s.attempts.reset(signIn.client, signIn.account, stepUp.client, stepUp.account)
 }
 
-// clearCodeFailures is best-effort: a failed delete leaves the account's
-// window counting a successful verify, which errs toward the stricter limit.
+// clearCodeFailures drops the pending secret's lifetime count. It is
+// best-effort: a failed delete leaves the count standing, which errs toward
+// the stricter limit.
 func (s *TOTPService) clearCodeFailures(ctx context.Context, accountID string) {
 	_ = s.store.ResetTOTPFailures(ctx, accountID)
 }

@@ -218,20 +218,20 @@ func TestStepUpCodeRoutesFailClosedWithoutVerifier(t *testing.T) {
 	}
 }
 
-// Wrong codes on device removal spend the same per-account window as every
-// other code check, so removal is no extra code oracle; missing codes spend
-// none of it.
-func TestRemoveDeviceSharesTheAccountTOTPWindow(t *testing.T) {
+// Wrong codes on device removal spend the same step-up budget as every other
+// in-session code check, so removal is no extra code oracle; missing codes
+// spend none of it.
+func TestRemoveDeviceSharesTheStepUpTOTPBudget(t *testing.T) {
 	f := newStepUpCodeFixture(t)
 	ctx := context.Background()
 
-	for range maxTOTPAccountFailedAttempts {
+	for range maxTOTPAttempts {
 		if err := f.sync.RemoveDevice(ctx, f.accountID, f.stepUp(""), "device-totp1111"); !errors.Is(err, ErrTOTPInvalidCode) {
 			t.Fatalf("missing code: expected ErrTOTPInvalidCode, got %v", err)
 		}
 	}
 	wrong := wrongTOTPCode(t, f.secret, f.later)
-	for range maxTOTPAccountFailedAttempts {
+	for range maxTOTPAttempts {
 		if err := f.sync.RemoveDevice(ctx, f.accountID, f.stepUp(wrong), "device-totp1111"); !errors.Is(err, ErrTOTPInvalidCode) {
 			t.Fatalf("wrong code: expected ErrTOTPInvalidCode, got %v", err)
 		}

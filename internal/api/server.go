@@ -189,6 +189,7 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)
 		return
 	}
+	request = request.WithContext(services.WithClientKey(request.Context(), s.clientIPForRateLimit(request)))
 	serveWithPanicRecovery(writer, request, s.mux)
 }
 
@@ -381,13 +382,14 @@ func (s *Server) handleLogin(writer http.ResponseWriter, request *http.Request) 
 	// can still lock out a known victim's login by spamming bad credentials
 	// for as long as the flood lasts; the bucket burns out on its own window,
 	// and proving the recovery code (forgot-password) clears it.
-	if !s.allowLoginRequestForIdentifier(writer, request, payload.Login) {
+	identifierSlot, identifierCharged, ok := s.allowLoginRequestForIdentifier(writer, request, payload.Login)
+	if !ok {
 		return
 	}
 
 	result, err := s.auth.Login(request.Context(), payload.Login, payload.Password)
-	if err == nil && result.TOTPChallenge == nil {
-		s.refundLoginIdentifier(payload.Login)
+	if err == nil && result.TOTPChallenge == nil && identifierCharged {
+		s.authLimiter.Refund(identifierSlot)
 	}
 	if err != nil {
 		switch {
@@ -423,7 +425,8 @@ func (s *Server) handleChangePassword(
 
 	currentSessionTokenHash := security.HashToken(bearerTokenFromRequest(request))
 
-	if !s.allowStepUpAttempt(writer, account.ID) {
+	stepUpSlot, ok := s.allowStepUpAttempt(writer, account.ID)
+	if !ok {
 		return
 	}
 	recoveryCode, err := s.auth.ChangePassword(
@@ -434,7 +437,7 @@ func (s *Server) handleChangePassword(
 		payload.NewPassword,
 		payload.Code,
 	)
-	s.settleStepUpAttempt(account.ID, err)
+	s.settleStepUpAttempt(stepUpSlot, err)
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrNewPasswordMustDiffer):
@@ -518,7 +521,8 @@ func (s *Server) handleRegenerateRecoveryCode(
 		return
 	}
 
-	if !s.allowStepUpAttempt(writer, account.ID) {
+	stepUpSlot, ok := s.allowStepUpAttempt(writer, account.ID)
+	if !ok {
 		return
 	}
 	recoveryCode, err := s.auth.RegenerateRecoveryCode(
@@ -527,7 +531,7 @@ func (s *Server) handleRegenerateRecoveryCode(
 		stepUpFromRequest(request, payload.CurrentPassword),
 		payload.Code,
 	)
-	s.settleStepUpAttempt(account.ID, err)
+	s.settleStepUpAttempt(stepUpSlot, err)
 	if err != nil {
 		mapTOTPError(writer, err)
 		return
@@ -554,11 +558,12 @@ func (s *Server) handleTOTPEnroll(
 		return
 	}
 
-	if !s.allowStepUpAttempt(writer, account.ID) {
+	stepUpSlot, ok := s.allowStepUpAttempt(writer, account.ID)
+	if !ok {
 		return
 	}
 	result, err := s.totp.StartEnrollment(request.Context(), account.ID, stepUpFromRequest(request, payload.CurrentPassword))
-	s.settleStepUpAttempt(account.ID, err)
+	s.settleStepUpAttempt(stepUpSlot, err)
 	if err != nil {
 		mapTOTPError(writer, err)
 		return
@@ -622,13 +627,14 @@ func (s *Server) handleTOTPDisable(
 		return
 	}
 
-	if !s.allowStepUpAttempt(writer, account.ID) {
+	stepUpSlot, ok := s.allowStepUpAttempt(writer, account.ID)
+	if !ok {
 		return
 	}
 	stepUp := stepUpFromRequest(request, payload.CurrentPassword)
 	stepUp.TOTPCode = payload.Code
 	err := s.totp.Disable(request.Context(), account.ID, stepUp)
-	s.settleStepUpAttempt(account.ID, err)
+	s.settleStepUpAttempt(stepUpSlot, err)
 	if err != nil {
 		mapTOTPError(writer, err)
 		return
@@ -667,7 +673,7 @@ func mapTOTPError(writer http.ResponseWriter, err error) {
 	switch {
 	case errors.As(err, &locked):
 		// Same 429 shape as allowUnderLimiter, with Retry-After set to the
-		// end of the account's failed-TOTP window.
+		// end of the spent TOTP budget's window.
 		seconds := max(int64(math.Ceil(locked.RetryAfter.Seconds())), 1)
 		writer.Header().Set("Retry-After", fmt.Sprint(seconds))
 		writeError(writer, http.StatusTooManyRequests, "rate_limited")
@@ -701,7 +707,8 @@ func mapTOTPError(writer http.ResponseWriter, err error) {
 // attempt per request with a token it invented. A real client revokes once, on
 // an explicit disconnect.
 func (s *Server) handleLogout(writer http.ResponseWriter, request *http.Request) {
-	if !s.allowAuthRequest(writer, request) {
+	slot, ok := reserveUnderLimiter(s.authLimiter, writer, request.URL.Path+":"+s.clientIPForRateLimit(request))
+	if !ok {
 		return
 	}
 
@@ -713,7 +720,7 @@ func (s *Server) handleLogout(writer http.ResponseWriter, request *http.Request)
 		// A store failure must not tell the client its session is gone: it
 		// would drop the token while the session stays live server-side. Nor
 		// is it the caller's attempt to charge.
-		s.authLimiter.Refund(request.URL.Path + ":" + s.clientIPForRateLimit(request))
+		s.authLimiter.Refund(slot)
 		writeError(writer, http.StatusInternalServerError, "internal_error")
 		return
 	}
@@ -753,13 +760,14 @@ func (s *Server) handleDeleteAccount(
 	if !decodeJSON(writer, request, &payload, 4<<10) {
 		return
 	}
-	if !s.allowStepUpAttempt(writer, account.ID) {
+	stepUpSlot, ok := s.allowStepUpAttempt(writer, account.ID)
+	if !ok {
 		return
 	}
 	stepUp := stepUpFromRequest(request, payload.CurrentPassword)
 	stepUp.TOTPCode = payload.Code
 	err := s.auth.DeleteAccount(request.Context(), account.ID, stepUp)
-	s.settleStepUpAttempt(account.ID, err)
+	s.settleStepUpAttempt(stepUpSlot, err)
 	if err != nil {
 		mapTOTPError(writer, err)
 		return
@@ -788,13 +796,13 @@ func stepUpFailureKey(accountID string) string {
 // current-password check; settleStepUpAttempt keeps the charge only when the
 // password was wrong, so correct passwords and unrelated refusals never
 // exhaust it.
-func (s *Server) allowStepUpAttempt(writer http.ResponseWriter, accountID string) bool {
-	return allowUnderLimiter(s.authLimiter, writer, stepUpFailureKey(accountID))
+func (s *Server) allowStepUpAttempt(writer http.ResponseWriter, accountID string) (security.Reservation, bool) {
+	return reserveUnderLimiter(s.authLimiter, writer, stepUpFailureKey(accountID))
 }
 
-func (s *Server) settleStepUpAttempt(accountID string, err error) {
+func (s *Server) settleStepUpAttempt(slot security.Reservation, err error) {
 	if !errors.Is(err, services.ErrInvalidCurrentPassword) {
-		s.authLimiter.Refund(stepUpFailureKey(accountID))
+		s.authLimiter.Refund(slot)
 	}
 }
 
@@ -1009,8 +1017,12 @@ func (s *Server) handleRemoveDevice(
 	// on the shared step-up bucket; a session-only removal must neither be
 	// blocked by that bucket nor earn refunds from it.
 	checksPassword := account.TOTPEnabled
-	if checksPassword && !s.allowStepUpAttempt(writer, account.ID) {
-		return
+	var stepUpSlot security.Reservation
+	if checksPassword {
+		var ok bool
+		if stepUpSlot, ok = s.allowStepUpAttempt(writer, account.ID); !ok {
+			return
+		}
 	}
 	stepUp := stepUpFromRequest(request, payload.CurrentPassword)
 	stepUp.TOTPCode = payload.Code
@@ -1018,7 +1030,7 @@ func (s *Server) handleRemoveDevice(
 	// account in the query, so a caller can only remove its own devices.
 	err := s.sync.RemoveDevice(request.Context(), account.ID, stepUp, request.PathValue("device_id"))
 	if checksPassword {
-		s.settleStepUpAttempt(account.ID, err)
+		s.settleStepUpAttempt(stepUpSlot, err)
 	}
 	if err != nil {
 		switch {
@@ -1116,13 +1128,14 @@ func (s *Server) handlePutRecoveryKey(
 		writeJSON(writer, http.StatusOK, recoveryKeyPackageResponseFromModel(unchanged))
 		return
 	}
-	if !s.allowStepUpAttempt(writer, account.ID) {
+	stepUpSlot, ok := s.allowStepUpAttempt(writer, account.ID)
+	if !ok {
 		return
 	}
 	stepUp := stepUpFromRequest(request, payload.CurrentPassword)
 	stepUp.TOTPCode = payload.Code
 	recoveryKeyPackage, err := s.sync.PutRecoveryKeyPackage(request.Context(), account.ID, stepUp, input)
-	s.settleStepUpAttempt(account.ID, err)
+	s.settleStepUpAttempt(stepUpSlot, err)
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrInvalidRecoveryPackage):
@@ -1194,7 +1207,8 @@ func (s *Server) withAuth(next func(http.ResponseWriter, *http.Request, models.A
 		// account inside the handler, so callers sharing one address (a NAT)
 		// are not throttled by one another's legitimate traffic.
 		key := unauthenticatedRateLimitKeyPrefix + s.clientIPForRateLimit(request)
-		if !allowUnderLimiter(s.sessionReadLimiter, writer, key) {
+		slot, ok := reserveUnderLimiter(s.sessionReadLimiter, writer, key)
+		if !ok {
 			return
 		}
 
@@ -1205,11 +1219,11 @@ func (s *Server) withAuth(next func(http.ResponseWriter, *http.Request, models.A
 				return
 			}
 			// A store failure is not the caller's failed attempt.
-			s.sessionReadLimiter.Refund(key)
+			s.sessionReadLimiter.Refund(slot)
 			writeError(writer, http.StatusInternalServerError, "internal_error")
 			return
 		}
-		s.sessionReadLimiter.Refund(key)
+		s.sessionReadLimiter.Refund(slot)
 
 		status := &statusRecorder{ResponseWriter: writer}
 		next(status, request, account)
@@ -1396,13 +1410,21 @@ func (s *Server) allowSessionReadRequestForAccount(
 // route answers in exactly one shape: 429 with the stable `rate_limited` key and
 // a Retry-After header.
 func allowUnderLimiter(limiter *security.RateLimiter, writer http.ResponseWriter, key string) bool {
-	if limiter.Allow(key) {
-		return true
+	_, ok := reserveUnderLimiter(limiter, writer, key)
+	return ok
+}
+
+// reserveUnderLimiter is allowUnderLimiter for a caller that may give the slot
+// back: the reservation it returns is what Refund takes.
+func reserveUnderLimiter(limiter *security.RateLimiter, writer http.ResponseWriter, key string) (security.Reservation, bool) {
+	slot, ok := limiter.Reserve(key)
+	if ok {
+		return slot, true
 	}
 
 	writer.Header().Set("Retry-After", "60")
 	writeError(writer, http.StatusTooManyRequests, "rate_limited")
-	return false
+	return slot, false
 }
 
 // allowLoginRequestForIdentifier enforces a per-login-identifier ceiling on
@@ -1419,12 +1441,13 @@ func (s *Server) allowLoginRequestForIdentifier(
 	writer http.ResponseWriter,
 	_ *http.Request,
 	login string,
-) bool {
-	key, ok := loginIdentifierKey(login)
-	if !ok {
-		return true
+) (slot security.Reservation, charged bool, ok bool) {
+	key, keyed := loginIdentifierKey(login)
+	if !keyed {
+		return security.Reservation{}, false, true
 	}
-	return allowUnderLimiter(s.authLimiter, writer, key)
+	slot, ok = reserveUnderLimiter(s.authLimiter, writer, key)
+	return slot, ok, ok
 }
 
 // loginIdentifierKey is the one place the identifier bucket's key is derived,
@@ -1437,12 +1460,6 @@ func loginIdentifierKey(login string) (string, bool) {
 		return "", false
 	}
 	return "login_identifier:" + security.HashToken(normalized), true
-}
-
-func (s *Server) refundLoginIdentifier(login string) {
-	if key, ok := loginIdentifierKey(login); ok {
-		s.authLimiter.Refund(key)
-	}
 }
 
 func (s *Server) clearLoginIdentifier(login string) {

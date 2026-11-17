@@ -106,8 +106,8 @@ func (m *Metrics) ObserveTOTPEnrollmentCompletion(result string) {
 // `invalid_code`, `replayed`, `challenge_invalid`, `burnt`, `locked`,
 // `secret_failed`. The `burnt` label fires when the per-challenge
 // attempt counter crossed `maxTOTPChallengeFailedAttempts` and the
-// challenge id was destroyed; `locked` fires when the account's
-// failed-TOTP window is spent. Both are alerting signals for an online
+// challenge id was destroyed; `locked` fires when the sign-in TOTP budget
+// is spent. Both are alerting signals for an online
 // brute-force attempt.
 func (m *Metrics) ObserveTOTPChallengeCompletion(result string) {
 	if m == nil {
