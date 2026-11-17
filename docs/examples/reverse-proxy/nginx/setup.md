@@ -22,10 +22,12 @@ the certificate paths.
 ## App settings that must match
 
 ```
-TRUSTED_PROXY_CIDRS=<nginx address or the Docker network subnet>
+TRUSTED_PROXY_CIDRS=<nginx's own address as the app sees it, e.g. 172.30.0.2/32>
 ```
 
-Find the subnet with `docker network inspect <network>`. Trust only the proxy, not a public range.
+Pin nginx to a fixed address on its Docker network (`ipv4_address`) and list only that address;
+`docker network inspect <network>` shows it. Trusting the whole subnet lets any other container on
+that network choose its own rate-limit key, and a public range is never right.
 Without it every user shares one rate-limit bucket and gets `429 rate_limited`.
 
 ## Run
