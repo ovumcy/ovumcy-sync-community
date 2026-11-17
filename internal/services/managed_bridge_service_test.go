@@ -544,7 +544,8 @@ func TestSetAccountLapseSignalRejectsInvalidSignal(t *testing.T) {
 
 	ctx := context.Background()
 	const accountID = "managedacct1234"
-	if _, err := bridgeService.CreateManagedSession(ctx, accountID); err != nil {
+	session, err := bridgeService.CreateManagedSession(ctx, accountID)
+	if err != nil {
 		t.Fatalf("create managed session: %v", err)
 	}
 
@@ -555,13 +556,27 @@ func TestSetAccountLapseSignalRejectsInvalidSignal(t *testing.T) {
 	}{
 		{"reactivation without as-of", true, time.Time{}},
 		{"lapse without as-of", false, time.Time{}},
+		{"lapse with the zero time in UTC", false, time.Time{}.UTC()},
 		{"as-of beyond the skew bound", false, time.Now().UTC().Add(maxEntitlementSignalSkew + time.Minute)},
 		{"as-of before the Unix epoch", true, time.Unix(-1, 0)},
 	}
-	for _, tc := range cases {
-		if err := bridgeService.SetAccountLapseSignal(ctx, accountID, tc.active, tc.asOf); !errors.Is(err, ErrInvalidEntitlementSignal) {
-			t.Fatalf("%s: expected ErrInvalidEntitlementSignal, got %v", tc.name, err)
+	refuseAll := func(phase string) {
+		t.Helper()
+		for _, tc := range cases {
+			if err := bridgeService.SetAccountLapseSignal(ctx, accountID, tc.active, tc.asOf); !errors.Is(err, ErrInvalidEntitlementSignal) {
+				t.Fatalf("%s, %s: expected ErrInvalidEntitlementSignal, got %v", phase, tc.name, err)
+			}
 		}
+	}
+
+	// On a live account a refused signal revokes nothing, starts no purge
+	// clock and leaves premium_active alone.
+	refuseAll("live account")
+	if _, err := authService.Authenticate(ctx, session.SessionToken); err != nil {
+		t.Fatalf("expected the session to survive refused signals, got %v", err)
+	}
+	if lapsedAt, err := store.GetAccountLapsedAt(ctx, accountID); err != nil || lapsedAt != nil {
+		t.Fatalf("expected lapsed_at to stay empty after refused signals, got %v err=%v", lapsedAt, err)
 	}
 	account, err := store.FindAccountByID(ctx, accountID)
 	if err != nil {
@@ -569,6 +584,20 @@ func TestSetAccountLapseSignalRejectsInvalidSignal(t *testing.T) {
 	}
 	if !account.PremiumActive {
 		t.Fatal("expected a rejected signal to leave premium_active untouched")
+	}
+
+	// On a lapsed account a refused reactivation must not clear the lapse and
+	// a refused lapse must not move lapsed_at.
+	if err := bridgeService.SetAccountLapseSignal(ctx, accountID, false, time.Now().UTC().Add(-time.Minute)); err != nil {
+		t.Fatalf("lapse account: %v", err)
+	}
+	lapsedBefore, err := store.GetAccountLapsedAt(ctx, accountID)
+	if err != nil || lapsedBefore == nil {
+		t.Fatalf("expected lapsed_at recorded, got %v err=%v", lapsedBefore, err)
+	}
+	refuseAll("lapsed account")
+	if lapsedAfter, err := store.GetAccountLapsedAt(ctx, accountID); err != nil || lapsedAfter == nil || !lapsedAfter.Equal(*lapsedBefore) {
+		t.Fatalf("expected lapsed_at to stay %v after refused signals, got %v err=%v", lapsedBefore, lapsedAfter, err)
 	}
 }
 

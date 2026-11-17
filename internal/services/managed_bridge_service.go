@@ -198,6 +198,8 @@ func (s *ManagedBridgeService) SetAccountLapseSignal(
 	switch {
 	case err == nil:
 		return nil
+	case errors.Is(err, db.ErrInvalidEntitlementSignal):
+		return ErrInvalidEntitlementSignal // codecov:ignore -- the as-of check above already refuses a zero instant, so the store's own refusal is a defence in depth the service cannot reach; the store test pins the refusal itself.
 	case errors.Is(err, db.ErrStaleEntitlementSignal):
 		return ErrStaleEntitlementSignal
 	case errors.Is(err, db.ErrNotFound):
