@@ -181,10 +181,16 @@ func TestTextInstantCompareDetector(t *testing.T) {
 		`WHERE ? > expires_at`,
 		`WHERE s.expires_at < CURRENT_TIMESTAMP`,
 		`WHERE lapsed_at < accounts.created_at`,
+		`AND (lapsed_at < ? OR lapsed_at IS NULL)`,
+		`WHERE julianday(expires_at) <= ?`,
+		`WHERE ? > julianday(expires_at)`,
 		`WHERE created_at BETWEEN ? AND ?`,
+		`WHERE julianday(created_at) BETWEEN julianday(?) AND ?`,
 		`SELECT MAX(updated_at) FROM encrypted_blobs`,
 		`ORDER BY created_at DESC`,
 		`ORDER BY device_id, d.last_seen_at LIMIT ?`,
+		`ORDER BY julianday(lapsed_at), created_at LIMIT ?`,
+		`WHERE note <> '--' AND expires_at < ?`,
 	} {
 		if len(textInstantCompares(sql)) == 0 {
 			t.Errorf("detector missed a text instant compare: %q", sql)
@@ -193,10 +199,14 @@ func TestTextInstantCompareDetector(t *testing.T) {
 	for _, sql := range []string{
 		`WHERE julianday(expires_at) <= julianday(?) OR julianday(expires_at) IS NULL`,
 		`WHERE julianday(s.expires_at) > julianday(?)`,
+		`WHERE julianday(created_at) BETWEEN julianday(?) AND julianday(?)`,
 		`ORDER BY julianday(created_at), device_id`,
+		`WHERE id IN (SELECT id FROM u ORDER BY julianday(created_at)) ORDER BY id`,
 		`SET consumed_at = ? WHERE consumed_at IS NULL`,
+		`WHERE consumed_at <> ?`,
 		`lapsed_at = COALESCE(lapsed_at, ?)`,
 		"-- rows expire when expires_at < now\nSELECT 1",
+		"/* rows where expires_at < now */ SELECT 1",
 		`window_started_unix < ?`,
 	} {
 		if matches := textInstantCompares(sql); len(matches) != 0 {
@@ -205,31 +215,121 @@ func TestTextInstantCompareDetector(t *testing.T) {
 	}
 }
 
-const bareInstantColumn = `(?:\w+\.)?\w+_at`
+const (
+	bareInstantColumn = `(?:\w+\.)?\w+_at`
+	sqlOperand        = `(\w+\s*\([^()]*\)|(?:\w+\.)?\w+|\?)`
+)
 
 var (
-	sqlLineComment     = regexp.MustCompile(`--[^\n]*`)
-	instantLeftOfCmp   = regexp.MustCompile(`(?i)(?:^|[^\w.(])` + bareInstantColumn + `\s*(?:<=|>=|<|>|\bBETWEEN\b)`)
-	instantRightOfCmp  = regexp.MustCompile(`(?:<=|>=|<|>)\s*` + bareInstantColumn + `\b`)
+	instantCompare     = regexp.MustCompile(sqlOperand + `\s*(?:<=|>=|<|>)\s*` + sqlOperand)
+	instantBetween     = regexp.MustCompile(`(?i)` + sqlOperand + `\s+BETWEEN\s+` + sqlOperand + `\s+AND\s+` + sqlOperand)
 	instantAggregate   = regexp.MustCompile(`(?i)\b(?:MAX|MIN)\s*\(\s*` + bareInstantColumn + `\s*\)`)
-	orderByTerms       = regexp.MustCompile(`(?is)\bORDER\s+BY\s+(.*?)(?:\bLIMIT\b|\)|;|$)`)
-	bareInstantOrdered = regexp.MustCompile(`(?i)^` + bareInstantColumn + `(?:\s+(?:ASC|DESC))?$`)
+	orderByKeyword     = regexp.MustCompile(`(?i)\bORDER\s+BY\s`)
+	limitKeyword       = regexp.MustCompile(`(?i)^\sLIMIT\b`)
+	orderModifiers     = regexp.MustCompile(`(?i)(?:\s+(?:ASC|DESC|NULLS\s+(?:FIRST|LAST)|COLLATE\s+\w+))+$`)
+	bareInstantOperand = regexp.MustCompile(`^` + bareInstantColumn + `$`)
+	juliandayOperand   = regexp.MustCompile(`(?i)^julianday\s*\(`)
 )
 
 // textInstantCompares returns each fragment of sql that compares, orders or
-// aggregates a bare *_at column, one not wrapped in julianday().
+// aggregates a bare *_at column, or compares a julianday() value with one
+// that is not: SQLite sorts every number before every text value.
 func textInstantCompares(sql string) []string {
-	sql = sqlLineComment.ReplaceAllString(sql, "")
+	sql = stripSQLComments(sql)
 	var matches []string
-	for _, pattern := range []*regexp.Regexp{instantLeftOfCmp, instantRightOfCmp, instantAggregate} {
-		matches = append(matches, pattern.FindAllString(sql, -1)...)
+	for _, match := range instantCompare.FindAllStringSubmatch(sql, -1) {
+		if instantOperandsMismatch(match[1:]...) {
+			matches = append(matches, match[0])
+		}
 	}
-	for _, clause := range orderByTerms.FindAllStringSubmatch(sql, -1) {
-		for _, term := range strings.Split(clause[1], ",") {
-			if term = strings.TrimSpace(term); bareInstantOrdered.MatchString(term) {
-				matches = append(matches, "ORDER BY "+term)
-			}
+	for _, match := range instantBetween.FindAllStringSubmatch(sql, -1) {
+		if instantOperandsMismatch(match[1:]...) {
+			matches = append(matches, match[0])
+		}
+	}
+	matches = append(matches, instantAggregate.FindAllString(sql, -1)...)
+	for _, term := range orderByTerms(sql) {
+		if term = orderModifiers.ReplaceAllString(strings.TrimSpace(term), ""); bareInstantOperand.MatchString(term) {
+			matches = append(matches, "ORDER BY "+term)
 		}
 	}
 	return matches
+}
+
+func instantOperandsMismatch(operands ...string) bool {
+	wrapped := 0
+	for _, operand := range operands {
+		if bareInstantOperand.MatchString(operand) {
+			return true
+		}
+		if juliandayOperand.MatchString(operand) {
+			wrapped++
+		}
+	}
+	return wrapped > 0 && wrapped < len(operands)
+}
+
+// orderByTerms splits each ORDER BY list at its top-level commas, ending it at
+// a closing parenthesis, a semicolon or LIMIT.
+func orderByTerms(sql string) []string {
+	var terms []string
+	for _, keyword := range orderByKeyword.FindAllStringIndex(sql, -1) {
+		depth, start, i := 0, keyword[1], keyword[1]
+	scan:
+		for ; i < len(sql); i++ {
+			switch sql[i] {
+			case '(':
+				depth++
+			case ')':
+				if depth == 0 {
+					break scan
+				}
+				depth--
+			case ',':
+				if depth == 0 {
+					terms = append(terms, sql[start:i])
+					start = i + 1
+				}
+			case ';':
+				if depth == 0 {
+					break scan
+				}
+			default:
+				if depth == 0 && limitKeyword.MatchString(sql[i:]) {
+					break scan
+				}
+			}
+		}
+		terms = append(terms, sql[start:i])
+	}
+	return terms
+}
+
+// stripSQLComments drops -- and /* */ comments outside single-quoted strings.
+func stripSQLComments(sql string) string {
+	var out strings.Builder
+	quoted := false
+	for i := 0; i < len(sql); i++ {
+		switch {
+		case sql[i] == '\'':
+			quoted = !quoted
+		case quoted:
+		case strings.HasPrefix(sql[i:], "--"):
+			end := strings.IndexByte(sql[i:], '\n')
+			if end < 0 {
+				return out.String()
+			}
+			i += end
+		case strings.HasPrefix(sql[i:], "/*"):
+			end := strings.Index(sql[i+2:], "*/")
+			if end < 0 {
+				return out.String()
+			}
+			i += 2 + end + 1
+			out.WriteByte(' ')
+			continue
+		}
+		out.WriteByte(sql[i])
+	}
+	return out.String()
 }
