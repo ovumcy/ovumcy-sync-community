@@ -108,7 +108,7 @@ func sqliteDSN(path string) string {
 }
 
 func (s *Store) Close() error {
-	s.forgetReadiness()
+	defer s.forgetReadiness()
 	// PRAGMA wal_checkpoint(TRUNCATE) returns one row (busy, log,
 	// checkpointed) rather than signalling failure the way a normal
 	// statement does: busy != 0 means another connection's open read or
