@@ -241,10 +241,11 @@ func TestRateLimiterRefundAndReset(t *testing.T) {
 	base := time.Date(2026, 3, 23, 9, 0, 0, 0, time.UTC)
 	limiter.now = func() time.Time { return base }
 
-	if !limiter.Allow("k") {
+	slot, ok := limiter.Reserve("k")
+	if !ok {
 		t.Fatal("expected first request to pass")
 	}
-	limiter.Refund("k")
+	limiter.Refund(slot)
 	if !limiter.Allow("k") {
 		t.Fatal("expected a refunded slot to be usable again")
 	}
@@ -253,24 +254,50 @@ func TestRateLimiterRefundAndReset(t *testing.T) {
 	}
 
 	limiter.Reset("k")
-	if !limiter.Allow("k") {
+	slot, ok = limiter.Reserve("k")
+	if !ok {
 		t.Fatal("expected Reset to open a fresh window")
 	}
 
-	// A refund never carries into a later window or below zero.
-	limiter.Refund("k")
-	limiter.Refund("k")
+	// A refund never goes below zero.
+	limiter.Refund(slot)
+	limiter.Refund(slot)
 	if !limiter.Allow("k") || limiter.Allow("k") {
 		t.Fatal("expected repeated refunds to restore at most the slots granted")
 	}
-	base = base.Add(2 * time.Minute)
-	limiter.Refund("k")
-	if !limiter.Allow("k") || limiter.Allow("k") {
-		t.Fatal("expected a refund against an expired window to be a no-op")
-	}
-	limiter.Refund("missing")
+	limiter.Refund(Reservation{key: "missing", windowStart: base})
 	if _, ok := limiter.entries["missing"]; ok {
 		t.Fatal("expected Refund on an unknown key to create nothing")
+	}
+}
+
+// TestRateLimiterRefundAfterRolloverGrantsNoExtraSlot: a slot reserved in one
+// window and refunded after the next window opened belongs to the old window,
+// so it must not lower the new window's count.
+func TestRateLimiterRefundAfterRolloverGrantsNoExtraSlot(t *testing.T) {
+	limiter := NewRateLimiter(1, time.Minute)
+	base := time.Date(2026, 3, 23, 9, 0, 0, 0, time.UTC)
+	limiter.now = func() time.Time { return base }
+
+	old, ok := limiter.Reserve("k")
+	if !ok {
+		t.Fatal("expected first request to pass")
+	}
+	base = base.Add(2 * time.Minute)
+	if !limiter.Allow("k") {
+		t.Fatal("expected the new window's first request to pass")
+	}
+	limiter.Refund(old)
+	if limiter.Allow("k") {
+		t.Fatal("a refund of the previous window's slot granted the new window an extra one")
+	}
+
+	// Expired but not yet replaced: the refund is a no-op too.
+	stale, _ := limiter.Reserve("j")
+	base = base.Add(2 * time.Minute)
+	limiter.Refund(stale)
+	if limiter.entries["j"].count != 1 {
+		t.Fatalf("refund against an expired window changed the count to %d", limiter.entries["j"].count)
 	}
 }
 

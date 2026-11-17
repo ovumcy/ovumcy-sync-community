@@ -119,18 +119,29 @@ func TestCompleteEnrollmentGuessesAreCappedAndBurnThePendingSecret(t *testing.T)
 	if _, err := totp.CompleteEnrollment(ctx, accountID, sessionHash, ""); !errors.Is(err, ErrTOTPInvalidCode) {
 		t.Fatalf("expected an empty code to be refused, got %v", err)
 	}
-	wrong := wrongTOTPCode(t, secret, now)
-	for i := range maxTOTPAccountFailedAttempts {
-		if _, err := totp.CompleteEnrollment(ctx, accountID, sessionHash, wrong); !errors.Is(err, ErrTOTPInvalidCode) {
-			t.Fatalf("guess %d: expected ErrTOTPInvalidCode, got %v", i+1, err)
+	// The rolling enrollment budget refuses the sixth guess of a window,
+	// without burning the secret; pacing past it reaches the pending
+	// secret's lifetime cap.
+	guess := 0
+	for window := range maxPendingEnrollmentAttempts / maxTOTPAttempts {
+		at := now.Add(time.Duration(window) * (TOTPAttemptWindow + time.Minute))
+		totp.now = func() time.Time { return at }
+		wrong := wrongTOTPCode(t, secret, at)
+		for range maxTOTPAttempts {
+			guess++
+			if _, err := totp.CompleteEnrollment(ctx, accountID, sessionHash, wrong); !errors.Is(err, ErrTOTPInvalidCode) {
+				t.Fatalf("guess %d: expected ErrTOTPInvalidCode, got %v", guess, err)
+			}
+		}
+		var locked *TOTPLockedError
+		if _, err := totp.CompleteEnrollment(ctx, accountID, sessionHash, security.GenerateTOTPCode(secret, at.Unix()/security.TOTPStepSeconds)); !errors.As(err, &locked) || locked.RetryAfter <= 0 {
+			t.Fatalf("window %d: expected the spent enrollment budget to refuse a correct code with a retry, got %v", window, err)
 		}
 	}
-	// Pacing does not help: the budget belongs to the pending secret, not to
-	// a rolling window.
-	paced := now.Add(TOTPFailureWindow + time.Minute)
+	paced := now.Add(time.Duration(maxPendingEnrollmentAttempts/maxTOTPAttempts) * (TOTPAttemptWindow + time.Minute))
 	totp.now = func() time.Time { return paced }
 	if _, err := totp.CompleteEnrollment(ctx, accountID, sessionHash, security.GenerateTOTPCode(secret, paced.Unix()/security.TOTPStepSeconds)); !errors.Is(err, ErrTOTPLocked) {
-		t.Fatalf("expected the spent budget to lock even a correct code after a pause, got %v", err)
+		t.Fatalf("expected the lifetime cap to lock even a correct code after a pause, got %v", err)
 	}
 	totp.now = func() time.Time { return now }
 

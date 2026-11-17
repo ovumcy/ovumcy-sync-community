@@ -20,7 +20,7 @@ type StepUp struct {
 }
 
 // TOTPCodeVerifier checks a current TOTP code for an enrolled account,
-// meters it in the account's failure window and claims its step
+// draws it from the in-session step-up budget and claims its step
 // (TOTPService.VerifyAccountCode).
 type TOTPCodeVerifier interface {
 	VerifyAccountCode(ctx context.Context, account models.Account, code string) error

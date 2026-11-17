@@ -212,8 +212,8 @@ func (s *SyncService) ListDevices(ctx context.Context, accountID string) ([]mode
 //
 // A TOTP-enrolled account must re-enter its password and present a current
 // code (password first, so a wrong one spends no code step), so a stolen
-// session alone can neither evict the owner's devices nor spend the account's
-// TOTP window. An account without TOTP needs only its session, as before.
+// session alone can neither evict the owner's devices nor spend the step-up
+// TOTP budget. An account without TOTP needs only its session, as before.
 // Any credential change by another session revokes this one, which the
 // delete's session predicate catches.
 func (s *SyncService) RemoveDevice(ctx context.Context, accountID string, stepUp StepUp, deviceID string) error {

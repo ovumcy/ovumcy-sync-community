@@ -11,9 +11,9 @@ import (
 
 const changePasswordWindowNewPassword = "new staple battery horse correct"
 
-// A password change on an enrolled account spends the same per-account window
-// as every other code check, so it is no extra code oracle.
-func TestChangePasswordSharesTheAccountTOTPWindow(t *testing.T) {
+// A password change on an enrolled account spends the same step-up budget as
+// every other in-session code check, so it is no extra code oracle.
+func TestChangePasswordSharesTheStepUpTOTPBudget(t *testing.T) {
 	auth, totp, now := fixedTOTPClock(t)
 	ctx := context.Background()
 	accountID, token, secret, _ := enrollTOTP(t, auth, totp, now)
@@ -22,7 +22,7 @@ func TestChangePasswordSharesTheAccountTOTPWindow(t *testing.T) {
 	later := now.Add(security.TOTPStepSeconds * time.Second)
 	setTOTPClock(auth, totp, later)
 	wrong := wrongTOTPCode(t, secret, later)
-	for range maxTOTPAccountFailedAttempts {
+	for range maxTOTPAttempts {
 		if _, err := auth.ChangePassword(ctx, accountID, sessionHash, totpWindowTestPassword, changePasswordWindowNewPassword, wrong); !errors.Is(err, ErrTOTPInvalidCode) {
 			t.Fatalf("expected ErrTOTPInvalidCode, got %v", err)
 		}
@@ -46,7 +46,7 @@ func TestChangePasswordMissingCodeSpendsNoTOTPAttempt(t *testing.T) {
 
 	later := now.Add(security.TOTPStepSeconds * time.Second)
 	setTOTPClock(auth, totp, later)
-	for range maxTOTPAccountFailedAttempts {
+	for range maxTOTPAttempts {
 		if _, err := auth.ChangePassword(ctx, accountID, sessionHash, totpWindowTestPassword, changePasswordWindowNewPassword, ""); !errors.Is(err, ErrTOTPInvalidCode) {
 			t.Fatalf("expected ErrTOTPInvalidCode for a missing code, got %v", err)
 		}

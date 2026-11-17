@@ -1459,8 +1459,8 @@ RETURNING window_started_unix, failed_attempts`,
 	return false, time.Unix(startedUnix, 0).UTC().Add(window), nil
 }
 
-// ResetTOTPFailures clears the account's failed-TOTP window after a
-// successful verify.
+// ResetTOTPFailures clears the account's stored TOTP attempt count (the
+// pending enrollment secret's lifetime budget).
 func (s *Store) ResetTOTPFailures(ctx context.Context, accountID string) error {
 	if _, err := s.db.ExecContext(
 		ctx,
