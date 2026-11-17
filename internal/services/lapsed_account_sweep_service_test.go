@@ -175,7 +175,11 @@ func TestLapsedAccountSweepServiceDryRunReportsWithoutDeleting(t *testing.T) {
 	}
 }
 
-func TestLapsedAccountSweepServiceRespectsLimit(t *testing.T) {
+// TestLapsedAccountSweepServiceDrainsPastTheBatchSize pins limit as the page
+// size, not a cap on the run: five eligible accounts with limit=2 take three
+// pages, and all five go in one Run. A dry run with the same limit counts all
+// five, because the cursor moves past candidates it does not delete.
+func TestLapsedAccountSweepServiceDrainsPastTheBatchSize(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 
@@ -184,15 +188,136 @@ func TestLapsedAccountSweepServiceRespectsLimit(t *testing.T) {
 	bridgeService := NewManagedBridgeService(store, authService)
 	sweepService := NewLapsedAccountSweepService(store, lapsedSweepGracePeriod)
 
-	seedLapsedCandidateWithFullData(t, store, authService, syncService, bridgeService, "managedlimittest1", 90*24*time.Hour)
-	seedLapsedCandidateWithFullData(t, store, authService, syncService, bridgeService, "managedlimittest2", 91*24*time.Hour)
+	ids := []string{"manageddrain00001", "manageddrain00002", "manageddrain00003", "manageddrain00004", "manageddrain00005"}
+	for i, id := range ids {
+		seedLapsedCandidateWithFullData(t, store, authService, syncService, bridgeService, id, time.Duration(90+i)*24*time.Hour)
+	}
+
+	dry, err := sweepService.Run(ctx, 2, true)
+	if err != nil {
+		t.Fatalf("run dry-run sweep: %v", err)
+	}
+	if dry.Examined != len(ids) || dry.Deleted != 0 {
+		t.Fatalf("expected the dry run to count all %d eligible, got %#v", len(ids), dry)
+	}
+
+	result, err := sweepService.Run(ctx, 2, false)
+	if err != nil {
+		t.Fatalf("run sweep: %v", err)
+	}
+	if result.Examined != len(ids) || result.Deleted != len(ids) || len(result.DeletedAccountIDs) != len(ids) {
+		t.Fatalf("expected all %d deleted in one run with limit=2, got %#v", len(ids), result)
+	}
+	for _, id := range ids {
+		if _, err := store.FindAccountByID(ctx, id); !errors.Is(err, db.ErrNotFound) {
+			t.Fatalf("expected %s gone, got %v", id, err)
+		}
+	}
+}
+
+// pageCountingSweepStore counts listing calls and how often each candidate
+// is listed. Its delete either fails outright, or clears the lapse first so
+// the real delete refuses (a raced reactivation), or cancels the run's ctx.
+type pageCountingSweepStore struct {
+	inner      *db.Store
+	listed     map[string]int
+	pages      int
+	failDelete bool
+	cancel     context.CancelFunc
+}
+
+func (s *pageCountingSweepStore) ListLapsedManagedAccountIDs(ctx context.Context, cutoff time.Time, after db.LapsedCandidate, limit int) ([]db.LapsedCandidate, error) {
+	s.pages++
+	page, err := s.inner.ListLapsedManagedAccountIDs(ctx, cutoff, after, limit)
+	for _, candidate := range page {
+		s.listed[candidate.ID]++
+	}
+	return page, err
+}
+
+func (s *pageCountingSweepStore) DeleteLapsedManagedAccount(ctx context.Context, accountID string, cutoff time.Time) error {
+	if s.cancel != nil {
+		s.cancel()
+		return s.inner.DeleteLapsedManagedAccount(context.Background(), accountID, cutoff)
+	}
+	if s.failDelete {
+		return errors.New("injected delete failure")
+	}
+	if err := s.inner.ClearAccountLapse(ctx, accountID); err != nil {
+		return err
+	}
+	return s.inner.DeleteLapsedManagedAccount(ctx, accountID, cutoff)
+}
+
+// TestLapsedAccountSweepServiceNeverRelistsASkippedCandidate covers both kinds
+// of skip: a reactivation that races the delete (ErrNotFound) and a delete
+// that fails outright. A failed delete leaves the account eligible, so a
+// listing that restarted from the top would hand it back forever; the keyset
+// cursor lists each candidate exactly once per run.
+func TestLapsedAccountSweepServiceNeverRelistsASkippedCandidate(t *testing.T) {
+	for _, failDelete := range []bool{false, true} {
+		store := openTestStore(t)
+		ctx := context.Background()
+
+		authService := NewAuthService(store, 24*time.Hour)
+		syncService := NewSyncService(store, SyncOptions{MaxDevices: 5, MaxBlobBytes: 16 << 20})
+		bridgeService := NewManagedBridgeService(store, authService)
+		sweepService := NewLapsedAccountSweepService(store, lapsedSweepGracePeriod)
+
+		ids := []string{"managedskipped001", "managedskipped002", "managedskipped003"}
+		for i, id := range ids {
+			seedLapsedCandidateWithFullData(t, store, authService, syncService, bridgeService, id, time.Duration(90+i)*24*time.Hour)
+		}
+		counting := &pageCountingSweepStore{inner: store, listed: map[string]int{}, failDelete: failDelete}
+		sweepService.store = counting
+
+		result, err := sweepService.Run(ctx, 1, false)
+		if failDelete != (err != nil) {
+			t.Fatalf("failDelete=%t: unexpected error %v", failDelete, err)
+		}
+		if result.Examined != len(ids) || result.Deleted != 0 {
+			t.Fatalf("failDelete=%t: expected %d examined and none deleted, got %#v", failDelete, len(ids), result)
+		}
+		if counting.pages != len(ids)+1 {
+			t.Fatalf("failDelete=%t: expected %d pages, got %d", failDelete, len(ids)+1, counting.pages)
+		}
+		for _, id := range ids {
+			if counting.listed[id] != 1 {
+				t.Fatalf("failDelete=%t: expected %s listed once, got %d", failDelete, id, counting.listed[id])
+			}
+			if _, err := store.FindAccountByID(ctx, id); err != nil {
+				t.Fatalf("failDelete=%t: expected %s to survive, got %v", failDelete, id, err)
+			}
+		}
+	}
+}
+
+// TestLapsedAccountSweepServiceStopsOnCancelledContext proves a shutdown
+// mid-run stops the drain before the next delete instead of failing every
+// remaining candidate, and reports what it already did.
+func TestLapsedAccountSweepServiceStopsOnCancelledContext(t *testing.T) {
+	store := openTestStore(t)
+
+	authService := NewAuthService(store, 24*time.Hour)
+	syncService := NewSyncService(store, SyncOptions{MaxDevices: 5, MaxBlobBytes: 16 << 20})
+	bridgeService := NewManagedBridgeService(store, authService)
+	sweepService := NewLapsedAccountSweepService(store, lapsedSweepGracePeriod)
+
+	for i, id := range []string{"managedcancel0001", "managedcancel0002", "managedcancel0003"} {
+		seedLapsedCandidateWithFullData(t, store, authService, syncService, bridgeService, id, time.Duration(90+i)*24*time.Hour)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	counting := &pageCountingSweepStore{inner: store, listed: map[string]int{}, cancel: cancel}
+	sweepService.store = counting
 
 	result, err := sweepService.Run(ctx, 1, false)
-	if err != nil {
-		t.Fatalf("run limited sweep: %v", err)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
 	}
-	if result.Examined != 1 || result.Deleted != 1 {
-		t.Fatalf("expected exactly 1 examined and deleted with limit=1, got %#v", result)
+	if result.Examined != 1 || result.Deleted != 1 || counting.pages != 1 {
+		t.Fatalf("expected the run to stop after the first candidate, got %#v after %d pages", result, counting.pages)
 	}
 }
 
@@ -300,8 +425,8 @@ type mintRacingSweepStore struct {
 	t     *testing.T
 }
 
-func (s *mintRacingSweepStore) ListLapsedManagedAccountIDs(ctx context.Context, cutoff time.Time, limit int) ([]string, error) {
-	return s.inner.ListLapsedManagedAccountIDs(ctx, cutoff, limit)
+func (s *mintRacingSweepStore) ListLapsedManagedAccountIDs(ctx context.Context, cutoff time.Time, after db.LapsedCandidate, limit int) ([]db.LapsedCandidate, error) {
+	return s.inner.ListLapsedManagedAccountIDs(ctx, cutoff, after, limit)
 }
 
 func (s *mintRacingSweepStore) DeleteLapsedManagedAccount(ctx context.Context, accountID string, cutoff time.Time) error {

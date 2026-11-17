@@ -120,7 +120,7 @@ go run ./cmd/ovumcy-sync-community serve
 | `TOTP_ISSUER` | `ovumcy-sync-community` | Issuer label embedded in `otpauth://` provisioning URIs |
 | `LAPSED_ACCOUNT_GRACE_PERIOD` | `1440h` (60d) | Retention window for a managed account after the bridge signals an entitlement lapse, before it is erased; at least `24h` |
 | `LAPSED_ACCOUNT_SWEEP_INTERVAL` | `24h` | How often the server itself purges accounts past that window. `0` disables the in-process sweep and leaves `purge-lapsed-accounts` as the only trigger |
-| `LAPSED_ACCOUNT_SWEEP_LIMIT` | `0` | Candidate accounts examined per in-process run; `0` or unset uses the store's own default page size |
+| `LAPSED_ACCOUNT_SWEEP_LIMIT` | `0` | Accounts per listing page; each run pages until every eligible account is erased. `0` or unset uses the store's own default page size |
 | `EXPIRED_ROWS_SWEEP_INTERVAL` | `24h` | How often `serve` deletes expired sessions, password-reset tokens, and TOTP challenges. `0` disables the in-process sweep |
 | `EXPIRED_ROWS_SWEEP_LIMIT` | `0` | Rows per delete batch; each run repeats batches until every expired row is gone. `0` or unset uses the store's own default page size |
 | `HTTP_READ_TIMEOUT` | `10s` | Per-request read window; a full `MAX_BLOB_BYTES` upload must fit inside it — widen for large blobs over slow links |

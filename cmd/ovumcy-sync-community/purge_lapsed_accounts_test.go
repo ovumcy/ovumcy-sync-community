@@ -325,7 +325,9 @@ func TestRunPurgeLapsedAccountsDeletesEligibleAccountEndToEnd(t *testing.T) {
 	}
 }
 
-func TestRunPurgeLapsedAccountsLimitFlagBoundsExamined(t *testing.T) {
+// TestRunPurgeLapsedAccountsLimitFlagIsTheBatchSize pins -limit as the page
+// size: with -limit=1 one run still erases both eligible accounts.
+func TestRunPurgeLapsedAccountsLimitFlagIsTheBatchSize(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "limit.sqlite")
 	seedLapsedManagedAccount(t, dbPath, "purgeclilimit0001", 90*24*time.Hour)
 	seedLapsedManagedAccount(t, dbPath, "purgeclilimit0002", 91*24*time.Hour)
@@ -337,8 +339,15 @@ func TestRunPurgeLapsedAccountsLimitFlagBoundsExamined(t *testing.T) {
 		t.Fatalf("runPurgeLapsedAccounts returned error: %v", err)
 	}
 
-	if !strings.Contains(buf.String(), "lapsed_account_sweep_examined=1\n") {
-		t.Fatalf("expected -limit=1 to cap examined at 1, got %q", buf.String())
+	for _, want := range []string{
+		"lapsed_account_sweep_examined=2\n",
+		"lapsed_account_sweep_deleted=2\n",
+		"lapsed_account_sweep_deleted_account_id=purgeclilimit0001\n",
+		"lapsed_account_sweep_deleted_account_id=purgeclilimit0002\n",
+	} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("expected -limit=1 to drain both accounts (%q), got %q", want, buf.String())
+		}
 	}
 }
 

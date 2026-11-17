@@ -35,8 +35,9 @@ import (
 // word itself):
 //
 //	-dry-run     report what would be deleted without deleting anything
-//	-limit N     cap how many candidate lapsed accounts this run examines
-//	             (0 or omitted = db.DefaultLapsedAccountSweepLimit)
+//	-limit N     page size the run lists candidates in; the run still drains
+//	             every eligible account (0 or omitted =
+//	             db.DefaultLapsedAccountSweepLimit)
 //
 // On a setup failure (bad flags, cannot open the database, schema not at this
 // build's version) nothing
@@ -54,7 +55,7 @@ func runPurgeLapsedAccounts(cfg config.Config, args []string, w io.Writer) error
 	flagSet := flag.NewFlagSet("purge-lapsed-accounts", flag.ContinueOnError)
 	flagSet.SetOutput(io.Discard)
 	dryRun := flagSet.Bool("dry-run", false, "report eligible lapsed accounts without deleting them")
-	limit := flagSet.Int("limit", 0, "maximum number of candidate lapsed accounts to examine (0 = default)")
+	limit := flagSet.Int("limit", 0, "candidate lapsed accounts listed per page; every run drains all eligible (0 = default)")
 	if err := flagSet.Parse(args); err != nil {
 		return err
 	}
