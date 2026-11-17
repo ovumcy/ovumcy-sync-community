@@ -382,13 +382,13 @@ func (s *Server) handleLogin(writer http.ResponseWriter, request *http.Request) 
 	// can still lock out a known victim's login by spamming bad credentials
 	// for as long as the flood lasts; the bucket burns out on its own window,
 	// and proving the recovery code (forgot-password) clears it.
-	identifierSlot, identifierCharged, ok := s.allowLoginRequestForIdentifier(writer, request, payload.Login)
+	identifierSlot, ok := s.allowLoginRequestForIdentifier(writer, request, payload.Login)
 	if !ok {
 		return
 	}
 
 	result, err := s.auth.Login(request.Context(), payload.Login, payload.Password)
-	if err == nil && result.TOTPChallenge == nil && identifierCharged {
+	if err == nil && result.TOTPChallenge == nil {
 		s.authLimiter.Refund(identifierSlot)
 	}
 	if err != nil {
@@ -1441,13 +1441,12 @@ func (s *Server) allowLoginRequestForIdentifier(
 	writer http.ResponseWriter,
 	_ *http.Request,
 	login string,
-) (slot security.Reservation, charged bool, ok bool) {
+) (security.Reservation, bool) {
 	key, keyed := loginIdentifierKey(login)
 	if !keyed {
-		return security.Reservation{}, false, true
+		return security.Reservation{}, true
 	}
-	slot, ok = reserveUnderLimiter(s.authLimiter, writer, key)
-	return slot, ok, ok
+	return reserveUnderLimiter(s.authLimiter, writer, key)
 }
 
 // loginIdentifierKey is the one place the identifier bucket's key is derived,
