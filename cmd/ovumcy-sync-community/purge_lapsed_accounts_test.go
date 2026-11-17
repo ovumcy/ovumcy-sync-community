@@ -446,6 +446,19 @@ func TestRunPurgeLapsedAccountsPropagatesSummaryWriteError(t *testing.T) {
 	}
 }
 
+func TestRunPurgeLapsedAccountsPropagatesCappedLineWriteError(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "write-fail-capped.sqlite")
+	seedLapsedManagedAccount(t, dbPath, "purgeclicapwr0001", 90*24*time.Hour)
+	seedLapsedManagedAccount(t, dbPath, "purgeclicapwr0002", 91*24*time.Hour)
+	cfg := testConfigForDBPath(dbPath)
+
+	// The summary line and the one deleted-id line succeed; the capped line fails.
+	writer := &failingWriter{failAfter: 2}
+	if err := runPurgeLapsedAccounts(cfg, []string{"-max-deletes=1"}, writer); err == nil {
+		t.Fatal("expected a write error from the capped line")
+	}
+}
+
 func TestRunPurgeLapsedAccountsPropagatesDeletedIDWriteError(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "write-fail-id.sqlite")
 	seedLapsedManagedAccount(t, dbPath, "purgecliaccount01", 90*24*time.Hour)
