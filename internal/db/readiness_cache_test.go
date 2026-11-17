@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestCheckReadyReusesItsAnswerWithinTheTTL(t *testing.T) {
@@ -14,6 +15,12 @@ func TestCheckReadyReusesItsAnswerWithinTheTTL(t *testing.T) {
 	}
 
 	recordAppliedMigration(t, dbPath, futureMigrationVersion)
+
+	// Re-stamp the cached answer so a slow runner cannot outlast the TTL
+	// between the two checks.
+	store.ready.mu.Lock()
+	store.ready.checkedAt = time.Now()
+	store.ready.mu.Unlock()
 
 	if err := store.CheckReady(context.Background()); err != nil {
 		t.Fatalf("expected the cached ready answer within the TTL, got %v", err)
