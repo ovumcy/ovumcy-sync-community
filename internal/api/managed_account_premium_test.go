@@ -17,7 +17,7 @@ func TestServerRejectsManagedAccountPremiumWhenDisabled(t *testing.T) {
 		handler,
 		http.MethodPost,
 		"/managed/accounts/managedacct1234/premium",
-		map[string]any{"active": false},
+		map[string]any{"active": false, "as_of": time.Now().UTC().Format(time.RFC3339Nano)},
 		"test-managed-bridge-token",
 		http.StatusServiceUnavailable,
 	)
@@ -37,7 +37,7 @@ func TestServerManagedAccountPremiumRejectsWrongBridgeToken(t *testing.T) {
 		handler,
 		http.MethodPost,
 		"/managed/accounts/managedacct1234/premium",
-		map[string]any{"active": false},
+		map[string]any{"active": false, "as_of": time.Now().UTC().Format(time.RFC3339Nano)},
 		"wrong-bridge-token",
 		http.StatusUnauthorized,
 	)
@@ -54,7 +54,7 @@ func TestServerManagedAccountPremiumRejectsWrongBridgeToken(t *testing.T) {
 		handler,
 		http.MethodPost,
 		"/managed/accounts/managedacct1234/premium",
-		map[string]any{"active": false},
+		map[string]any{"active": false, "as_of": time.Now().UTC().Format(time.RFC3339Nano)},
 		"",
 		http.StatusUnauthorized,
 	)
@@ -68,7 +68,7 @@ func TestServerManagedAccountPremiumRejectsInvalidAccountIDShape(t *testing.T) {
 		handler,
 		http.MethodPost,
 		"/managed/accounts/bad/premium",
-		map[string]any{"active": false},
+		map[string]any{"active": false, "as_of": time.Now().UTC().Format(time.RFC3339Nano)},
 		"test-managed-bridge-token",
 		http.StatusBadRequest,
 	)
@@ -119,7 +119,7 @@ func TestServerManagedAccountPremiumRecordsLapseRevokesSessionAndReplayIsIdempot
 			handler,
 			http.MethodPost,
 			"/managed/accounts/"+accountID+"/premium",
-			map[string]any{"active": false},
+			map[string]any{"active": false, "as_of": time.Now().UTC().Format(time.RFC3339Nano)},
 			"test-managed-bridge-token",
 			http.StatusOK,
 		)
@@ -153,7 +153,7 @@ func TestServerManagedAccountPremiumClearsMarker(t *testing.T) {
 		handler,
 		http.MethodPost,
 		"/managed/accounts/"+accountID+"/premium",
-		map[string]any{"active": false},
+		map[string]any{"active": false, "as_of": time.Now().UTC().Format(time.RFC3339Nano)},
 		"test-managed-bridge-token",
 		http.StatusOK,
 	)
@@ -182,7 +182,7 @@ func TestServerManagedAccountPremiumUnknownAccountIsIdempotentSuccess(t *testing
 		handler,
 		http.MethodPost,
 		"/managed/accounts/neverexisted1234/premium",
-		map[string]any{"active": false},
+		map[string]any{"active": false, "as_of": time.Now().UTC().Format(time.RFC3339Nano)},
 		"test-managed-bridge-token",
 		http.StatusOK,
 	)
@@ -211,6 +211,7 @@ func TestServerManagedAccountPremiumRejectsInvalidSignal(t *testing.T) {
 
 	for _, body := range []map[string]any{
 		{"active": true},
+		{"active": false},
 		{"active": false, "as_of": time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano)},
 	} {
 		response := performJSONRequest(
@@ -362,7 +363,7 @@ func TestServerManagedAccountPremiumRefusesSelfHostedAccount(t *testing.T) {
 		handler,
 		http.MethodPost,
 		"/managed/accounts/"+registered.AccountID+"/premium",
-		map[string]any{"active": false},
+		map[string]any{"active": false, "as_of": time.Now().UTC().Format(time.RFC3339Nano)},
 		"test-managed-bridge-token",
 		http.StatusBadRequest,
 	)
@@ -402,7 +403,7 @@ func TestServerManagedAccountPremiumReturnsInternalErrorOnStoreFailure(t *testin
 		handler,
 		http.MethodPost,
 		"/managed/accounts/"+accountID+"/premium",
-		map[string]any{"active": false},
+		map[string]any{"active": false, "as_of": time.Now().UTC().Format(time.RFC3339Nano)},
 		"test-managed-bridge-token",
 		http.StatusInternalServerError,
 	)
@@ -428,7 +429,7 @@ func TestServerManagedAccountPremiumReactivationThenMintReenablesSync(t *testing
 		handler,
 		http.MethodPost,
 		"/managed/accounts/"+accountID+"/premium",
-		map[string]any{"active": false},
+		map[string]any{"active": false, "as_of": time.Now().UTC().Format(time.RFC3339Nano)},
 		"test-managed-bridge-token",
 		http.StatusOK,
 	)

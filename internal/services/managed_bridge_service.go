@@ -142,12 +142,15 @@ func (s *ManagedBridgeService) PurgeManagedAccount(
 //   - active == false records accountID's lapse and, in the same
 //     transaction, revokes every session it holds — no entitlement, no
 //     sync. The encrypted data waits out LapsedAccountSweepService's grace
-//     period. asOf is optional here: a lapse without one is never stale.
+//     period.
 //   - active == true is the only way back from a lapse: it clears the
 //     marker WITHOUT touching premium_active or sessions, so the next
-//     CreateManagedSession restores premium and issues the session. asOf is
-//     required, because a reactivation must be provably newer than the lapse
-//     it undoes.
+//     CreateManagedSession restores premium and issues the session.
+//
+// asOf is required for both. A reactivation must be provably newer than the
+// lapse it undoes, and a lapse ordered by this server's receive time instead
+// could be judged newer than a reactivation the managed side observed later,
+// whose clock runs behind ours, and so purge an account that resubscribed.
 //
 // Signals are ordered by asOf (db.Store.ApplyEntitlementSignal): one older
 // than an already-applied signal returns ErrStaleEntitlementSignal and
@@ -172,10 +175,7 @@ func (s *ManagedBridgeService) SetAccountLapseSignal(
 	}
 
 	now := s.now().UTC()
-	if active && asOf.IsZero() {
-		return ErrInvalidEntitlementSignal
-	}
-	if !asOf.IsZero() && (asOf.Before(time.Unix(0, 0)) || asOf.After(now.Add(maxEntitlementSignalSkew))) {
+	if asOf.IsZero() || asOf.Before(time.Unix(0, 0)) || asOf.After(now.Add(maxEntitlementSignalSkew)) {
 		return ErrInvalidEntitlementSignal
 	}
 
