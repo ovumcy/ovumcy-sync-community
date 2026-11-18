@@ -186,7 +186,7 @@ func runServe(cfg config.Config) error {
 			services.NewLapsedAccountSweepService(store, cfg.LapsedAccountGracePeriod).
 				WithMaxDeletesPerRun(cfg.LapsedAccountSweepMaxDeletes),
 			cfg.LapsedAccountSweepInterval,
-			cfg.LapsedAccountSweepLimit,
+			services.LapsedAccountSweepPageSize(cfg.LapsedAccountSweepLimit),
 		)
 	}()
 	go func() {

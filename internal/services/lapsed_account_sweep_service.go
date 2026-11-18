@@ -65,6 +65,22 @@ type lapsedSweepStore interface {
 // next scheduled run retries them.
 const maxConsecutiveLapsedDeleteFailures = 5
 
+// MinLapsedAccountSweepPage is the smallest page an operator-set page size
+// (LAPSED_ACCOUNT_SWEEP_LIMIT, purge-lapsed-accounts -limit) can ask for.
+// Listing one page reads the accounts table in full, so a run costs one full
+// scan per page: a page size of 1 would scan once per eligible account.
+const MinLapsedAccountSweepPage = 100
+
+// LapsedAccountSweepPageSize maps an operator-set page size to the one Run is
+// given: 0 (or negative) keeps the store default, anything smaller than
+// MinLapsedAccountSweepPage is raised to it.
+func LapsedAccountSweepPageSize(n int) int {
+	if n <= 0 {
+		return 0
+	}
+	return max(n, MinLapsedAccountSweepPage)
+}
+
 // ErrLapsedSweepAborted is joined into the error Run returns when it stopped
 // after maxConsecutiveLapsedDeleteFailures consecutive delete failures.
 var ErrLapsedSweepAborted = errors.New("lapsed account sweep aborted after repeated delete failures")
