@@ -136,14 +136,30 @@ func TestCheckReadyCallerGivingUpStillCachesTheAnswer(t *testing.T) {
 func TestCheckReadyWaiterKeepsItsOwnDeadline(t *testing.T) {
 	store, _ := newFileBackedTestStore(t)
 	_, started, release := gateReadiness(store)
-	defer close(release)
 
-	go func() { _ = store.CheckReady(context.Background()) }()
+	first := make(chan error, 1)
+	go func() { first <- store.CheckReady(context.Background()) }()
 	<-started
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	if err := store.CheckReady(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected the waiter's own deadline, got %v", err)
+	}
+	// The gated check finishes before the test's cleanup closes the store.
+	close(release)
+	if err := <-first; err != nil {
+		t.Fatalf("expected the started check to answer ready, got %v", err)
+	}
+}
+
+func TestCheckReadyTurnsAPanickingCheckIntoNotReady(t *testing.T) {
+	store, _ := newFileBackedTestStore(t)
+	store.ready.mu.Lock()
+	store.ready.check = func(context.Context) error { panic("driver bug") }
+	store.ready.mu.Unlock()
+
+	if err := store.CheckReady(context.Background()); err == nil {
+		t.Fatal("expected a panicking check to answer not ready")
 	}
 }

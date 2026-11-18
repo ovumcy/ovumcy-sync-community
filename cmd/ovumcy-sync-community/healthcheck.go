@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -32,39 +33,42 @@ func runHealthcheck(bindAddr string, timeout time.Duration) error {
 	if timeout <= 0 {
 		timeout = defaultHealthcheckTimeout
 	}
-	host, port := healthcheckTarget(bindAddr)
-	// url.URL escapes an IPv6 zone ("fe80::1%eth0") that a concatenated string would leave unparseable.
-	target := url.URL{
-		Scheme: "http",
-		Host:   net.JoinHostPort(host, port),
-		Path:   healthcheckPath,
-	}
+	hosts, port := healthcheckTargets(bindAddr)
 	// No proxy: HTTP_PROXY exempts loopback only, and the probe must reach the bound address directly.
 	client := &http.Client{Timeout: timeout, Transport: &http.Transport{Proxy: nil}}
-	resp, err := client.Get(target.String())
-	if err != nil {
-		return err
-	}
-	defer func() {
+	var err error
+	for _, host := range hosts {
+		// url.URL escapes an IPv6 zone ("fe80::1%eth0") that a concatenated string would leave unparseable.
+		target := url.URL{Scheme: "http", Host: net.JoinHostPort(host, port), Path: healthcheckPath}
+		var resp *http.Response
+		resp, err = client.Get(target.String())
+		var opErr *net.OpError
+		if errors.As(err, &opErr) && opErr.Op == "dial" {
+			continue
+		}
+		if err != nil {
+			return err
+		}
 		_ = resp.Body.Close()
-	}()
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("healthcheck: unexpected status %d", resp.StatusCode)
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			return fmt.Errorf("healthcheck: unexpected status %d", resp.StatusCode)
+		}
+		return nil
 	}
-	return nil
+	return err
 }
 
-// healthcheckTarget returns the host and port the server listens on per
-// BIND_ADDR, from one parse. A server bound to one address does not answer on
-// loopback, so that address is probed. Every-interface binds probe the
-// loopback of their own family: "[::]:8080" listens IPv6-only where
-// net.ipv6.bindv6only=1, so 127.0.0.1 would be refused there, while ::1
-// answers either way; ":8080" and "0.0.0.0:8080" probe 127.0.0.1. An unset
-// or unparseable BIND_ADDR falls back to the image default.
-func healthcheckTarget(bindAddr string) (host string, port string) {
+// healthcheckTargets returns the hosts to probe, in order, and the port the
+// server listens on per BIND_ADDR, from one parse. A server bound to one
+// address does not answer on loopback, so that address is probed. ":8080" and
+// "0.0.0.0:8080" probe 127.0.0.1. "[::]:8080" listens dual-stack, or IPv6-only
+// where net.ipv6.bindv6only=1, and ::1 is absent where IPv6 is disabled on
+// loopback, so it probes 127.0.0.1 and then, if that cannot connect, ::1. An
+// unset or unparseable BIND_ADDR falls back to the image default.
+func healthcheckTargets(bindAddr string) (hosts []string, port string) {
 	host, port, err := net.SplitHostPort(strings.TrimSpace(bindAddr))
 	if err != nil {
-		return defaultHealthcheckHost, defaultHealthcheckPort
+		return []string{defaultHealthcheckHost}, defaultHealthcheckPort
 	}
 	if port = strings.TrimSpace(port); port == "" {
 		port = defaultHealthcheckPort
@@ -73,11 +77,11 @@ func healthcheckTarget(bindAddr string) (host string, port string) {
 	ip := net.ParseIP(host)
 	switch {
 	case host == "":
-		host = defaultHealthcheckHost
+		return []string{defaultHealthcheckHost}, port
 	case ip != nil && ip.IsUnspecified() && ip.To4() == nil:
-		host = net.IPv6loopback.String()
+		return []string{defaultHealthcheckHost, net.IPv6loopback.String()}, port
 	case ip != nil && ip.IsUnspecified():
-		host = defaultHealthcheckHost
+		return []string{defaultHealthcheckHost}, port
 	}
-	return host, port
+	return []string{host}, port
 }

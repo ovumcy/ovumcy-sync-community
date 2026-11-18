@@ -9,25 +9,26 @@ import (
 	"time"
 )
 
-func TestHealthcheckTargetFollowsBindAddr(t *testing.T) {
-	cases := map[string][2]string{
-		"":                      {defaultHealthcheckHost, defaultHealthcheckPort},
-		"   ":                   {defaultHealthcheckHost, defaultHealthcheckPort},
-		"no-port":               {defaultHealthcheckHost, defaultHealthcheckPort},
-		":":                     {defaultHealthcheckHost, defaultHealthcheckPort},
-		":8080":                 {defaultHealthcheckHost, "8080"},
-		"0.0.0.0:9000":          {defaultHealthcheckHost, "9000"},
-		"[::]:8080":             {"::1", "8080"},
-		"[::ffff:0.0.0.0]:8080": {defaultHealthcheckHost, "8080"},
-		"127.0.0.1:8443":        {"127.0.0.1", "8443"},
-		"10.1.2.3:8080":         {"10.1.2.3", "8080"},
-		"[fd00::5]:8080":        {"fd00::5", "8080"},
-		"sync.local:8080":       {"sync.local", "8080"},
-		" 10.1.2.3:8080  ":      {"10.1.2.3", "8080"},
+func TestHealthcheckTargetsFollowBindAddr(t *testing.T) {
+	cases := map[string]string{
+		"":                      defaultHealthcheckHost + " " + defaultHealthcheckPort,
+		"   ":                   defaultHealthcheckHost + " " + defaultHealthcheckPort,
+		"no-port":               defaultHealthcheckHost + " " + defaultHealthcheckPort,
+		":":                     defaultHealthcheckHost + " " + defaultHealthcheckPort,
+		":8080":                 defaultHealthcheckHost + " 8080",
+		"0.0.0.0:9000":          defaultHealthcheckHost + " 9000",
+		"[::]:8080":             defaultHealthcheckHost + ",::1 8080",
+		"[::ffff:0.0.0.0]:8080": defaultHealthcheckHost + " 8080",
+		"127.0.0.1:8443":        "127.0.0.1 8443",
+		"10.1.2.3:8080":         "10.1.2.3 8080",
+		"[fd00::5]:8080":        "fd00::5 8080",
+		"sync.local:8080":       "sync.local 8080",
+		" 10.1.2.3:8080  ":      "10.1.2.3 8080",
 	}
 	for bindAddr, want := range cases {
-		if host, port := healthcheckTarget(bindAddr); host != want[0] || port != want[1] {
-			t.Fatalf("healthcheckTarget(%q) = %q, %q, want %q, %q", bindAddr, host, port, want[0], want[1])
+		hosts, port := healthcheckTargets(bindAddr)
+		if got := strings.Join(hosts, ",") + " " + port; got != want {
+			t.Fatalf("healthcheckTargets(%q) = %q, want %q", bindAddr, got, want)
 		}
 	}
 }

@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **The container healthcheck failed for `BIND_ADDR=[::]:<port>` on hosts with `net.ipv6.bindv6only=1`.** It probed `127.0.0.1`, where an IPv6-only wildcard bind does not answer. A `[::]` bind is now probed on `::1`; `:<port>` and `0.0.0.0:<port>` still probe `127.0.0.1`. Concurrent `/readyz` probes also share one database check even when the probe that started it gives up, and each probe stops waiting at its own deadline.
+- **The container healthcheck failed for `BIND_ADDR=[::]:<port>` on hosts with `net.ipv6.bindv6only=1`.** It probed `127.0.0.1`, where an IPv6-only wildcard bind does not answer. A `[::]` bind is now probed on `127.0.0.1` and, when that cannot connect, on `::1`; `:<port>` and `0.0.0.0:<port>` still probe `127.0.0.1` only. Concurrent `/readyz` probes also share one database check even when the probe that started it gives up, and each probe stops waiting at its own deadline.
 
 - **The expired-rows sweep scanned whole tables on every batch.** Each batch of the sessions, password-reset-token and TOTP-challenge sweep re-ran an unindexed `julianday(expires_at)` lookup, so a backlog of N rows cost about N/limit full scans per run while holding the database's single connection. Migration `0012` adds an index on that exact expression to each of the three tables, and the sweep now finds its batch through it. The index is built once when `migrate` runs; on a large database that step takes a little longer.
 

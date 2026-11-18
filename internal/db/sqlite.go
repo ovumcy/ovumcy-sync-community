@@ -232,7 +232,16 @@ func (s *Store) CheckReady(ctx context.Context) error {
 func (s *Store) runReadinessCheck(ctx context.Context, check func(context.Context) error, epoch uint64, done chan struct{}) {
 	ctx, cancel := context.WithTimeout(ctx, readinessCheckTimeout)
 	defer cancel()
-	err := check(ctx)
+	// The check runs outside the HTTP server's panic recovery: a panic is a
+	// not-ready answer, not a crashed process with its waiters left hanging.
+	err := func() (err error) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				err = fmt.Errorf("readiness check panicked: %v", recovered)
+			}
+		}()
+		return check(ctx)
+	}()
 
 	s.ready.mu.Lock()
 	if s.ready.epoch == epoch {
