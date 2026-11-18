@@ -56,6 +56,7 @@ authenticated account id; **login** is the lowercased, trimmed login from the re
 | `POST /managed/session` | `MANAGED_BRIDGE_TOKEN` bearer; 503 if unset | none (deliberate) | unlimited | 4 KiB |
 | `DELETE /managed/accounts/{account_id}` | `MANAGED_BRIDGE_TOKEN` bearer | none (deliberate) | unlimited | none |
 | `POST /managed/accounts/{account_id}/premium` | `MANAGED_BRIDGE_TOKEN` bearer | none (deliberate) | unlimited | 4 KiB |
+| `POST /managed/accounts/{account_id}/sessions/revoke` | `MANAGED_BRIDGE_TOKEN` bearer | none (deliberate) | unlimited | none (no body read) |
 
 Notes on the table:
 

@@ -894,8 +894,8 @@ func (s *Server) handleManagedAccountPurge(writer http.ResponseWriter, request *
 
 // handleManagedAccountSessionsRevoke implements POST /managed/accounts/
 // {account_id}/sessions/revoke: it deletes every sync session of the managed
-// account, so one minted before a managed logout, password change or
-// operator revoke stops authenticating. Gated by withManagedBridge like the
+// account, so one minted before a managed credential change or operator
+// revoke stops authenticating. Gated by withManagedBridge like the
 // other bridge routes, it takes no request body and relays the path id to
 // ManagedBridgeService.RevokeManagedAccountSessions, which owns
 // normalization, the managed-mode scope and idempotency: an unknown account,
