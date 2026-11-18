@@ -111,7 +111,9 @@ client served from the server's own origin, since browsers send `Origin` on same
 route; `/healthz`, `/readyz` and `/metrics` are exempt. Native apps send neither header and are
 not affected.
 
-**Fix.** Add the exact origin (scheme, host, port, no trailing slash) to the comma-separated
+**Fix.** A request without `Origin` refused by its `Sec-Fetch-Site` is a navigation or tag from
+another site, not an API client: `ALLOWED_ORIGINS` does not apply to it; call the API with
+`fetch` from an allowed origin instead. For a refused `Origin`, add the exact origin (scheme, host, port, no trailing slash) to the comma-separated
 `ALLOWED_ORIGINS` and restart. Allowed origins get `Access-Control-Allow-Headers:
 Authorization, Content-Type` and methods `GET, POST, PUT, DELETE, OPTIONS`. If the proxy
 answers `OPTIONS` itself, make sure it does not strip these headers.

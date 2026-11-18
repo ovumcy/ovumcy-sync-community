@@ -77,16 +77,25 @@ func TestForeignOriginIsRefusedBeforeTheLimiters(t *testing.T) {
 // ahead of every limiter, so it cannot spend the victim's per-IP
 // session-lookup bucket; the monitoring routes stay reachable.
 func TestCrossSiteFetchWithoutOriginIsRefusedBeforeTheLimiters(t *testing.T) {
-	handler := newTestServerWithOptions(t, serverTestOptions{authRateLimitCount: 1})
+	handler := newTestServerWithOptions(t, serverTestOptions{
+		allowedOrigins:     []string{"https://app.example"},
+		authRateLimitCount: 1,
+	})
 
-	serve := func(path, fetchSite string) *httptest.ResponseRecorder {
+	serveFrom := func(path, fetchSite, origin string) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		if fetchSite != "" {
 			request.Header.Set("Sec-Fetch-Site", fetchSite)
 		}
+		if origin != "" {
+			request.Header.Set("Origin", origin)
+		}
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, request)
 		return recorder
+	}
+	serve := func(path, fetchSite string) *httptest.ResponseRecorder {
+		return serveFrom(path, fetchSite, "")
 	}
 
 	// One more than the session-lookup bucket holds, from both refused sites.
@@ -108,6 +117,10 @@ func TestCrossSiteFetchWithoutOriginIsRefusedBeforeTheLimiters(t *testing.T) {
 		if recorder := serve("/auth/session", fetchSite); recorder.Code != http.StatusUnauthorized {
 			t.Fatalf("Sec-Fetch-Site %q: expected the session lookup to answer 401, got %d", fetchSite, recorder.Code)
 		}
+	}
+	// An allowed web client is cross-site by definition; its Origin decides.
+	if recorder := serveFrom("/auth/session", "cross-site", "https://app.example"); recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("allowed origin with Sec-Fetch-Site cross-site: expected 401, got %d", recorder.Code)
 	}
 	for _, path := range []string{"/healthz", "/readyz", "/metrics"} {
 		if recorder := serve(path, "cross-site"); recorder.Code == http.StatusForbidden {
