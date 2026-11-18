@@ -14,16 +14,20 @@ const originGateTestPassword = "correct horse battery staple"
 func TestForeignOriginIsRefusedBeforeTheLimiters(t *testing.T) {
 	handler := newTestServerWithOptions(t, serverTestOptions{
 		allowedOrigins:     []string{"https://app.example"},
-		authRateLimitCount: 10,
+		authRateLimitCount: 1,
 	})
 	performJSONRequest(t, handler, http.MethodPost, "/auth/register",
 		map[string]string{"login": "owner@example.com", "password": originGateTestPassword}, "", http.StatusCreated)
 
-	for range 11 {
-		for _, route := range []struct{ method, path string }{
-			{http.MethodPost, "/auth/login"},
-			{http.MethodGet, "/auth/session"},
-		} {
+	// One more than each bucket holds: 1 login, 30 session lookups.
+	for _, route := range []struct {
+		method, path string
+		times        int
+	}{
+		{http.MethodPost, "/auth/login", 2},
+		{http.MethodGet, "/auth/session", 31},
+	} {
+		for range route.times {
 			request := httptest.NewRequest(route.method, route.path, nil)
 			request.Header.Set("Origin", "https://evil.example")
 			recorder := httptest.NewRecorder()
@@ -36,8 +40,8 @@ func TestForeignOriginIsRefusedBeforeTheLimiters(t *testing.T) {
 			if payload["error"] != "origin_not_allowed" {
 				t.Fatalf("unexpected refusal payload: %#v", payload)
 			}
-			if recorder.Header().Get("Access-Control-Allow-Origin") != "" {
-				t.Fatal("a refused origin must get no CORS headers")
+			if recorder.Header().Get("Access-Control-Allow-Origin") != "" || recorder.Header().Get("Vary") != "Origin" {
+				t.Fatalf("a refused origin must get Vary: Origin and no CORS headers, got %v", recorder.Header())
 			}
 		}
 	}
@@ -52,6 +56,7 @@ func TestForeignOriginIsRefusedBeforeTheLimiters(t *testing.T) {
 		path:           "/auth/login",
 		body:           credentials,
 		expectedStatus: http.StatusOK,
+		remoteAddr:     "198.51.100.7:4000",
 		headers:        map[string]string{"Origin": "https://app.example"},
 	})
 	if allowed.Header().Get("Access-Control-Allow-Origin") != "https://app.example" {

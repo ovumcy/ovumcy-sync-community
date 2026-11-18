@@ -152,7 +152,7 @@ TOTP endpoints stay inactive (`503 totp_not_configured`) until `FIELD_ENCRYPTION
 - Set `TRUSTED_PROXY_CIDRS` to your reverse-proxy addresses so auth rate limiting sees real client IPs. The proxy must send `X-Forwarded-For` (`X-Real-IP` is not read); without a trusted proxy every client shares the proxy's single rate-limit bucket.
 - Enable `METRICS_ENABLED` only when needed; it requires `METRICS_BEARER_TOKEN`, and `/metrics` should stay internal as well.
 - Leave `MANAGED_BRIDGE_TOKEN` unset unless you operate a separate trusted managed-auth service.
-- Set `ALLOWED_ORIGINS` only when browser clients need direct CORS access.
+- Set `ALLOWED_ORIGINS` whenever a browser client calls the server, including one served from the server's own origin; any request with an unlisted `Origin` answers 403.
 
 A ready-to-adapt Caddy edge (which blocks `/metrics` and `/managed/*` publicly). It requires `SYNC_SITE_ADDRESS` — the public hostname Caddy obtains a certificate for — and pins Caddy to a fixed address on its own network (`SYNC_PROXY_IP`, default `172.30.99.10`, inside `SYNC_EDGE_SUBNET`, default `172.30.99.0/24`) and trusts only that address via `TRUSTED_PROXY_CIDRS`. It also drops the base file's `127.0.0.1:8080` host mapping (`ports: !reset []`, Docker Compose 2.24.4 or newer), so nothing on the host reaches the app around Caddy:
 
