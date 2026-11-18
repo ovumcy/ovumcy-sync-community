@@ -31,6 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A non-ASCII managed-account id could name an ASCII account on the bridge.** Every bridge route lowercased the id before checking it against `^[a-z0-9][a-z0-9_-]{7,127}$`, and lowercasing folds U+212A KELVIN SIGN into `k`, so `Kelvin-acct` reached `kelvin-acct`. The trimmed id is now checked against the ASCII pattern (either case) first and lowercased after; a non-ASCII id answers 400 `invalid_managed_account` on every bridge route. An upper-case ASCII id still names its lowercase account.
+
 - **Each page of the lapsed-account sweep scanned and sorted the whole `accounts` table.** Migration `0013` adds a partial index on `(julianday(lapsed_at), id)` covering lapsed accounts only, and the sweep now reads each page of candidates through it in order and stops at the page size. On a self-hosted install no account is lapsed, so the index stays empty.
 
 - **The container healthcheck failed for `BIND_ADDR=[::]:<port>` on hosts with `net.ipv6.bindv6only=1`.** It probed `127.0.0.1`, where an IPv6-only wildcard bind does not answer. A `[::]` bind is now probed on `127.0.0.1` and, when that cannot connect, on `::1`; `:<port>` and `0.0.0.0:<port>` still probe `127.0.0.1` only. Concurrent `/readyz` probes also share one database check even when the probe that started it gives up, and each probe stops waiting at its own deadline.
