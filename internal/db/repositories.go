@@ -2021,16 +2021,12 @@ func (s *Store) GetRecoveryKeyPackage(
 	ctx context.Context,
 	accountID string,
 ) (models.RecoveryKeyPackage, error) {
-	row := s.db.QueryRowContext(
-		ctx,
-		`SELECT account_id, algorithm, kdf, mnemonic_word_count, wrap_nonce_hex, wrapped_master_key_hex, phrase_fingerprint_hex, updated_at
-		 FROM recovery_key_packages
-		 WHERE account_id = ?`,
-		accountID,
-	)
-
-	return scanRecoveryKeyPackage(row)
+	return scanRecoveryKeyPackage(s.db.QueryRowContext(ctx, selectRecoveryKeyPackageSQL, accountID))
 }
+
+const selectRecoveryKeyPackageSQL = `SELECT account_id, algorithm, kdf, mnemonic_word_count, wrap_nonce_hex, wrapped_master_key_hex, phrase_fingerprint_hex, updated_at
+		 FROM recovery_key_packages
+		 WHERE account_id = ?`
 
 func (s *Store) UpsertRecoveryKeyPackage(
 	ctx context.Context,
@@ -2039,16 +2035,9 @@ func (s *Store) UpsertRecoveryKeyPackage(
 	return upsertRecoveryKeyPackage(ctx, s.db, recoveryKeyPackage)
 }
 
-func upsertRecoveryKeyPackage(
-	ctx context.Context,
-	execer interface {
-		ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	},
-	recoveryKeyPackage models.RecoveryKeyPackage,
-) (models.RecoveryKeyPackage, error) {
-	_, err := execer.ExecContext(
-		ctx,
-		`
+// insertRecoveryKeyPackageSQL is completed by an ON CONFLICT(account_id)
+// clause: the upsert replaces, the managed first put does nothing.
+const insertRecoveryKeyPackageSQL = `
 INSERT INTO recovery_key_packages (
   account_id,
   algorithm,
@@ -2060,15 +2049,10 @@ INSERT INTO recovery_key_packages (
   updated_at
 )
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(account_id) DO UPDATE SET
-  algorithm = excluded.algorithm,
-  kdf = excluded.kdf,
-  mnemonic_word_count = excluded.mnemonic_word_count,
-  wrap_nonce_hex = excluded.wrap_nonce_hex,
-  wrapped_master_key_hex = excluded.wrapped_master_key_hex,
-  phrase_fingerprint_hex = excluded.phrase_fingerprint_hex,
-  updated_at = excluded.updated_at
-`,
+`
+
+func recoveryKeyPackageArgs(recoveryKeyPackage models.RecoveryKeyPackage) []any {
+	return []any{
 		recoveryKeyPackage.AccountID,
 		recoveryKeyPackage.Algorithm,
 		recoveryKeyPackage.KDF,
@@ -2077,6 +2061,28 @@ ON CONFLICT(account_id) DO UPDATE SET
 		recoveryKeyPackage.WrappedMasterKeyHex,
 		recoveryKeyPackage.PhraseFingerprintHex,
 		recoveryKeyPackage.UpdatedAt.UTC().Format(time.RFC3339Nano),
+	}
+}
+
+func upsertRecoveryKeyPackage(
+	ctx context.Context,
+	execer interface {
+		ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	},
+	recoveryKeyPackage models.RecoveryKeyPackage,
+) (models.RecoveryKeyPackage, error) {
+	_, err := execer.ExecContext(
+		ctx,
+		insertRecoveryKeyPackageSQL+`ON CONFLICT(account_id) DO UPDATE SET
+  algorithm = excluded.algorithm,
+  kdf = excluded.kdf,
+  mnemonic_word_count = excluded.mnemonic_word_count,
+  wrap_nonce_hex = excluded.wrap_nonce_hex,
+  wrapped_master_key_hex = excluded.wrapped_master_key_hex,
+  phrase_fingerprint_hex = excluded.phrase_fingerprint_hex,
+  updated_at = excluded.updated_at
+`,
+		recoveryKeyPackageArgs(recoveryKeyPackage)...,
 	)
 	if err != nil {
 		return models.RecoveryKeyPackage{}, fmt.Errorf("upsert recovery key package: %w", err)

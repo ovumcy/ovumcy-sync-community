@@ -1474,9 +1474,10 @@ paths:
         toward the step-up TOTP budget; a missing code is not counted), so
         a stolen session alone cannot overwrite the owner's recovery path.
         A managed account has no password: its session may store a first
-        package, but a package that differs from a stored one is refused with
-        `403 managed_recovery_key_overwrite` and nothing is written — a
-        managed client re-keys through ovumcy-managed.
+        package, but a valid package that differs from a stored one is refused with
+        `403 managed_recovery_key_overwrite` and nothing is written. No
+        session route replaces a managed account's package; the bridge purge
+        clears it with the rest of the account.
 
         A package equal to the stored one (after the same trim + lowercase
         normalization, same `mnemonic_word_count`) is a no-op: it needs no

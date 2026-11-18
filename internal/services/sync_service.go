@@ -33,8 +33,8 @@ var ErrRecoveryPackageNotFound = errors.New("recovery_package_not_found")
 
 // ErrManagedRecoveryKeyOverwrite refuses a managed session's change to a
 // stored recovery key: the account has no password to step up with, so the
-// session alone would be enough; ovumcy-managed re-keys after its own
-// re-authentication.
+// session alone would be enough. No session route replaces it; the bridge
+// purge clears it with the rest of the account.
 var ErrManagedRecoveryKeyOverwrite = errors.New("managed_recovery_key_overwrite")
 
 var checksumPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)

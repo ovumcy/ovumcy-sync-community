@@ -43,8 +43,9 @@ func verifyStepUpCode(ctx context.Context, verifier TOTPCodeVerifier, account mo
 // as read, whose PasswordHash the write must then hold to in its own
 // transaction. A wrong password returns the same ErrInvalidCurrentPassword as
 // every other step-up, after a full bcrypt compare. Managed accounts have no
-// password (sessions come only from the managed bridge, whose own
-// re-authentication stands in), so they pass.
+// password, so they pass: a caller must refuse a managed account's
+// destructive write itself (DELETE /account at the transport, the
+// recovery-key overwrite in PutRecoveryKeyPackage).
 func verifyStepUp(
 	ctx context.Context,
 	store *db.Store,
