@@ -1162,6 +1162,85 @@ paths:
                 bridgeDisabled:
                   value: { error: managed_bridge_disabled }
 
+  /managed/accounts/{account_id}/sessions/revoke:
+    post:
+      tags: [managed-bridge]
+      operationId: revokeManagedAccountSessions
+      summary: Revoke every sync session of a managed account
+      description: |
+        Machine-to-machine only: called by the separate trusted managed-auth
+        service when a managed account's own credentials change (logout,
+        password change) or an operator revokes its sessions, so a sync
+        session minted earlier stops authenticating at once instead of living
+        out its `SESSION_TTL`. Requires the same `MANAGED_BRIDGE_TOKEN` bearer
+        credential as `POST /managed/session`; the route is disabled (503)
+        whenever that token is not configured on this server.
+
+        Deletes sessions only: the account row, its devices, the encrypted
+        sync blob, the wrapped recovery-key package and the lapse state
+        (`premium_active`, the recorded lapse and its as-of) are left as they
+        are, and the next `POST /managed/session` issues a fresh session. The
+        delete is scoped to `mode=managed` accounts. An account that does not
+        exist, a managed account with no sessions, and a self-hosted account
+        whose id matches all answer the same `200 {"status":"sessions_revoked"}`
+        and change nothing, so the answer never reveals whether a self-hosted
+        account exists and the call is safe to repeat; retrying after a
+        dropped response is the managed caller's side.
+
+        Takes no request body. A request that sends one must declare
+        `Content-Type: application/json` (415 otherwise, as on every route);
+        the body is ignored.
+      security:
+        - managedBridgeAuth: []
+      parameters:
+        - name: account_id
+          in: path
+          required: true
+          description: Opaque managed-account identifier (lowercased/trimmed server-side); must match `^[a-z0-9][a-z0-9_-]{7,127}$`, the same shape as the `POST /managed/session` account_id.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Every session of the managed account deleted — or none existed, or the id names no managed account.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+              examples:
+                revoked:
+                  value: { status: sessions_revoked }
+        "400":
+          description: account_id fails the managed-account id pattern.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidManagedAccount:
+                  value: { error: invalid_managed_account }
+        "401":
+          description: Missing/invalid MANAGED_BRIDGE_TOKEN bearer credential.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  value: { error: unauthorized }
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          description: MANAGED_BRIDGE_TOKEN is not configured on this server; the bridge is disabled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                bridgeDisabled:
+                  value: { error: managed_bridge_disabled }
+
   /sync/capabilities:
     get:
       tags: [sync]
