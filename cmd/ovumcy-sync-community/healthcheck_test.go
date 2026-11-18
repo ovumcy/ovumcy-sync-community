@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -135,6 +136,35 @@ func TestRunHealthcheckFailsOnNon2xx(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "500") {
 		t.Fatalf("expected status code in probe error, got %v", err)
+	}
+}
+
+// A server that accepts and drops the connection is reachable but broken: the
+// probe reports that failure instead of falling back to ::1.
+func TestRunHealthcheckStopsOnAFailureAfterTheDial(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+	go func() {
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+	_, port, _ := net.SplitHostPort(listener.Addr().String())
+
+	err = runHealthcheck(net.JoinHostPort("::", port), time.Second)
+	if err == nil {
+		t.Fatal("expected a dropped connection to fail the probe")
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Op == "dial" {
+		t.Fatalf("expected the 127.0.0.1 failure, got the ::1 dial error %v", err)
 	}
 }
 
