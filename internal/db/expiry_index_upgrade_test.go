@@ -150,7 +150,8 @@ func assertExpirySweepSeeksIndex(t *testing.T, table, index string, plan []strin
 			t.Fatalf("%s: expected no full table or index scan, plan:\n%s", table, joined)
 		}
 		if strings.Contains(line, index) {
-			if !strings.HasPrefix(line, "SEARCH "+table+" USING INDEX "+index+" (") {
+			if !strings.HasPrefix(line, "SEARCH "+table+" USING INDEX "+index+" (") &&
+				!strings.HasPrefix(line, "SEARCH "+table+" USING COVERING INDEX "+index+" (") {
 				t.Fatalf("%s: expected %s used as a range seek, plan:\n%s", table, index, joined)
 			}
 			seeks = true
