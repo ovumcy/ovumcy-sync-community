@@ -616,8 +616,8 @@ func TestApplyEntitlementSignalOrdersAndRevokesInOneTransaction(t *testing.T) {
 }
 
 // TestApplyEntitlementSignalRefusesAZeroAsOf pins that the store never orders
-// a signal by its receive time: a lapse or reactivation without AsOf is
-// refused with ErrInvalidEntitlementSignal before anything is read or
+// a signal by its receive time: a lapse or reactivation without AsOf, or
+// without the ReceivedAt that starts the purge clock, is refused with ErrInvalidEntitlementSignal before anything is read or
 // written, on a live account and on an already lapsed one, and it leaves the
 // sessions, lapsed_at and premium_active as they were.
 func TestApplyEntitlementSignalRefusesAZeroAsOf(t *testing.T) {
@@ -647,9 +647,13 @@ func TestApplyEntitlementSignalRefusesAZeroAsOf(t *testing.T) {
 
 	for _, id := range []string{liveID, lapsedID} {
 		for _, active := range []bool{false, true} {
-			signal := EntitlementSignal{Active: active, ReceivedAt: now}
-			if err := store.ApplyEntitlementSignal(ctx, id, signal); !errors.Is(err, ErrInvalidEntitlementSignal) {
-				t.Fatalf("%s active=%v: expected ErrInvalidEntitlementSignal, got %v", id, active, err)
+			for _, signal := range []EntitlementSignal{
+				{Active: active, ReceivedAt: now},
+				{Active: active, AsOf: now},
+			} {
+				if err := store.ApplyEntitlementSignal(ctx, id, signal); !errors.Is(err, ErrInvalidEntitlementSignal) {
+					t.Fatalf("%s %+v: expected ErrInvalidEntitlementSignal, got %v", id, signal, err)
+				}
 			}
 		}
 		if _, err := store.FindSessionByTokenHash(ctx, id+"-token-hash"); err != nil {
