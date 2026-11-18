@@ -980,10 +980,11 @@ paths:
         token is not configured on this server.
 
         Only `mode=managed` accounts are erasable through this path: a
-        self-hosted account whose id collides is refused with
-        `invalid_managed_account` and left untouched. Idempotent: an account
-        that never existed or is already gone still reports success, so the
-        managed caller can safely retry after a dropped response.
+        self-hosted account whose id matches is left untouched and gets the
+        same 200 an id nobody holds gets, so the answer never reveals that a
+        self-hosted account exists. Idempotent: an account that never existed
+        or is already gone still reports success, so the managed caller can
+        safely retry after a dropped response.
       security:
         - managedBridgeAuth: []
       parameters:
@@ -1004,7 +1005,7 @@ paths:
                 purged:
                   value: { status: account_purged }
         "400":
-          description: account_id fails the managed-account id pattern, or names an existing non-managed account.
+          description: account_id fails the managed-account id pattern.
           content:
             application/json:
               schema:
@@ -1079,8 +1080,8 @@ paths:
         window past the configured grace period.
 
         Only `mode=managed` accounts can be affected: a self-hosted account
-        whose id collides is refused with `invalid_managed_account` and left
-        untouched. An account this server has never heard of, or one that is
+        whose id matches is left untouched and gets the same 200 an unknown
+        id gets, so the answer never reveals that one exists. An account this server has never heard of, or one that is
         gone by the time the write runs, is a benign no-op success in either
         direction — the managed caller does not need to know whether this
         server has ever seen the account. Such a no-op records nothing: a
@@ -1120,7 +1121,7 @@ paths:
                   summary: active=true
                   value: { status: lapse_cleared }
         "400":
-          description: "account_id fails the managed-account id pattern or names an existing non-managed account, or the signal is invalid (`active` missing or null, `as_of` missing, or an `as_of` before the Unix epoch or more than 5 minutes ahead of this server's clock)."
+          description: "account_id fails the managed-account id pattern, or the signal is invalid (`active` missing or null, `as_of` missing, or an `as_of` before the Unix epoch or more than 5 minutes ahead of this server's clock)."
           content:
             application/json:
               schema:

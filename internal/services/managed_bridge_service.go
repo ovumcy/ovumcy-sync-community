@@ -97,9 +97,10 @@ func (s *ManagedBridgeService) CreateManagedSession(
 // The id is matched raw against accounts.id after the same normalization and
 // pattern gate as CreateManagedSession — the "managed:" namespace lives only
 // in the login column, never in the id. Only mode=managed accounts are
-// erasable through this path: a self-hosted account whose id collides is
-// refused with ErrInvalidManagedAccount and left untouched, so the bridge
-// credential can never erase a self-hosted user's data.
+// erasable through this path: a self-hosted account whose id matches is left
+// untouched, so the bridge credential can never erase a self-hosted user's
+// data, and gets the nil an absent id gets, so the answer never reveals that
+// a self-hosted account exists.
 //
 // Idempotent: an account that never existed or is already gone (including a
 // concurrent-delete race) returns nil, so the managed caller can safely retry
@@ -121,7 +122,7 @@ func (s *ManagedBridgeService) PurgeManagedAccount(
 		return err
 	}
 	if account.Mode != "managed" {
-		return ErrInvalidManagedAccount
+		return nil
 	}
 
 	if err := s.store.DeleteManagedAccount(ctx, accountID); err != nil {
@@ -187,9 +188,9 @@ func (s *ManagedBridgeService) RevokeManagedAccountSessions(
 //
 // An account this server has never heard of, or one that vanished between
 // the lookup and the write, is a benign no-op success, as in
-// PurgeManagedAccount. A self-hosted account whose id collides is refused
-// with ErrInvalidManagedAccount and left untouched: the bridge credential
-// must never affect a self-hosted user's account.
+// PurgeManagedAccount. A self-hosted account whose id matches gets that same
+// nil and is left untouched: the bridge credential must never affect a
+// self-hosted user's account, and the answer must not reveal that one exists.
 func (s *ManagedBridgeService) SetAccountLapseSignal(
 	ctx context.Context,
 	accountID string,
@@ -214,7 +215,7 @@ func (s *ManagedBridgeService) SetAccountLapseSignal(
 		return err
 	}
 	if account.Mode != "managed" {
-		return ErrInvalidManagedAccount
+		return nil
 	}
 
 	err = s.store.ApplyEntitlementSignal(ctx, accountID, db.EntitlementSignal{

@@ -255,7 +255,7 @@ func TestServerManagedAccountPurgeIsIdempotent(t *testing.T) {
 	)
 }
 
-func TestServerManagedAccountPurgeRefusesSelfHostedAccount(t *testing.T) {
+func TestServerManagedAccountPurgeAnswersASelfHostedIDLikeAnAbsentOne(t *testing.T) {
 	handler := newTestServer(t)
 
 	registered := registerOwner(t, handler)
@@ -277,20 +277,14 @@ func TestServerManagedAccountPurgeRefusesSelfHostedAccount(t *testing.T) {
 	)
 
 	// The bridge credential must never erase a self-hosted account, even when
-	// handed that account's real id.
-	response := performJSONRequest(
-		t,
-		handler,
-		http.MethodDelete,
-		"/managed/accounts/"+registered.AccountID,
-		nil,
-		"test-managed-bridge-token",
-		http.StatusBadRequest,
-	)
-	var payload map[string]string
-	decodeResponse(t, response.Body.Bytes(), &payload)
-	if payload["error"] != "invalid_managed_account" {
-		t.Fatalf("unexpected refusal payload: %#v", payload)
+	// handed that account's real id, and answers it byte for byte as it
+	// answers an id nobody holds.
+	absent := performJSONRequest(t, handler, http.MethodDelete,
+		"/managed/accounts/neverexisted1234", nil, "test-managed-bridge-token", http.StatusOK)
+	selfHosted := performJSONRequest(t, handler, http.MethodDelete,
+		"/managed/accounts/"+registered.AccountID, nil, "test-managed-bridge-token", http.StatusOK)
+	if absent.Body.String() != selfHosted.Body.String() || absent.Body.String() == "" {
+		t.Fatalf("self-hosted answer %q differs from the absent answer %q", selfHosted.Body.String(), absent.Body.String())
 	}
 
 	// The self-hosted account is untouched: its session still authenticates

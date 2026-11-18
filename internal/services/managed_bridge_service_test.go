@@ -209,7 +209,7 @@ func TestManagedBridgePurgeSurfacesAccountDeleteStoreError(t *testing.T) {
 	}
 }
 
-func TestManagedBridgePurgeRefusesSelfHostedAccount(t *testing.T) {
+func TestManagedBridgePurgeAnswersASelfHostedIDLikeAnAbsentOne(t *testing.T) {
 	store := openTestStore(t)
 	authService := NewAuthService(store, 24*time.Hour)
 	bridgeService := NewManagedBridgeService(store, authService)
@@ -233,9 +233,10 @@ func TestManagedBridgePurgeRefusesSelfHostedAccount(t *testing.T) {
 	}
 
 	// The bridge credential must never erase a self-hosted user's data, even
-	// when handed that account's raw id.
-	if err := bridgeService.PurgeManagedAccount(ctx, registered.AccountID); !errors.Is(err, ErrInvalidManagedAccount) {
-		t.Fatalf("expected ErrInvalidManagedAccount for self-hosted account, got %v", err)
+	// when handed that account's raw id, and must answer it as it answers an
+	// id nobody holds.
+	if err := bridgeService.PurgeManagedAccount(ctx, registered.AccountID); err != nil {
+		t.Fatalf("expected the absent-account nil for a self-hosted id, got %v", err)
 	}
 
 	if _, err := authService.Authenticate(ctx, registered.SessionToken); err != nil {
@@ -410,11 +411,12 @@ func TestLapseForAbsentAccountIsNotRememberedUntilResent(t *testing.T) {
 	}
 }
 
-// TestSetAccountLapseSignalRefusesSelfHostedAccount asserts the bridge
-// credential can never mark a self-hosted account lapsed, revoke its
+// TestSetAccountLapseSignalAnswersASelfHostedIDLikeAnAbsentOne asserts the
+// bridge credential can never mark a self-hosted account lapsed, revoke its
 // sessions, or touch its premium_active flag, even when handed that
-// account's real id — mirroring PurgeManagedAccount's identical refusal.
-func TestSetAccountLapseSignalRefusesSelfHostedAccount(t *testing.T) {
+// account's real id, and gets the nil an absent id gets — mirroring
+// PurgeManagedAccount.
+func TestSetAccountLapseSignalAnswersASelfHostedIDLikeAnAbsentOne(t *testing.T) {
 	store := openTestStore(t)
 	authService := NewAuthService(store, 24*time.Hour)
 	bridgeService := NewManagedBridgeService(store, authService)
@@ -425,8 +427,10 @@ func TestSetAccountLapseSignalRefusesSelfHostedAccount(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	if err := bridgeService.SetAccountLapseSignal(ctx, registered.AccountID, false, time.Now().UTC()); !errors.Is(err, ErrInvalidManagedAccount) {
-		t.Fatalf("expected ErrInvalidManagedAccount for self-hosted account, got %v", err)
+	for _, active := range []bool{false, true} {
+		if err := bridgeService.SetAccountLapseSignal(ctx, registered.AccountID, active, time.Now().UTC()); err != nil {
+			t.Fatalf("expected the absent-account nil for a self-hosted id (active=%v), got %v", active, err)
+		}
 	}
 
 	if _, err := authService.Authenticate(ctx, registered.SessionToken); err != nil {

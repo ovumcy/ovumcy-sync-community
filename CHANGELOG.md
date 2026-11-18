@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The bridge purge and premium signal answer a self-hosted account's id like an unknown one.** `DELETE /managed/accounts/{account_id}` and `POST /managed/accounts/{account_id}/premium` answered 400 `invalid_managed_account` when the id belonged to a self-hosted account, which told the bridge caller that account existed. Both now answer the same 200 an unknown id gets, as `sessions/revoke` already did, and still leave the self-hosted account untouched. 400 `invalid_managed_account` now means only that the id fails the managed-account id pattern.
+
 - **Breaking for managed clients: a managed session can no longer replace the wrapped recovery key.** A managed account has no password, so `PUT /sync/recovery-key` skipped the step-up for it and a stolen managed session could swap out the owner's recovery path. A managed session now stores only a first package; a valid package that differs from the stored one answers 403 `managed_recovery_key_overwrite` and writes nothing. Re-putting the stored package still answers 200. Client note: a managed client cannot rotate its recovery phrase through a session; the bridge purge clears the package with the rest of the account.
 
 - **The lapsed-account sweep page size has a floor of 100.** Listing one page of candidates reads the whole `accounts` table, so `LAPSED_ACCOUNT_SWEEP_LIMIT=1` (or `purge-lapsed-accounts -limit 1`) cost one full scan per eligible account. A value from 1 to 99 now means 100; `0` still uses the store default (500).
