@@ -84,6 +84,18 @@ snapshot.
   `TestAuthServiceDuplicateRegistrationIsGeneric`
   ([internal/services/auth_service_test.go](internal/services/auth_service_test.go)),
   whose "generic" means the error carries no detail beyond the refusal.
+- **A managed session alone removes the account's devices.** `DELETE
+  /sync/devices/{device_id}` asks for a password and code only on a
+  TOTP-enrolled account; a managed account has no password, so it cannot
+  enroll, and a stolen managed session can evict the owner's devices and with
+  them the sessions bound to them — as a stolen session of a self-hosted
+  account without TOTP can. Nothing is erased: the encrypted blob, the
+  recovery-key package and the other devices stay, and an evicted device
+  attaches again (`POST /sync/devices`) on a session from its next `POST
+  /managed/session`. ovumcy-managed cuts a
+  stolen session short through `POST
+  /managed/accounts/{account_id}/sessions/revoke`. Accepted: a step-up here
+  would need a credential this server does not hold for managed accounts.
 - **`managed:` login namespace.** Public registration cannot claim the
   `managed:` prefix, while bridge-provisioned logins use it by design behind
   the `MANAGED_BRIDGE_TOKEN` gate.
