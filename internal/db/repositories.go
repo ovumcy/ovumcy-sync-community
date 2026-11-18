@@ -1726,8 +1726,14 @@ func (s *Store) ReplaceManagedRecoveryKeyPackage(ctx context.Context, recoveryKe
 	if err != nil {
 		return fmt.Errorf("find managed account for recovery key: %w", err)
 	}
-	if _, err := upsertRecoveryKeyPackage(ctx, tx, recoveryKeyPackage); err != nil {
-		return err
+	// A repeat of the stored content writes nothing, so updated_at keeps
+	// meaning "the package changed", as on the session route's no-op re-put.
+	if _, err := tx.ExecContext(ctx,
+		insertRecoveryKeyPackageSQL+upsertRecoveryKeyPackageSQL+`WHERE (algorithm, kdf, mnemonic_word_count, wrap_nonce_hex, wrapped_master_key_hex, phrase_fingerprint_hex)
+  IS NOT (excluded.algorithm, excluded.kdf, excluded.mnemonic_word_count, excluded.wrap_nonce_hex, excluded.wrapped_master_key_hex, excluded.phrase_fingerprint_hex)`,
+		recoveryKeyPackageArgs(recoveryKeyPackage)...,
+	); err != nil {
+		return fmt.Errorf("replace managed recovery key package: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -2098,6 +2104,16 @@ INSERT INTO recovery_key_packages (
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 `
 
+const upsertRecoveryKeyPackageSQL = `ON CONFLICT(account_id) DO UPDATE SET
+  algorithm = excluded.algorithm,
+  kdf = excluded.kdf,
+  mnemonic_word_count = excluded.mnemonic_word_count,
+  wrap_nonce_hex = excluded.wrap_nonce_hex,
+  wrapped_master_key_hex = excluded.wrapped_master_key_hex,
+  phrase_fingerprint_hex = excluded.phrase_fingerprint_hex,
+  updated_at = excluded.updated_at
+`
+
 func recoveryKeyPackageArgs(recoveryKeyPackage models.RecoveryKeyPackage) []any {
 	return []any{
 		recoveryKeyPackage.AccountID,
@@ -2120,15 +2136,7 @@ func upsertRecoveryKeyPackage(
 ) (models.RecoveryKeyPackage, error) {
 	_, err := execer.ExecContext(
 		ctx,
-		insertRecoveryKeyPackageSQL+`ON CONFLICT(account_id) DO UPDATE SET
-  algorithm = excluded.algorithm,
-  kdf = excluded.kdf,
-  mnemonic_word_count = excluded.mnemonic_word_count,
-  wrap_nonce_hex = excluded.wrap_nonce_hex,
-  wrapped_master_key_hex = excluded.wrapped_master_key_hex,
-  phrase_fingerprint_hex = excluded.phrase_fingerprint_hex,
-  updated_at = excluded.updated_at
-`,
+		insertRecoveryKeyPackageSQL+upsertRecoveryKeyPackageSQL,
 		recoveryKeyPackageArgs(recoveryKeyPackage)...,
 	)
 	if err != nil {
