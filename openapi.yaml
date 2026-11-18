@@ -16,6 +16,12 @@ info:
     and the service-layer result types they return. It intentionally omits
     ciphertext content shapes beyond "opaque base64/hex string" to respect the
     zero-knowledge contract.
+
+    Every route, any method: a request whose `Origin` header is not in
+    `ALLOWED_ORIGINS` answers `403 origin_not_allowed` (no CORS headers) before
+    any rate limiter is charged — the `OriginNotAllowed` response, not repeated
+    per operation. A request without an `Origin` header (native clients,
+    server-to-server callers, probes) is not affected.
   license:
     name: PolyForm Noncommercial 1.0.0
     url: https://polyformproject.org/licenses/noncommercial/1.0.0/
@@ -1722,6 +1728,15 @@ components:
           examples:
             unsupportedMediaType:
               value: { error: unsupported_media_type }
+    OriginNotAllowed:
+      description: The request carries an `Origin` header that is not in `ALLOWED_ORIGINS`. Answered on every route and method before any rate limiter, so the refused request spends no bucket; no CORS headers are set.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            originNotAllowed:
+              value: { error: origin_not_allowed }
 
   schemas:
     ErrorResponse:

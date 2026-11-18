@@ -101,11 +101,12 @@ running older process turns `503 not_ready` on `/readyz`.
 before the upgrade together with the older image. See "Upgrading And Rolling Back" in
 [self-hosting.md](self-hosting.md) and [upgrading.md](upgrading.md).
 
-## Browser or web client preflight rejected: `403 origin_not_allowed`
+## Browser or web client rejected: `403 origin_not_allowed`
 
-**Cause.** A request with an `Origin` header that is not in `ALLOWED_ORIGINS` and uses the
-`OPTIONS` method is refused. Without `ALLOWED_ORIGINS` no origin is allowed. Native apps do not
-send `Origin` and are not affected.
+**Cause.** Any request (preflight or not) with an `Origin` header that is not in
+`ALLOWED_ORIGINS` is refused. Without `ALLOWED_ORIGINS` no origin is allowed — including a web
+client served from the server's own origin, since browsers send `Origin` on same-origin `POST`,
+`PUT` and `DELETE` too. Native apps do not send `Origin` and are not affected.
 
 **Fix.** Add the exact origin (scheme, host, port, no trailing slash) to the comma-separated
 `ALLOWED_ORIGINS` and restart. Allowed origins get `Access-Control-Allow-Headers:

@@ -59,7 +59,7 @@ is the only place the layers are wired together.
   `MANAGED_BRIDGE_TOKEN` is set and otherwise require that bearer token, compared in constant time
   (`withManagedBridge`). They carry only an account id and, for the lapse signal, a boolean.
 - **Browser origins.** CORS is an explicit allowlist (`ALLOWED_ORIGINS`); an unlisted origin gets no
-  CORS headers and a `403 origin_not_allowed` on preflight.
+  CORS headers and a `403 origin_not_allowed` on every request, ahead of the rate limiters.
 
 ## Request lifecycle
 
