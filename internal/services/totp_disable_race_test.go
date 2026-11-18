@@ -17,14 +17,17 @@ import (
 // as the race left it — TOTP, secret, session and pending challenge — and the
 // error names what moved (a moved secret already loses the step claim, which
 // is bound to the verified secret); a login rehash, which moves only the hash,
-// must still let the disable through.
+// must still let the disable through. Only the re-enrolled race keeps its
+// step-up slot spent: losing to a concurrent disable is a state refusal (409),
+// and the others pass the code check, whose success clears the budget.
 func TestDisableRacingAStateChange(t *testing.T) {
 	const password = "correct horse battery staple"
 	ctx := context.Background()
 	cases := []struct {
 		name string
 		race func(t *testing.T, store *db.Store, account models.Account)
-		want error
+		want    error
+		charged bool
 	}{
 		{
 			name: "password changed",
@@ -55,7 +58,8 @@ func TestDisableRacingAStateChange(t *testing.T) {
 					t.Fatalf("concurrent re-enroll: %v", err)
 				}
 			},
-			want: ErrTOTPReplayed,
+			want:    ErrTOTPReplayed,
+			charged: true,
 		},
 		{
 			name: "login rehash",
@@ -113,6 +117,18 @@ func TestDisableRacingAStateChange(t *testing.T) {
 			}
 			_, sessionErr := auth.Authenticate(ctx, token)
 			_, challengeErr := auth.store.FindTOTPChallengeByHash(ctx, "pending-challenge")
+
+			stepUp := totp.budget(ctx, totpPurposeStepUp, accountID)
+			totp.attempts.mu.Lock()
+			clientSpent, accountSpent := totp.attempts.entries[stepUp.client].count, totp.attempts.entries[stepUp.account].count
+			totp.attempts.mu.Unlock()
+			want := 0
+			if tc.charged {
+				want = 1
+			}
+			if clientSpent != want || accountSpent != want {
+				t.Fatalf("step-up slots spent: client %d, account %d, want %d each", clientSpent, accountSpent, want)
+			}
 
 			if tc.want == nil {
 				if account.TOTPEnabled || account.TOTPSecretEncrypted != "" {
