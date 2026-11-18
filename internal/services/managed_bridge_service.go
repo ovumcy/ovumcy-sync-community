@@ -35,7 +35,20 @@ var ErrManagedAccountNotFound = errors.New("managed_account_not_found")
 // far-future as-of would otherwise mark every later lapse stale.
 const maxEntitlementSignalSkew = 5 * time.Minute
 
-var managedAccountIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{7,127}$`)
+// managedAccountIDPattern is matched on the raw id, before lowercasing:
+// strings.ToLower folds some non-ASCII runes into ASCII (U+212A KELVIN SIGN
+// to k), and a (?i) flag would accept that rune too.
+var managedAccountIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$`)
+
+// normalizeManagedAccountID trims the bridge's account id, refuses one outside
+// the ASCII pattern (ErrInvalidManagedAccount) and lowercases the rest.
+func normalizeManagedAccountID(raw string) (string, error) {
+	accountID := strings.TrimSpace(raw)
+	if !managedAccountIDPattern.MatchString(accountID) {
+		return "", ErrInvalidManagedAccount
+	}
+	return strings.ToLower(accountID), nil
+}
 
 type ManagedBridgeService struct {
 	store *db.Store
@@ -55,9 +68,9 @@ func (s *ManagedBridgeService) CreateManagedSession(
 	ctx context.Context,
 	accountID string,
 ) (AuthResult, error) {
-	accountID = strings.TrimSpace(strings.ToLower(accountID))
-	if !managedAccountIDPattern.MatchString(accountID) {
-		return AuthResult{}, ErrInvalidManagedAccount
+	accountID, err := normalizeManagedAccountID(accountID)
+	if err != nil {
+		return AuthResult{}, err
 	}
 
 	existingAccount, err := s.store.FindAccountByID(ctx, accountID)
@@ -113,9 +126,9 @@ func (s *ManagedBridgeService) PurgeManagedAccount(
 	ctx context.Context,
 	accountID string,
 ) error {
-	accountID = strings.TrimSpace(strings.ToLower(accountID))
-	if !managedAccountIDPattern.MatchString(accountID) {
-		return ErrInvalidManagedAccount
+	accountID, err := normalizeManagedAccountID(accountID)
+	if err != nil {
+		return err
 	}
 
 	account, err := s.store.FindAccountByID(ctx, accountID)
@@ -158,9 +171,9 @@ func (s *ManagedBridgeService) RevokeManagedAccountSessions(
 	ctx context.Context,
 	accountID string,
 ) error {
-	accountID = strings.TrimSpace(strings.ToLower(accountID))
-	if !managedAccountIDPattern.MatchString(accountID) {
-		return ErrInvalidManagedAccount
+	accountID, err := normalizeManagedAccountID(accountID)
+	if err != nil {
+		return err
 	}
 
 	return s.store.DeleteManagedAccountSessions(ctx, accountID)
@@ -237,9 +250,9 @@ func (s *ManagedBridgeService) SetAccountLapseSignal(
 	active bool,
 	asOf time.Time,
 ) error {
-	accountID = strings.TrimSpace(strings.ToLower(accountID))
-	if !managedAccountIDPattern.MatchString(accountID) {
-		return ErrInvalidManagedAccount
+	accountID, err := normalizeManagedAccountID(accountID)
+	if err != nil {
+		return err
 	}
 
 	now := s.now().UTC()

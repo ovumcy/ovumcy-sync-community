@@ -307,6 +307,7 @@ on the account's next successful login.
 | Claim | Enforced by |
 | --- | --- |
 | `POST /managed/session` is disabled unless `MANAGED_BRIDGE_TOKEN` is configured; requests without the bearer are refused | `TestServerRejectsManagedBridgeWhenDisabled` in [internal/api/server_test.go](internal/api/server_test.go) |
+| Every bridge route checks the trimmed account id against the ASCII pattern before lowercasing it, so an id that only `strings.ToLower` makes ASCII (U+212A KELVIN SIGN → `k`) answers 400 `invalid_managed_account` and never reaches the account it folds into; an upper-case ASCII id still names its lowercase account | `TestBridgeRoutesRefuseAnIDThatOnlyLowercasingMakesASCII` in [internal/api/managed_account_id_fold_test.go](internal/api/managed_account_id_fold_test.go) |
 | A set `MANAGED_BRIDGE_TOKEN` shorter than 32 bytes (after trimming) is a startup error | `TestLoadSurfacesEveryValidationAndParseError` in [internal/config/load_test.go](internal/config/load_test.go) |
 | A valid bridge token issues a managed session that authenticates against `/sync/capabilities` | `TestServerIssuesManagedBridgeSession` in [internal/api/server_test.go](internal/api/server_test.go) |
 | The bridge rejects too-short account IDs | `TestManagedBridgeRejectsInvalidAccountID` in [internal/services/managed_bridge_service_test.go](internal/services/managed_bridge_service_test.go) |
