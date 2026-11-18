@@ -1314,6 +1314,8 @@ paths:
                   value: { error: invalid_managed_account }
                 invalidRecoveryPackage:
                   value: { error: invalid_recovery_package }
+                invalidJSON:
+                  value: { error: invalid_json }
         "401":
           description: Missing/invalid MANAGED_BRIDGE_TOKEN bearer credential.
           content:
@@ -1853,7 +1855,7 @@ components:
       properties:
         status:
           type: string
-          description: 'Short status key, e.g. "ok", "totp_disabled", "revoked", "account_deleted", "account_purged".'
+          description: 'Short status key, e.g. "ok", "totp_disabled", "revoked", "account_deleted", "account_purged", "recovery_key_replaced".'
       required: [status]
       additionalProperties: false
 
