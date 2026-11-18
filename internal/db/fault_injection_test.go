@@ -60,6 +60,10 @@ func dropAccountsLapsedAtColumn(t *testing.T, dbPath string) {
 	if _, err := raw.Exec(`PRAGMA busy_timeout = 5000;`); err != nil {
 		t.Fatalf("configure raw sqlite: %v", err)
 	}
+	// SQLite refuses to drop a column an index still names (migration 0013).
+	if _, err := raw.Exec(`DROP INDEX IF EXISTS idx_accounts_lapsed_julianday`); err != nil {
+		t.Fatalf("drop lapsed index: %v", err)
+	}
 	if _, err := raw.Exec(`ALTER TABLE accounts DROP COLUMN lapsed_at`); err != nil {
 		t.Fatalf("drop accounts.lapsed_at column: %v", err)
 	}

@@ -744,6 +744,15 @@ func (s *Store) GetAccountLapsedAt(ctx context.Context, accountID string) (*time
 	return &parsed, nil
 }
 
+// listLapsedManagedAccountsSQL filters and orders by exactly the migration
+// 0013 index key, (julianday(lapsed_at), id), and repeats its partial
+// predicate lapsed_at IS NOT NULL; changing one side without the other turns
+// every page back into a full scan and sort.
+const listLapsedManagedAccountsSQL = `SELECT id, lapsed_at FROM accounts
+		WHERE mode = 'managed' AND lapsed_at IS NOT NULL AND julianday(lapsed_at) < julianday(?1)
+		  AND (?2 = '' OR julianday(lapsed_at) > julianday(?2) OR (julianday(lapsed_at) = julianday(?2) AND id > ?3))
+		ORDER BY julianday(lapsed_at), id LIMIT ?4`
+
 // LapsedCandidate is one row ListLapsedManagedAccountIDs returns. LapsedAt is
 // the stored lapsed_at text, kept only so the candidate can be passed back as
 // the next page's keyset cursor; callers never parse it.
@@ -770,10 +779,7 @@ func (s *Store) ListLapsedManagedAccountIDs(ctx context.Context, cutoff time.Tim
 
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, lapsed_at FROM accounts
-		WHERE mode = 'managed' AND lapsed_at IS NOT NULL AND julianday(lapsed_at) < julianday(?1)
-		  AND (?2 = '' OR julianday(lapsed_at) > julianday(?2) OR (julianday(lapsed_at) = julianday(?2) AND id > ?3))
-		ORDER BY julianday(lapsed_at), id LIMIT ?4`,
+		listLapsedManagedAccountsSQL,
 		cutoff.UTC().Format(time.RFC3339Nano),
 		after.LapsedAt,
 		after.ID,
