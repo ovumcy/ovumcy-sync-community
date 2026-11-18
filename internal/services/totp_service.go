@@ -388,12 +388,12 @@ func (s *TOTPService) Disable(
 		return ErrInvalidCurrentPassword
 	}
 
-	if refund, err := s.verifyAccountCodeRefundable(ctx, account, code); err != nil {
+	if reservation, err := s.verifyAccountCodeReserved(ctx, account, code); err != nil {
 		// The claim is bound to the verified secret, so a concurrent disable
 		// that committed first surfaces here as a replay. That is a state
 		// refusal like the not-enabled check above, so it spends no slot.
 		if errors.Is(err, ErrTOTPReplayed) && s.totpNoLongerEnabled(ctx, accountID) {
-			refund()
+			s.attempts.refund(reservation)
 			return ErrTOTPNotEnabled
 		}
 		return err
@@ -479,20 +479,19 @@ func (s *TOTPService) VerifyAccountCode(ctx context.Context, account models.Acco
 }
 
 func (s *TOTPService) verifyAccountCode(ctx context.Context, account models.Account, code string) error {
-	_, err := s.verifyAccountCodeRefundable(ctx, account, code)
+	_, err := s.verifyAccountCodeReserved(ctx, account, code)
 	return err
 }
 
-// verifyAccountCodeRefundable is verifyAccountCode that, on ErrTOTPReplayed,
-// also returns the refund of the slot the verified code drew, for a caller
-// that turns the lost claim into a state refusal. On any other outcome the
-// refund is a no-op.
-func (s *TOTPService) verifyAccountCodeRefundable(ctx context.Context, account models.Account, code string) (func(), error) {
-	noRefund := func() {}
+// verifyAccountCodeReserved is verifyAccountCode that, on ErrTOTPReplayed,
+// also returns the slot the verified code drew, for a caller that turns the
+// lost claim into a state refusal and refunds it. On any other outcome the
+// reservation is the zero value, whose refund is a no-op.
+func (s *TOTPService) verifyAccountCodeReserved(ctx context.Context, account models.Account, code string) (totpReservation, error) {
 	// An absent code is a client that does not know the step-up exists, not
 	// a guess: refuse it without spending a slot of the owner's window.
 	if code == "" {
-		return noRefund, ErrTOTPInvalidCode
+		return totpReservation{}, ErrTOTPInvalidCode
 	}
 
 	rawSecret, err := security.DecryptField(
@@ -501,30 +500,30 @@ func (s *TOTPService) verifyAccountCodeRefundable(ctx context.Context, account m
 		aadForTOTPSecret(account.ID),
 	)
 	if err != nil {
-		return noRefund, fmt.Errorf("%w: %v", ErrTOTPSecretDecrypt, err)
+		return totpReservation{}, fmt.Errorf("%w: %v", ErrTOTPSecretDecrypt, err)
 	}
 
 	now := s.now().UTC()
 	budget := s.budget(ctx, totpPurposeStepUp, account.ID)
 	reservation, err := budget.reserve(now)
 	if err != nil {
-		return noRefund, err
+		return totpReservation{}, err
 	}
 
 	step, ok := security.VerifyTOTPCode([]byte(rawSecret), code, now.Unix())
 	if !ok {
-		return noRefund, ErrTOTPInvalidCode
+		return totpReservation{}, ErrTOTPInvalidCode
 	}
 
 	claimed, err := s.store.ClaimTOTPStep(ctx, account.ID, account.TOTPSecretEncrypted, step)
 	if err != nil {
-		return noRefund, err // codecov:ignore -- the caller's FindAccountByID already touched "accounts" in this same call, so isolating a later accounts-table failure here needs a fake driver.
+		return totpReservation{}, err // codecov:ignore -- the caller's FindAccountByID already touched "accounts" in this same call, so isolating a later accounts-table failure here needs a fake driver.
 	}
 	if !claimed {
-		return func() { budget.limiter.refund(reservation) }, ErrTOTPReplayed
+		return reservation, ErrTOTPReplayed
 	}
 	budget.succeedInSession()
-	return noRefund, nil
+	return totpReservation{}, nil
 }
 
 // IssueChallengeForVerifiedPassword mints a short-lived TOTP login challenge
