@@ -263,6 +263,8 @@ Operational notes:
 - It should not be exposed as an end-user login flow.
 - If you do not run a managed-auth service, leave `MANAGED_BRIDGE_TOKEN` unset.
 
+The same service calls `POST /managed/accounts/{account_id}/sessions/revoke` (no request body, same bearer token) when a managed account logs out, changes its password, or has its sessions revoked by an operator. It deletes every sync session of that managed account, so a session minted earlier stops working at once instead of running out its `SESSION_TTL`; the account's devices, encrypted blob and recovery-key package stay, and the next `POST /managed/session` issues a new session. It answers `200 {"status":"sessions_revoked"}` whether or not the account exists or has any session, and it never touches a self-hosted account — one whose id matches gets the same answer and keeps its sessions — so it is safe to repeat. Retrying a call that failed is the managed service's job.
+
 ## Entitlement-Lapse Cleanup
 
 This section only applies if you run the managed bridge (`MANAGED_BRIDGE_TOKEN` set). Plain self-hosted/community accounts are entirely unaffected — they can never carry the lapse marker described below.
