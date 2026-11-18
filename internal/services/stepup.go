@@ -39,35 +39,50 @@ func verifyStepUpCode(ctx context.Context, verifier TOTPCodeVerifier, account mo
 	return verifier.VerifyAccountCode(ctx, account, code)
 }
 
+// ErrManagedStepUp: a managed account has no password, so no step-up can
+// pass for it. A write a managed session may make handles that account before
+// asking for a step-up.
+var ErrManagedStepUp = errors.New("managed_account_step_up")
+
 // verifyStepUp re-checks the session owner's password and returns the account
 // as read, whose PasswordHash the write must then hold to in its own
 // transaction. A wrong password returns the same ErrInvalidCurrentPassword as
-// every other step-up, after a full bcrypt compare. Managed accounts have no
-// password, so they pass: a caller must refuse a managed account's
-// destructive write itself (DELETE /account at the transport, the
-// recovery-key overwrite in PutRecoveryKeyPackage).
+// every other step-up, after a full bcrypt compare; a managed account returns
+// ErrManagedStepUp.
 func verifyStepUp(
 	ctx context.Context,
 	store *db.Store,
 	accountID string,
 	currentPassword string,
 ) (models.Account, error) {
-	account, err := store.FindAccountByID(ctx, accountID)
+	account, err := findStepUpAccount(ctx, store, accountID)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			return models.Account{}, ErrUnauthorized
-		}
 		return models.Account{}, err
 	}
-
-	if account.Mode == "managed" {
-		return account, nil
-	}
-
-	if err := security.ComparePasswordHash(account.PasswordHash, currentPassword); err != nil {
-		return models.Account{}, ErrInvalidCurrentPassword
+	if err := checkStepUpPassword(account, currentPassword); err != nil {
+		return models.Account{}, err
 	}
 	return account, nil
+}
+
+// findStepUpAccount reads the session owner's account; an account gone since
+// the session was authenticated is no longer an authenticated caller.
+func findStepUpAccount(ctx context.Context, store *db.Store, accountID string) (models.Account, error) {
+	account, err := store.FindAccountByID(ctx, accountID)
+	if errors.Is(err, db.ErrNotFound) {
+		return models.Account{}, ErrUnauthorized
+	}
+	return account, err
+}
+
+func checkStepUpPassword(account models.Account, currentPassword string) error {
+	if account.Mode == "managed" {
+		return ErrManagedStepUp
+	}
+	if err := security.ComparePasswordHash(account.PasswordHash, currentPassword); err != nil {
+		return ErrInvalidCurrentPassword
+	}
+	return nil
 }
 
 // stepUpWriteError maps a step-up store write's refusal: a hash that moved
