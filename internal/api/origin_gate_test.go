@@ -72,3 +72,46 @@ func TestForeignOriginIsRefusedBeforeTheLimiters(t *testing.T) {
 		t.Fatalf("allowed preflight: status %d", recorder.Code)
 	}
 }
+
+// A cross-site no-cors GET carries no Origin. Its fetch metadata is refused
+// ahead of every limiter, so it cannot spend the victim's per-IP
+// session-lookup bucket; the monitoring routes stay reachable.
+func TestCrossSiteFetchWithoutOriginIsRefusedBeforeTheLimiters(t *testing.T) {
+	handler := newTestServerWithOptions(t, serverTestOptions{authRateLimitCount: 1})
+
+	serve := func(path, fetchSite string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		if fetchSite != "" {
+			request.Header.Set("Sec-Fetch-Site", fetchSite)
+		}
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		return recorder
+	}
+
+	// One more than the session-lookup bucket holds, from both refused sites.
+	for _, fetchSite := range []string{"cross-site", "Same-Site"} {
+		for range 31 {
+			recorder := serve("/auth/session", fetchSite)
+			if recorder.Code != http.StatusForbidden {
+				t.Fatalf("Sec-Fetch-Site %s: status %d, body=%s", fetchSite, recorder.Code, recorder.Body.String())
+			}
+			var payload map[string]string
+			decodeResponse(t, recorder.Body.Bytes(), &payload)
+			if payload["error"] != "origin_not_allowed" || recorder.Header().Get("Access-Control-Allow-Origin") != "" {
+				t.Fatalf("unexpected refusal: %#v %v", payload, recorder.Header())
+			}
+		}
+	}
+
+	for _, fetchSite := range []string{"", "same-origin", "none"} {
+		if recorder := serve("/auth/session", fetchSite); recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("Sec-Fetch-Site %q: expected the session lookup to answer 401, got %d", fetchSite, recorder.Code)
+		}
+	}
+	for _, path := range []string{"/healthz", "/readyz", "/metrics"} {
+		if recorder := serve(path, "cross-site"); recorder.Code == http.StatusForbidden {
+			t.Fatalf("%s from another site: refused, body=%s", path, recorder.Body.String())
+		}
+	}
+}

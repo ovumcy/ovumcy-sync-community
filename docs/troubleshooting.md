@@ -106,7 +106,10 @@ before the upgrade together with the older image. See "Upgrading And Rolling Bac
 **Cause.** Any request (preflight or not) with an `Origin` header that is not in
 `ALLOWED_ORIGINS` is refused. Without `ALLOWED_ORIGINS` no origin is allowed — including a web
 client served from the server's own origin, since browsers send `Origin` on same-origin `POST`,
-`PUT` and `DELETE` too. Native apps do not send `Origin` and are not affected.
+`PUT` and `DELETE` too. A request without `Origin` is refused too when the browser marks it
+`Sec-Fetch-Site: cross-site` or `same-site` — a link or tag on another site pointing at an API
+route; `/healthz`, `/readyz` and `/metrics` are exempt. Native apps send neither header and are
+not affected.
 
 **Fix.** Add the exact origin (scheme, host, port, no trailing slash) to the comma-separated
 `ALLOWED_ORIGINS` and restart. Allowed origins get `Access-Control-Allow-Headers:
