@@ -75,7 +75,8 @@ type Config struct {
 	// LapsedAccountSweepLimit, from LAPSED_ACCOUNT_SWEEP_LIMIT (default 0 =
 	// the store's own default page size), is the page size one in-process
 	// sweep run lists candidates in; the run pages until it has drained every
-	// eligible account.
+	// eligible account. serve raises a value below
+	// services.MinLapsedAccountSweepPage to it.
 	LapsedAccountSweepLimit int
 	// LapsedAccountSweepMaxDeletes, from LAPSED_ACCOUNT_SWEEP_MAX_DELETES
 	// (default 0 = unbounded), caps how many accounts one sweep run erases.

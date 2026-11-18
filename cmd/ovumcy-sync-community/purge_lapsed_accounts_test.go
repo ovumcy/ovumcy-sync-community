@@ -326,7 +326,8 @@ func TestRunPurgeLapsedAccountsDeletesEligibleAccountEndToEnd(t *testing.T) {
 }
 
 // TestRunPurgeLapsedAccountsLimitFlagIsTheBatchSize pins -limit as the page
-// size: with -limit=1 one run still erases both eligible accounts.
+// size: -limit=1 (raised to services.MinLapsedAccountSweepPage) still lets one
+// run erase both eligible accounts.
 func TestRunPurgeLapsedAccountsLimitFlagIsTheBatchSize(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "limit.sqlite")
 	seedLapsedManagedAccount(t, dbPath, "purgeclilimit0001", 90*24*time.Hour)

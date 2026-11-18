@@ -37,7 +37,8 @@ import (
 //	-dry-run     report what would be deleted without deleting anything
 //	-limit N     page size the run lists candidates in; the run still drains
 //	             every eligible account (0 or omitted =
-//	             db.DefaultLapsedAccountSweepLimit)
+//	             db.DefaultLapsedAccountSweepLimit; below
+//	             services.MinLapsedAccountSweepPage it is raised to that)
 //	-max-deletes N  stop after erasing N accounts (0 = unbounded; omitted =
 //	             LAPSED_ACCOUNT_SWEEP_MAX_DELETES); a capped run also prints
 //	             lapsed_account_sweep_capped=true
@@ -94,7 +95,7 @@ func runPurgeLapsedAccounts(cfg config.Config, args []string, w io.Writer) error
 
 	sweepService := services.NewLapsedAccountSweepService(store, cfg.LapsedAccountGracePeriod).
 		WithMaxDeletesPerRun(*maxDeletes)
-	result, runErr := sweepService.Run(ctx, *limit, *dryRun)
+	result, runErr := sweepService.Run(ctx, services.LapsedAccountSweepPageSize(*limit), *dryRun)
 
 	if _, err := fmt.Fprintf(
 		w,
