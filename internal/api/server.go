@@ -189,6 +189,12 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Access-Control-Allow-Origin", origin)
 		writer.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 		writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+	} else if isCrossSiteFetch(request) && !isOperatorProbePath(request.URL.Path) {
+		// A cross-site no-cors GET (an <img> or <script> tag) carries no
+		// Origin; its fetch metadata still names it, and it must not spend the
+		// victim's session-lookup bucket either.
+		writeError(writer, http.StatusForbidden, "origin_not_allowed")
+		return
 	}
 
 	if request.Method == http.MethodOptions {
@@ -207,6 +213,24 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	request = request.WithContext(services.WithClientKey(request.Context(), s.clientIPForRateLimit(request)))
 	serveWithPanicRecovery(writer, request, s.mux)
+}
+
+func isCrossSiteFetch(request *http.Request) bool {
+	switch strings.ToLower(strings.TrimSpace(request.Header.Get("Sec-Fetch-Site"))) {
+	case "cross-site", "same-site":
+		return true
+	}
+	return false
+}
+
+// isOperatorProbePath names the monitoring routes a status page or dashboard
+// on another site may legitimately fetch from a browser.
+func isOperatorProbePath(path string) bool {
+	switch path {
+	case "/healthz", "/readyz", "/metrics":
+		return true
+	}
+	return false
 }
 
 // requestHasBody reports a request that carries a body; one that carries none

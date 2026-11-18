@@ -20,8 +20,10 @@ info:
     Every route, any method: a request whose `Origin` header is not in
     `ALLOWED_ORIGINS` answers `403 origin_not_allowed` (no CORS headers) before
     any rate limiter is charged — the `OriginNotAllowed` response, not repeated
-    per operation. A request without an `Origin` header (native clients,
-    server-to-server callers, probes) is not affected.
+    per operation. So does a request without `Origin` whose `Sec-Fetch-Site` is
+    `cross-site` or `same-site`, except on `/healthz`, `/readyz` and `/metrics`.
+    A request without either header (native clients, server-to-server callers,
+    probes) is not affected.
   license:
     name: PolyForm Noncommercial 1.0.0
     url: https://polyformproject.org/licenses/noncommercial/1.0.0/
