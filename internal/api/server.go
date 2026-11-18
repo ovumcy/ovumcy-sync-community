@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/subtle"
@@ -195,7 +194,9 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	// without a CORS preflight, and it must not spend the victim's per-IP
 	// buckets. A JSON content type forces the preflight the origin allowlist
 	// refuses.
-	if requestHasBody(request) && !isJSONMediaType(request.Header.Get("Content-Type")) {
+	// The type is checked first so a JSON request is never peeked: the peek
+	// would wait on the client ahead of the limiters.
+	if !isJSONMediaType(request.Header.Get("Content-Type")) && requestHasBody(request) {
 		writeError(writer, http.StatusUnsupportedMediaType, "unsupported_media_type")
 		return
 	}
@@ -204,9 +205,9 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 }
 
 // requestHasBody reports a request that carries a body; one that carries none
-// may omit Content-Type. An unknown (chunked) length is peeked one byte, so a
-// zero-byte chunked body counts as no body. Peeking replaces request.Body; the
-// server still closes the original.
+// may omit Content-Type. An unknown (chunked) length is read one byte, so a
+// zero-byte chunked body counts as no body. That read consumes the byte: call
+// it only for a request that is refused when it returns true.
 func requestHasBody(request *http.Request) bool {
 	if request.ContentLength == 0 || request.Body == nil || request.Body == http.NoBody {
 		return false
@@ -214,16 +215,12 @@ func requestHasBody(request *http.Request) bool {
 	if request.ContentLength > 0 {
 		return true
 	}
-	peeked := bufio.NewReaderSize(request.Body, 16)
-	if _, err := peeked.Peek(1); errors.Is(err, io.EOF) {
+	var probe [1]byte
+	if _, err := io.ReadFull(request.Body, probe[:]); errors.Is(err, io.EOF) {
 		request.Body = http.NoBody
 		request.ContentLength = 0
 		return false
 	}
-	request.Body = struct {
-		io.Reader
-		io.Closer
-	}{peeked, request.Body}
 	return true
 }
 
