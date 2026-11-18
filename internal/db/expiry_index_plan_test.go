@@ -44,15 +44,7 @@ func TestExpiredRowsSweepUsesTheExpiryIndexes(t *testing.T) {
 		{"totp_challenges", "idx_totp_challenges_expires_julianday", deleteExpiredTOTPChallengesSQL},
 	} {
 		plan := queryPlan(t, store, tc.statement, now, DefaultExpiredRowsSweepLimit)
-		joined := strings.Join(plan, "\n")
-		if !strings.Contains(joined, tc.index) {
-			t.Fatalf("%s: expected the sweep to use %s, plan:\n%s", tc.table, tc.index, joined)
-		}
-		for _, line := range plan {
-			if line == "SCAN "+tc.table {
-				t.Fatalf("%s: expected no full scan, plan:\n%s", tc.table, joined)
-			}
-		}
+		assertExpirySweepSeeksIndex(t, tc.table, tc.index, plan)
 	}
 }
 
