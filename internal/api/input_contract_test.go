@@ -56,7 +56,43 @@ func TestEmptyBodyNeedsNoContentType(t *testing.T) {
 	}
 }
 
-// TestManagedBridgeBodiesNeedJSONContentType: the bridge routes sit behind the
+// TestChunkedBodyIsJudgedByItsBytes: an unknown length (chunked) with zero
+// bytes is no body and needs no content type; one with bytes still does, and
+// the peeked byte still reaches the handler.
+func TestChunkedBodyIsJudgedByItsBytes(t *testing.T) {
+	handler := newTestServer(t)
+	send := func(body string, contentType string) int {
+		request := httptest.NewRequest(http.MethodDelete, "/auth/session", strings.NewReader(body))
+		request.ContentLength = -1
+		request.RemoteAddr = "203.0.113.62:4000"
+		if contentType != "" {
+			request.Header.Set("Content-Type", contentType)
+		}
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		return recorder.Code
+	}
+
+	if got := send("", ""); got != http.StatusUnauthorized {
+		t.Fatalf("empty chunked logout: status %d, want 401", got)
+	}
+	if got := send("{}", ""); got != http.StatusUnsupportedMediaType {
+		t.Fatalf("chunked body without Content-Type: status %d, want 415", got)
+	}
+
+	login := httptest.NewRequest(http.MethodPost, "/auth/login",
+		strings.NewReader(`{"login":"nobody@example.com","password":"correct horse battery staple"}`))
+	login.ContentLength = -1
+	login.RemoteAddr = "203.0.113.62:4000"
+	login.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, login)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("chunked JSON login: status %d, want 401 (the whole body must decode)", recorder.Code)
+	}
+}
+
+// TestManagedBridgeBodiesNeedJSONContentType:the bridge routes sit behind the
 // same gate, so a non-JSON body never reaches the bridge-token check; a
 // bodiless purge is not asked for a content type.
 func TestManagedBridgeBodiesNeedJSONContentType(t *testing.T) {

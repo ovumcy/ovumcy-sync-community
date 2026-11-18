@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/subtle"
@@ -202,10 +203,28 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	serveWithPanicRecovery(writer, request, s.mux)
 }
 
-// requestHasBody reports a request that declares a body or an unknown
-// (chunked) length; one that declares none may omit Content-Type.
+// requestHasBody reports a request that carries a body; one that carries none
+// may omit Content-Type. An unknown (chunked) length is peeked one byte, so a
+// zero-byte chunked body counts as no body. Peeking replaces request.Body; the
+// server still closes the original.
 func requestHasBody(request *http.Request) bool {
-	return request.ContentLength != 0 && request.Body != nil && request.Body != http.NoBody
+	if request.ContentLength == 0 || request.Body == nil || request.Body == http.NoBody {
+		return false
+	}
+	if request.ContentLength > 0 {
+		return true
+	}
+	peeked := bufio.NewReaderSize(request.Body, 16)
+	if _, err := peeked.Peek(1); errors.Is(err, io.EOF) {
+		request.Body = http.NoBody
+		request.ContentLength = 0
+		return false
+	}
+	request.Body = struct {
+		io.Reader
+		io.Closer
+	}{peeked, request.Body}
+	return true
 }
 
 func isJSONMediaType(value string) bool {
