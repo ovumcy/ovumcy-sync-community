@@ -1169,10 +1169,14 @@ paths:
       summary: Revoke every sync session of a managed account
       description: |
         Machine-to-machine only: called by the separate trusted managed-auth
-        service when a managed account's own credentials change (logout,
-        password change) or an operator revokes its sessions, so a sync
+        service when a managed account's credentials change (password or
+        second-factor change) or an operator revokes its sessions, so a sync
         session minted earlier stops authenticating at once instead of living
-        out its `SESSION_TTL`. Requires the same `MANAGED_BRIDGE_TOKEN` bearer
+        out its `SESSION_TTL`. It revokes every session of the account, on
+        every device, so it is not a single-device logout. A session minted
+        by a `POST /managed/session` that commits after this call is not
+        revoked: ordering a mint against a revoke is the caller's side.
+        Requires the same `MANAGED_BRIDGE_TOKEN` bearer
         credential as `POST /managed/session`; the route is disabled (503)
         whenever that token is not configured on this server.
 
