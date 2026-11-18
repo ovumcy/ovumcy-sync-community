@@ -140,10 +140,10 @@ func TestLapsedAccountSweepServiceDeleteFailureStreakResets(t *testing.T) {
 	store := newScriptedSweepStore(12)
 	boom := errors.New("database is locked")
 	for i, candidate := range store.candidates {
-		switch {
-		case i%5 == 4:
+		switch i % 5 {
+		case 4:
 			// every fifth candidate succeeds (no outcome entry)
-		case i%5 == 3:
+		case 3:
 			store.outcomes[candidate.ID] = db.ErrNotFound
 		default:
 			store.outcomes[candidate.ID] = boom
