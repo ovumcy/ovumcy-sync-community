@@ -225,8 +225,8 @@ func isCrossSiteFetch(request *http.Request) bool {
 	return false
 }
 
-// isOperatorProbePath names the monitoring routes a status page or dashboard
-// on another site may legitimately fetch from a browser.
+// isOperatorProbePath names the monitoring routes an operator may open from a
+// link or embed in a status page on another site.
 func isOperatorProbePath(path string) bool {
 	switch path {
 	case "/healthz", "/readyz", "/metrics":
