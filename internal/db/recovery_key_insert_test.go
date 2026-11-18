@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestInsertRecoveryKeyPackageForSessionNeverReplaces(t *testing.T) {
@@ -32,6 +33,12 @@ func TestInsertRecoveryKeyPackageForSessionNeverReplaces(t *testing.T) {
 	if _, err := store.InsertRecoveryKeyPackageForSession(ctx, first, "caller"); err != nil {
 		t.Fatalf("first insert: %v", err)
 	}
+	again := stepUpTestPackage("account-target")
+	again.UpdatedAt = first.UpdatedAt.Add(time.Hour)
+	if got, err := store.InsertRecoveryKeyPackageForSession(ctx, again, "caller"); err != nil || !got.UpdatedAt.Equal(first.UpdatedAt) {
+		t.Fatalf("identical insert: expected the stored row unwritten, got %#v / %v", got, err)
+	}
+
 	second := stepUpTestPackage("account-target")
 	second.PhraseFingerprintHex = strings.Repeat("d", 16)
 	if _, err := store.InsertRecoveryKeyPackageForSession(ctx, second, "caller"); !errors.Is(err, ErrConflict) {

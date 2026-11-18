@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/ovumcy/ovumcy-sync-community/internal/models"
 )
@@ -148,7 +147,8 @@ func (s *Store) UpsertRecoveryKeyPackageForSession(
 // session-authenticated caller that has no password to re-check (a managed
 // account): it writes only while the caller's session exists
 // (requireLiveSession) and never replaces a stored package — one already
-// there, a concurrent first put's included, answers ErrConflict.
+// there, a concurrent first put's included, answers ErrConflict unless its
+// content equals this one, which returns the stored row unwritten.
 func (s *Store) InsertRecoveryKeyPackageForSession(
 	ctx context.Context,
 	recoveryKeyPackage models.RecoveryKeyPackage,
@@ -167,20 +167,8 @@ func (s *Store) InsertRecoveryKeyPackageForSession(
 	}
 	result, err := tx.ExecContext(
 		ctx,
-		`INSERT INTO recovery_key_packages (
-		   account_id, algorithm, kdf, mnemonic_word_count,
-		   wrap_nonce_hex, wrapped_master_key_hex, phrase_fingerprint_hex, updated_at
-		 )
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(account_id) DO NOTHING`,
-		recoveryKeyPackage.AccountID,
-		recoveryKeyPackage.Algorithm,
-		recoveryKeyPackage.KDF,
-		recoveryKeyPackage.MnemonicWordCount,
-		recoveryKeyPackage.WrapNonceHex,
-		recoveryKeyPackage.WrappedMasterKeyHex,
-		recoveryKeyPackage.PhraseFingerprintHex,
-		recoveryKeyPackage.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		insertRecoveryKeyPackageSQL+`ON CONFLICT(account_id) DO NOTHING`,
+		recoveryKeyPackageArgs(recoveryKeyPackage)...,
 	)
 	if err != nil {
 		return models.RecoveryKeyPackage{}, fmt.Errorf("insert recovery key package: %w", err)
@@ -190,7 +178,16 @@ func (s *Store) InsertRecoveryKeyPackageForSession(
 		return models.RecoveryKeyPackage{}, fmt.Errorf("insert recovery key package rows: %w", err) // codecov:ignore -- the SQLite driver reports RowsAffected from the completed exec and does not fail here.
 	}
 	if inserted == 0 {
-		return models.RecoveryKeyPackage{}, ErrConflict
+		stored, err := scanRecoveryKeyPackage(tx.QueryRowContext(ctx, selectRecoveryKeyPackageSQL, recoveryKeyPackage.AccountID))
+		if err != nil {
+			return models.RecoveryKeyPackage{}, err // codecov:ignore -- the conflicting row was just seen inside this transaction on the store's single connection; only a driver fault fails this read.
+		}
+		content := stored
+		content.UpdatedAt = recoveryKeyPackage.UpdatedAt
+		if content != recoveryKeyPackage {
+			return models.RecoveryKeyPackage{}, ErrConflict
+		}
+		return stored, nil
 	}
 
 	if err := tx.Commit(); err != nil {
