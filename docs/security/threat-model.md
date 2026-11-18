@@ -129,8 +129,10 @@ the strength of the phrase and the client KDF, which are client concerns and out
   (`withManagedBridge`, `internal/api/server.go`). The service never issues or verifies entitlement
   tokens; it records the flag the bridge sends. Lapse timestamps are preserved on replay so repeated
   signals cannot extend the grace period (`internal/services/managed_bridge_service.go`).
-- Residual: whoever holds the bridge token can set the premium flag, trigger lapse and purge managed
-  accounts. Treat it as a high-value secret, restrict the bridge network path, and rotate by
+- Residual: whoever holds the bridge token can set the premium flag, trigger lapse, revoke the
+  sessions of, re-key the recovery-key package of, and purge managed accounts. A re-key silently
+  replaces the owner's phrase-recovery path without erasing data; the bridge never reaches a
+  self-hosted account. Treat it as a high-value secret, restrict the bridge network path, and rotate by
   restarting with a new value.
 
 ### Metrics endpoint exposure

@@ -55,15 +55,19 @@ func TestServerManagedRecoveryKeyRejectsMissingOrWrongBridgeToken(t *testing.T) 
 
 // TestServerManagedRecoveryKeyReplacesThePackage: the bridge replaces a
 // managed account's stored package — the overwrite its session is refused —
-// and leaves the session, devices and blob in place; a repeat is safe.
+// and leaves the session, devices and blob in place; a repeat is safe. The
+// session route then treats the new package as the stored one: re-putting it
+// is the no-op 200, and the old package is an overwrite again.
 func TestServerManagedRecoveryKeyReplacesThePackage(t *testing.T) {
 	handler := newTestServer(t)
 	sessionToken := provisionManagedAccountWithData(t, handler, "managedacct1234")
+	devicesBefore := performJSONRequest(t, handler, http.MethodGet, "/sync/devices", nil, sessionToken, http.StatusOK).Body.String()
+	blobBefore := performJSONRequest(t, handler, http.MethodGet, "/sync/blob", nil, sessionToken, http.StatusOK).Body.String()
 	rekey := recoveryKeyBody(strings.Repeat("d", 16), nil)
 
 	performJSONRequest(t, handler, http.MethodPut, "/sync/recovery-key", rekey, sessionToken, http.StatusForbidden)
 
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := range 2 {
 		response := performJSONRequest(t, handler, http.MethodPut, managedRecoveryKeyPath("ManagedAcct1234"),
 			rekey, "test-managed-bridge-token", http.StatusOK)
 		if body := strings.TrimSpace(response.Body.String()); body != `{"status":"recovery_key_replaced"}` {
@@ -74,8 +78,16 @@ func TestServerManagedRecoveryKeyReplacesThePackage(t *testing.T) {
 	if got := storedRecoveryFingerprint(t, handler, sessionToken); got != strings.Repeat("d", 16) {
 		t.Fatalf("expected the re-keyed fingerprint, got %q", got)
 	}
-	performJSONRequest(t, handler, http.MethodGet, "/sync/devices", nil, sessionToken, http.StatusOK)
-	performJSONRequest(t, handler, http.MethodGet, "/sync/blob", nil, sessionToken, http.StatusOK)
+	if got := performJSONRequest(t, handler, http.MethodGet, "/sync/devices", nil, sessionToken, http.StatusOK).Body.String(); got != devicesBefore {
+		t.Fatalf("expected devices untouched by the re-key, before %s after %s", devicesBefore, got)
+	}
+	if got := performJSONRequest(t, handler, http.MethodGet, "/sync/blob", nil, sessionToken, http.StatusOK).Body.String(); got != blobBefore {
+		t.Fatal("expected the blob untouched by the re-key")
+	}
+
+	performJSONRequest(t, handler, http.MethodPut, "/sync/recovery-key", rekey, sessionToken, http.StatusOK)
+	performJSONRequest(t, handler, http.MethodPut, "/sync/recovery-key",
+		recoveryKeyBody(strings.Repeat("c", 16), nil), sessionToken, http.StatusForbidden)
 }
 
 // TestServerManagedRecoveryKeyValidatesLikeTheSessionRoute: a package the

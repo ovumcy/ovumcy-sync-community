@@ -55,9 +55,11 @@ is the only place the layers are wired together.
   them (`internal/db/sqlite.go`). Session and reset tokens, recovery codes and
   passwords are stored hashed; TOTP secrets are AES-256-GCM encrypted under `FIELD_ENCRYPTION_KEY`.
   Blobs are stored as received.
-- **Managed bridge.** Three machine-to-machine routes under `/managed/` are disabled (503) unless
+- **Managed bridge.** Five machine-to-machine routes under `/managed/` are disabled (503) unless
   `MANAGED_BRIDGE_TOKEN` is set and otherwise require that bearer token, compared in constant time
-  (`withManagedBridge`). They carry only an account id and, for the lapse signal, a boolean.
+  (`withManagedBridge`). They carry an account id and, for the lapse signal, a boolean and its as-of;
+  the recovery-key re-key also carries a client-wrapped recovery-key package, ciphertext the server
+  only format-checks.
 - **Browser origins.** CORS is an explicit allowlist (`ALLOWED_ORIGINS`); an unlisted origin gets no
   CORS headers and a `403 origin_not_allowed` on every request, ahead of the rate limiters.
 

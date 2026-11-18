@@ -77,4 +77,13 @@ func TestReplaceManagedRecoveryKeyPackageStoreFailures(t *testing.T) {
 	if err := store.ReplaceManagedRecoveryKeyPackage(ctx, testRecoveryKeyPackage("managed-account", strings.Repeat("d", 16))); err == nil || errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected the upsert error to surface, got %v", err)
 	}
+
+	// No accounts table: the managed-account lookup itself fails, which must
+	// surface as a store error, never as the not-found answer.
+	empty, emptyPath := newFileBackedTestStore(t)
+	dropTable(t, emptyPath, "accounts")
+	err := empty.ReplaceManagedRecoveryKeyPackage(ctx, testRecoveryKeyPackage("managed-account", strings.Repeat("d", 16)))
+	if err == nil || errors.Is(err, ErrNotFound) || !strings.Contains(err.Error(), "find managed account") {
+		t.Fatalf("expected the lookup error to surface, got %v", err)
+	}
 }
