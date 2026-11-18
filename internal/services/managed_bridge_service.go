@@ -26,6 +26,10 @@ var ErrInvalidEntitlementSignal = errors.New("invalid_entitlement_signal")
 // applied to the account, so this one changed nothing.
 var ErrStaleEntitlementSignal = errors.New("stale_entitlement_signal")
 
+// ErrManagedAccountNotFound: a bridge re-key names no managed account here —
+// none at all, or a self-hosted one, answered alike.
+var ErrManagedAccountNotFound = errors.New("managed_account_not_found")
+
 // maxEntitlementSignalSkew bounds how far a signal's as-of may run ahead of
 // this server's clock: the stored ordering point only moves forward, so one
 // far-future as-of would otherwise mark every later lapse stale.
@@ -160,6 +164,42 @@ func (s *ManagedBridgeService) RevokeManagedAccountSessions(
 	}
 
 	return s.store.DeleteManagedAccountSessions(ctx, accountID)
+}
+
+// ReplaceManagedRecoveryKeyPackage implements the bridge re-key
+// (PUT /managed/accounts/{account_id}/recovery-key): it stores a new wrapped
+// recovery-key package for a managed account, replacing the stored one. A
+// managed session can only store a first package, since a managed account has
+// no password to step up with; ovumcy-managed calls this after its own
+// re-authentication of the owner. The package passes the same validation as
+// the session route; sessions, devices, the blob and lapse state are left as
+// they are.
+//
+// The id gets the same normalization and pattern gate as PurgeManagedAccount.
+// An unknown account and a self-hosted one whose id matches both answer
+// ErrManagedAccountNotFound and write nothing: the bridge never writes to a
+// self-hosted account, and the answer does not tell the two apart.
+func (s *ManagedBridgeService) ReplaceManagedRecoveryKeyPackage(
+	ctx context.Context,
+	accountID string,
+	input PutRecoveryKeyPackageInput,
+) error {
+	accountID = strings.TrimSpace(strings.ToLower(accountID))
+	if !managedAccountIDPattern.MatchString(accountID) {
+		return ErrInvalidManagedAccount
+	}
+
+	recoveryKeyPackage := normalizeRecoveryKeyPackage(accountID, input)
+	if err := validateRecoveryKeyPackage(recoveryKeyPackage); err != nil {
+		return err
+	}
+	recoveryKeyPackage.UpdatedAt = s.now().UTC()
+
+	err := s.store.ReplaceManagedRecoveryKeyPackage(ctx, recoveryKeyPackage)
+	if errors.Is(err, db.ErrNotFound) {
+		return ErrManagedAccountNotFound
+	}
+	return err
 }
 
 // SetAccountLapseSignal implements the sync-plane half of the

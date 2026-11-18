@@ -1700,6 +1700,42 @@ func (s *Store) DeleteManagedAccountSessions(ctx context.Context, accountID stri
 	return nil
 }
 
+// ReplaceManagedRecoveryKeyPackage stores recoveryKeyPackage for the bridge
+// re-key, replacing any stored package, only while its account exists with
+// mode='managed' — checked in the write's own transaction, so a concurrent
+// purge either runs first (ErrNotFound) or erases the new package with the
+// account. An absent account and a self-hosted one both answer ErrNotFound and
+// write nothing.
+func (s *Store) ReplaceManagedRecoveryKeyPackage(ctx context.Context, recoveryKeyPackage models.RecoveryKeyPackage) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin replace managed recovery key package: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	var managed int
+	err = tx.QueryRowContext(ctx,
+		`SELECT 1 FROM accounts WHERE id = ? AND mode = 'managed'`,
+		recoveryKeyPackage.AccountID,
+	).Scan(&managed)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("find managed account for recovery key: %w", err)
+	}
+	if _, err := upsertRecoveryKeyPackage(ctx, tx, recoveryKeyPackage); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit replace managed recovery key package: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteManagedAccount's COMMIT branch in fault_injection_test.go.
+	}
+	return nil
+}
+
 func (s *Store) DeleteSessionByTokenHash(ctx context.Context, tokenHash string) error {
 	result, err := s.db.ExecContext(
 		ctx,

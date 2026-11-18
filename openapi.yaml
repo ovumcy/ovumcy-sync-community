@@ -1252,6 +1252,100 @@ paths:
                 bridgeDisabled:
                   value: { error: managed_bridge_disabled }
 
+  /managed/accounts/{account_id}/recovery-key:
+    put:
+      tags: [managed-bridge]
+      operationId: replaceManagedAccountRecoveryKey
+      summary: Replace a managed account's wrapped recovery-key package
+      description: |
+        Machine-to-machine only: called by the separate trusted managed-auth
+        service after its own re-authentication of the account's owner, to
+        re-key the owner's recovery path. A managed account has no password,
+        so its session may store only a first package (`PUT /sync/recovery-key`
+        refuses a differing one with `403 managed_recovery_key_overwrite`);
+        this route is the only way to replace it. Requires the same
+        `MANAGED_BRIDGE_TOKEN` bearer credential as `POST /managed/session`;
+        the route is disabled (503) whenever that token is not configured on
+        this server.
+
+        The package passes the same format validation as
+        `PUT /sync/recovery-key` and replaces any stored package, or stores a
+        first one. Sessions, devices, the encrypted sync blob and the lapse
+        state are left as they are; revoking sessions after a re-key is the
+        caller's side (`POST /managed/accounts/{account_id}/sessions/revoke`).
+        A repeat with the same package is safe. Only `mode=managed` accounts
+        are written: an account that does not exist and a self-hosted account
+        whose id matches both answer the same
+        `404 managed_account_not_found` and nothing is written, so the answer
+        never tells them apart.
+      security:
+        - managedBridgeAuth: []
+      parameters:
+        - name: account_id
+          in: path
+          required: true
+          description: Opaque managed-account identifier (lowercased/trimmed server-side); must match `^[a-z0-9][a-z0-9_-]{7,127}$`, the same shape as the `POST /managed/session` account_id.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ManagedRecoveryKeyPackageRequest"
+      responses:
+        "200":
+          description: The package is stored for the managed account.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+              examples:
+                replaced:
+                  value: { status: recovery_key_replaced }
+        "400":
+          description: account_id fails the managed-account id pattern, the body is malformed or carries an unknown field, or the package fails validation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidManagedAccount:
+                  value: { error: invalid_managed_account }
+                invalidRecoveryPackage:
+                  value: { error: invalid_recovery_package }
+        "401":
+          description: Missing/invalid MANAGED_BRIDGE_TOKEN bearer credential.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  value: { error: unauthorized }
+        "404":
+          description: The id names no managed account here (none at all, or a self-hosted one).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                notFound:
+                  value: { error: managed_account_not_found }
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          description: MANAGED_BRIDGE_TOKEN is not configured on this server; the bridge is disabled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                bridgeDisabled:
+                  value: { error: managed_bridge_disabled }
+
   /sync/capabilities:
     get:
       tags: [sync]
@@ -1483,8 +1577,11 @@ paths:
         A managed account has no password: its session may store a first
         package, but a valid package that differs from a stored one is refused with
         `403 managed_recovery_key_overwrite` and nothing is written. No
-        session route replaces a managed account's package; the bridge purge
-        clears it with the rest of the account.
+        session route replaces a managed account's package: the managed
+        service re-keys it through
+        `PUT /managed/accounts/{account_id}/recovery-key` after its own
+        re-authentication, and the bridge purge clears it with the rest of
+        the account.
 
         A package equal to the stored one (after the same trim + lowercase
         normalization, same `mnemonic_word_count`) is a no-op: it needs no
@@ -2187,6 +2284,40 @@ components:
         code:
           type: string
           description: Current 6-digit TOTP code. Required when the account has TOTP enabled, unless the package equals the stored one; ignored otherwise.
+      required:
+        - algorithm
+        - kdf
+        - mnemonic_word_count
+        - wrap_nonce_hex
+        - wrapped_master_key_hex
+        - phrase_fingerprint_hex
+      additionalProperties: false
+
+    ManagedRecoveryKeyPackageRequest:
+      type: object
+      description: The bridge re-key body. The package fields and checks of RecoveryKeyPackageRequest, without its step-up fields; an unknown field is refused.
+      properties:
+        algorithm:
+          type: string
+          description: 'Must be exactly "xchacha20poly1305" (case-insensitive, normalized to lowercase).'
+        kdf:
+          type: string
+          description: 'Must be exactly "bip39_seed_hkdf_sha256" (case-insensitive, normalized to lowercase).'
+        mnemonic_word_count:
+          type: integer
+          description: Must be exactly 12.
+        wrap_nonce_hex:
+          type: string
+          description: Lowercase hex, exactly 48 characters.
+          pattern: "^[a-f0-9]{48}$"
+        wrapped_master_key_hex:
+          type: string
+          description: Lowercase hex, at least 64 characters, even length.
+          pattern: "^[a-f0-9]+$"
+        phrase_fingerprint_hex:
+          type: string
+          description: Lowercase hex, exactly 16 characters.
+          pattern: "^[a-f0-9]{16}$"
       required:
         - algorithm
         - kdf
