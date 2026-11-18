@@ -44,8 +44,9 @@ var ErrAccountLapsed = errors.New("account_lapsed")
 var ErrStaleEntitlementSignal = errors.New("stale_entitlement_signal")
 
 // ErrInvalidEntitlementSignal is returned by ApplyEntitlementSignal for a
-// signal without an AsOf instant: every signal is ordered by AsOf, and the
-// store never substitutes its own receive time.
+// signal without an AsOf or ReceivedAt instant: every signal is ordered by
+// AsOf, the store never substitutes its own receive time, and ReceivedAt is
+// the purge grace clock a lapse starts.
 var ErrInvalidEntitlementSignal = errors.New("invalid_entitlement_signal")
 
 // ErrTOTPPendingSecretChanged is returned by EnableTOTPAndRotateRecoveryCode
@@ -599,9 +600,9 @@ func (s *Store) ClearAccountLapse(ctx context.Context, accountID string) error {
 
 // EntitlementSignal is one lapse (Active false) or reactivation (Active
 // true) report from the managed bridge. AsOf is the managed service's own
-// observation instant and is required: the zero value is refused with
-// ErrInvalidEntitlementSignal. ReceivedAt is this server's clock: it becomes
-// lapsed_at (the purge grace clock) and orders nothing.
+// observation instant. ReceivedAt is this server's clock: it becomes
+// lapsed_at (the purge grace clock) and orders nothing. Both are required:
+// a zero value is refused with ErrInvalidEntitlementSignal.
 type EntitlementSignal struct {
 	Active     bool
 	AsOf       time.Time
@@ -616,18 +617,18 @@ type EntitlementSignal struct {
 //     the stored point; it clears lapsed_at (premium_active returns with the
 //     next mint).
 //   - A lapse is applied unless its AsOf is strictly older than the stored
-//     point — ties go to the lapse. It clears premium_active, records lapsed_at (preserving one already
-//     recorded, so replay never extends the grace period) and deletes every
-//     session the account holds.
+//     point — ties go to the lapse. It clears premium_active, records
+//     lapsed_at (preserving one already recorded, so replay never extends
+//     the grace period) and deletes every session the account holds.
 //
 // A stale signal returns ErrStaleEntitlementSignal and a signal without AsOf
-// returns ErrInvalidEntitlementSignal; both change nothing. A retry of the
+// or ReceivedAt returns ErrInvalidEntitlementSignal; both change nothing. A retry of the
 // reactivation that set the stored point is a no-op success. A lapse
 // recorded without a stored point (pre-0011) is ordered by its lapsed_at.
 // The stored point only moves forward. Returns ErrNotFound when accountID
 // does not exist or is not a managed account.
 func (s *Store) ApplyEntitlementSignal(ctx context.Context, accountID string, signal EntitlementSignal) error {
-	if signal.AsOf.IsZero() {
+	if signal.AsOf.IsZero() || signal.ReceivedAt.IsZero() {
 		return ErrInvalidEntitlementSignal
 	}
 
@@ -680,7 +681,6 @@ func (s *Store) ApplyEntitlementSignal(ctx context.Context, accountID string, si
 			}
 			return ErrStaleEntitlementSignal
 		}
-		orderAt = max(orderAt, stored.Int64)
 	}
 
 	if signal.Active {
