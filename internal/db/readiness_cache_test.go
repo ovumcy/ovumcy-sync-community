@@ -2,7 +2,9 @@ package db
 
 import (
 	"context"
+	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -60,8 +62,26 @@ func TestCheckReadyFailsAtOnceAfterClose(t *testing.T) {
 	}
 }
 
-func TestCheckReadyIsSafeUnderConcurrentCallers(t *testing.T) {
+// gateReadiness swaps the store's check for one that counts its runs and
+// blocks until release is closed.
+func gateReadiness(store *Store) (runs *atomic.Int32, started chan struct{}, release chan struct{}) {
+	runs = &atomic.Int32{}
+	started = make(chan struct{}, 64)
+	release = make(chan struct{})
+	store.ready.mu.Lock()
+	store.ready.check = func(ctx context.Context) error {
+		runs.Add(1)
+		started <- struct{}{}
+		<-release
+		return store.checkReadyUncached(ctx)
+	}
+	store.ready.mu.Unlock()
+	return runs, started, release
+}
+
+func TestConcurrentCheckReadyCallersShareOneCheck(t *testing.T) {
 	store, _ := newFileBackedTestStore(t)
+	runs, started, release := gateReadiness(store)
 
 	var wg sync.WaitGroup
 	errs := make(chan error, 32)
@@ -72,11 +92,58 @@ func TestCheckReadyIsSafeUnderConcurrentCallers(t *testing.T) {
 			errs <- store.CheckReady(context.Background())
 		}()
 	}
+	<-started
+	close(release)
 	wg.Wait()
 	close(errs)
 	for err := range errs {
 		if err != nil {
 			t.Fatalf("expected every concurrent caller to see ready, got %v", err)
 		}
+	}
+	if got := runs.Load(); got != 1 {
+		t.Fatalf("expected one shared check, got %d", got)
+	}
+}
+
+// TestCheckReadyCallerGivingUpStillCachesTheAnswer: the caller that started
+// the check cancels mid-query; the check finishes and its answer serves the
+// next caller without a second run.
+func TestCheckReadyCallerGivingUpStillCachesTheAnswer(t *testing.T) {
+	store, _ := newFileBackedTestStore(t)
+	runs, started, release := gateReadiness(store)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() { result <- store.CheckReady(ctx) }()
+	<-started
+	cancel()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected the cancelled caller to get context.Canceled, got %v", err)
+	}
+
+	close(release)
+	if err := store.CheckReady(context.Background()); err != nil {
+		t.Fatalf("expected the finished check's ready answer, got %v", err)
+	}
+	if got := runs.Load(); got != 1 {
+		t.Fatalf("expected the cancelled caller's check to be reused, got %d runs", got)
+	}
+}
+
+// TestCheckReadyWaiterKeepsItsOwnDeadline: a caller waiting on someone else's
+// check returns when its own deadline passes, not when the check ends.
+func TestCheckReadyWaiterKeepsItsOwnDeadline(t *testing.T) {
+	store, _ := newFileBackedTestStore(t)
+	_, started, release := gateReadiness(store)
+	defer close(release)
+
+	go func() { _ = store.CheckReady(context.Background()) }()
+	<-started
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := store.CheckReady(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected the waiter's own deadline, got %v", err)
 	}
 }

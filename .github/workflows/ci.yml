@@ -204,23 +204,32 @@ jobs:
         # (2337 s) on main, then hit the 45m deadline twice on slower runners.
         # It is split by test name into two halves that run beside the rest of
         # the module, so the lane stays one required check named `race`. The
-        # two -run patterns are complements over Test*, so every test runs
-        # exactly once; the package has no Fuzz or Example functions.
+        # two -run patterns are complements over Test* (a test named exactly
+        # `Test` goes to the second), so every test runs exactly once; the
+        # package has no Fuzz or Example functions.
         # Output streams live with a per-shard prefix, so a cancelled job still
         # shows where each shard was; pipefail gives each subshell go's status.
+        # Job control puts each shard in its own process group, so the first
+        # failure kills the other shards whole (go, the test binary and sed)
+        # instead of leaving the job running to its 45-minute deadline.
         run: |
-          set -o pipefail
+          set -o pipefail -m
           packages=$(go list ./... | grep -v '/internal/services$')
           ( go test -race -timeout=45m $packages 2>&1 | sed -u 's/^/[rest] /' ) &
-          rest=$!
+          shards=($!)
           ( go test -race -timeout=45m -run '^Test[A-L]' ./internal/services 2>&1 | sed -u 's/^/[services A-L] /' ) &
-          first=$!
-          ( go test -race -timeout=45m -run '^Test[^A-L]' ./internal/services 2>&1 | sed -u 's/^/[services M-Z] /' ) &
-          second=$!
+          shards+=($!)
+          ( go test -race -timeout=45m -run '^Test([^A-L]|$)' ./internal/services 2>&1 | sed -u 's/^/[services M-Z] /' ) &
+          shards+=($!)
           status=0
-          wait "$rest" || status=1
-          wait "$first" || status=1
-          wait "$second" || status=1
+          for _ in "${shards[@]}"; do
+            if ! wait -n; then
+              status=1
+              for shard in "${shards[@]}"; do kill -TERM -- "-$shard" 2>/dev/null || true; done
+              break
+            fi
+          done
+          wait || true
           exit "$status"
 
   coverage-upload:

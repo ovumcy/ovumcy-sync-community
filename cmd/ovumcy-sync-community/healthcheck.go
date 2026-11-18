@@ -32,10 +32,11 @@ func runHealthcheck(bindAddr string, timeout time.Duration) error {
 	if timeout <= 0 {
 		timeout = defaultHealthcheckTimeout
 	}
+	host, port := healthcheckTarget(bindAddr)
 	// url.URL escapes an IPv6 zone ("fe80::1%eth0") that a concatenated string would leave unparseable.
 	target := url.URL{
 		Scheme: "http",
-		Host:   net.JoinHostPort(healthcheckHost(bindAddr), healthcheckPort(bindAddr)),
+		Host:   net.JoinHostPort(host, port),
 		Path:   healthcheckPath,
 	}
 	// No proxy: HTTP_PROXY exempts loopback only, and the probe must reach the bound address directly.
@@ -53,36 +54,30 @@ func runHealthcheck(bindAddr string, timeout time.Duration) error {
 	return nil
 }
 
-// healthcheckHost returns the host the server listens on per BIND_ADDR, or
-// loopback when BIND_ADDR names every interface (":8080", "0.0.0.0:8080",
-// "[::]:8080") or cannot be parsed. A server bound to one address does not
-// answer on 127.0.0.1, so probing loopback there marks a working container
-// unhealthy.
-func healthcheckHost(bindAddr string) string {
-	host, _, err := net.SplitHostPort(strings.TrimSpace(bindAddr))
+// healthcheckTarget returns the host and port the server listens on per
+// BIND_ADDR, from one parse. A server bound to one address does not answer on
+// loopback, so that address is probed. Every-interface binds probe the
+// loopback of their own family: "[::]:8080" listens IPv6-only where
+// net.ipv6.bindv6only=1, so 127.0.0.1 would be refused there, while ::1
+// answers either way; ":8080" and "0.0.0.0:8080" probe 127.0.0.1. An unset
+// or unparseable BIND_ADDR falls back to the image default.
+func healthcheckTarget(bindAddr string) (host string, port string) {
+	host, port, err := net.SplitHostPort(strings.TrimSpace(bindAddr))
 	if err != nil {
-		return defaultHealthcheckHost
+		return defaultHealthcheckHost, defaultHealthcheckPort
+	}
+	if port = strings.TrimSpace(port); port == "" {
+		port = defaultHealthcheckPort
 	}
 	host = strings.TrimSpace(host)
-	if host == "" {
-		return defaultHealthcheckHost
+	ip := net.ParseIP(host)
+	switch {
+	case host == "":
+		host = defaultHealthcheckHost
+	case ip != nil && ip.IsUnspecified() && ip.To4() == nil:
+		host = net.IPv6loopback.String()
+	case ip != nil && ip.IsUnspecified():
+		host = defaultHealthcheckHost
 	}
-	if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
-		return defaultHealthcheckHost
-	}
-	return host
-}
-
-// healthcheckPort extracts the port from a BIND_ADDR value such as ":8080" or
-// "0.0.0.0:8080", falling back to the image default when unset or malformed.
-func healthcheckPort(bindAddr string) string {
-	bindAddr = strings.TrimSpace(bindAddr)
-	if bindAddr == "" {
-		return defaultHealthcheckPort
-	}
-	_, port, err := net.SplitHostPort(bindAddr)
-	if err != nil || strings.TrimSpace(port) == "" {
-		return defaultHealthcheckPort
-	}
-	return port
+	return host, port
 }

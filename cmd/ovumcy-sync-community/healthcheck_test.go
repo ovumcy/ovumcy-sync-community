@@ -9,44 +9,49 @@ import (
 	"time"
 )
 
-func TestHealthcheckPortFallsBackToDefault(t *testing.T) {
-	for _, bindAddr := range []string{"", "   ", "no-port", ":"} {
-		if got := healthcheckPort(bindAddr); got != defaultHealthcheckPort {
-			t.Fatalf("healthcheckPort(%q) = %q, want %q", bindAddr, got, defaultHealthcheckPort)
+func TestHealthcheckTargetFollowsBindAddr(t *testing.T) {
+	cases := map[string][2]string{
+		"":                      {defaultHealthcheckHost, defaultHealthcheckPort},
+		"   ":                   {defaultHealthcheckHost, defaultHealthcheckPort},
+		"no-port":               {defaultHealthcheckHost, defaultHealthcheckPort},
+		":":                     {defaultHealthcheckHost, defaultHealthcheckPort},
+		":8080":                 {defaultHealthcheckHost, "8080"},
+		"0.0.0.0:9000":          {defaultHealthcheckHost, "9000"},
+		"[::]:8080":             {"::1", "8080"},
+		"[::ffff:0.0.0.0]:8080": {defaultHealthcheckHost, "8080"},
+		"127.0.0.1:8443":        {"127.0.0.1", "8443"},
+		"10.1.2.3:8080":         {"10.1.2.3", "8080"},
+		"[fd00::5]:8080":        {"fd00::5", "8080"},
+		"sync.local:8080":       {"sync.local", "8080"},
+		" 10.1.2.3:8080  ":      {"10.1.2.3", "8080"},
+	}
+	for bindAddr, want := range cases {
+		if host, port := healthcheckTarget(bindAddr); host != want[0] || port != want[1] {
+			t.Fatalf("healthcheckTarget(%q) = %q, %q, want %q, %q", bindAddr, host, port, want[0], want[1])
 		}
 	}
 }
 
-func TestHealthcheckPortExtractsPort(t *testing.T) {
-	cases := map[string]string{
-		":8080":          "8080",
-		"0.0.0.0:9000":   "9000",
-		"127.0.0.1:8443": "8443",
+// TestRunHealthcheckProbesIPv6LoopbackForAnIPv6WildcardBind: under
+// bindv6only=1 a "[::]" bind answers only on IPv6, so the probe must go to ::1.
+func TestRunHealthcheckProbesIPv6LoopbackForAnIPv6WildcardBind(t *testing.T) {
+	listener, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		t.Skipf("IPv6 loopback unavailable: %v", err)
 	}
-	for bindAddr, want := range cases {
-		if got := healthcheckPort(bindAddr); got != want {
-			t.Fatalf("healthcheckPort(%q) = %q, want %q", bindAddr, got, want)
-		}
-	}
-}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	server.Listener = listener
+	server.Start()
+	defer server.Close()
 
-func TestHealthcheckHostFollowsBindAddr(t *testing.T) {
-	cases := map[string]string{
-		"":                 defaultHealthcheckHost,
-		"no-port":          defaultHealthcheckHost,
-		":8080":            defaultHealthcheckHost,
-		"0.0.0.0:8080":     defaultHealthcheckHost,
-		"[::]:8080":        defaultHealthcheckHost,
-		"127.0.0.1:8443":   "127.0.0.1",
-		"10.1.2.3:8080":    "10.1.2.3",
-		"[fd00::5]:8080":   "fd00::5",
-		"sync.local:8080":  "sync.local",
-		" 10.1.2.3:8080  ": "10.1.2.3",
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatalf("split listener address: %v", err)
 	}
-	for bindAddr, want := range cases {
-		if got := healthcheckHost(bindAddr); got != want {
-			t.Fatalf("healthcheckHost(%q) = %q, want %q", bindAddr, got, want)
-		}
+	if err := runHealthcheck(net.JoinHostPort("::", port), time.Second); err != nil {
+		t.Fatalf("expected the [::] bind to be probed on ::1, got %v", err)
 	}
 }
 
