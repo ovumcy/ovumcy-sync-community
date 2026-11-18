@@ -23,6 +23,13 @@ type Store struct {
 		mu        sync.Mutex
 		checkedAt time.Time
 		err       error
+		// inflight is closed when the one running check has stored its answer.
+		inflight chan struct{}
+		// epoch moves on forgetReadiness, so a check started before it cannot
+		// store a stale answer after it.
+		epoch uint64
+		// check replaces checkReadyUncached in tests.
+		check func(context.Context) error
 	}
 }
 
@@ -31,6 +38,11 @@ type Store struct {
 // without it a flood of probes queues every request behind schema queries.
 // One second is far below any healthcheck interval.
 const readinessCacheTTL = time.Second
+
+// readinessCheckTimeout bounds the one shared check, which runs detached from
+// the caller that started it: a caller giving up must not void the answer
+// the others wait for. A check that runs out of time is a not-ready answer.
+const readinessCheckTimeout = 5 * time.Second
 
 func Open(path string) (*Store, error) {
 	if err := refuseTxLockOverride(path); err != nil {
@@ -184,26 +196,62 @@ func (s *Store) SchemaReady(ctx context.Context) (bool, error) {
 //
 // Callers within readinessCacheTTL of a completed check share its answer, and
 // concurrent callers wait for the one check in flight instead of each queuing
-// its own statements. An answer cut short by the caller's own context is not
-// cached.
+// its own statements. Each caller waits only as long as its own context
+// allows; the check itself runs to its answer, which is cached for the rest.
 func (s *Store) CheckReady(ctx context.Context) error {
-	s.ready.mu.Lock()
-	defer s.ready.mu.Unlock()
-	if !s.ready.checkedAt.IsZero() && time.Since(s.ready.checkedAt) < readinessCacheTTL {
-		return s.ready.err
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	err := s.checkReadyUncached(ctx)
-	if ctx.Err() == nil {
+	for {
+		s.ready.mu.Lock()
+		if !s.ready.checkedAt.IsZero() && time.Since(s.ready.checkedAt) < readinessCacheTTL {
+			err := s.ready.err
+			s.ready.mu.Unlock()
+			return err
+		}
+		done := s.ready.inflight
+		if done == nil {
+			done = make(chan struct{})
+			s.ready.inflight = done
+			check := s.ready.check
+			if check == nil {
+				check = s.checkReadyUncached
+			}
+			go s.runReadinessCheck(context.WithoutCancel(ctx), check, s.ready.epoch, done)
+		}
+		s.ready.mu.Unlock()
+
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func (s *Store) runReadinessCheck(ctx context.Context, check func(context.Context) error, epoch uint64, done chan struct{}) {
+	ctx, cancel := context.WithTimeout(ctx, readinessCheckTimeout)
+	defer cancel()
+	err := check(ctx)
+
+	s.ready.mu.Lock()
+	if s.ready.epoch == epoch {
 		s.ready.checkedAt = time.Now()
 		s.ready.err = err
 	}
-	return err
+	if s.ready.inflight == done {
+		s.ready.inflight = nil
+	}
+	s.ready.mu.Unlock()
+	close(done)
 }
 
 func (s *Store) forgetReadiness() {
 	s.ready.mu.Lock()
+	s.ready.epoch++
 	s.ready.checkedAt = time.Time{}
 	s.ready.err = nil
+	s.ready.inflight = nil
 	s.ready.mu.Unlock()
 }
 
