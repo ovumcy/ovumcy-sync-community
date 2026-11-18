@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/ovumcy/ovumcy-sync-community/internal/models"
 )
@@ -141,4 +142,59 @@ func (s *Store) UpsertRecoveryKeyPackageForSession(
 		return models.RecoveryKeyPackage{}, fmt.Errorf("commit upsert recovery key package: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteManagedAccount's COMMIT branch in fault_injection_test.go.
 	}
 	return stored, nil
+}
+
+// InsertRecoveryKeyPackageForSession stores a first wrapped recovery key for a
+// session-authenticated caller that has no password to re-check (a managed
+// account): it writes only while the caller's session exists
+// (requireLiveSession) and never replaces a stored package — one already
+// there, a concurrent first put's included, answers ErrConflict.
+func (s *Store) InsertRecoveryKeyPackageForSession(
+	ctx context.Context,
+	recoveryKeyPackage models.RecoveryKeyPackage,
+	sessionTokenHash string,
+) (models.RecoveryKeyPackage, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return models.RecoveryKeyPackage{}, fmt.Errorf("begin insert recovery key package: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if err := requireLiveSession(ctx, tx, recoveryKeyPackage.AccountID, sessionTokenHash); err != nil {
+		return models.RecoveryKeyPackage{}, err
+	}
+	result, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO recovery_key_packages (
+		   account_id, algorithm, kdf, mnemonic_word_count,
+		   wrap_nonce_hex, wrapped_master_key_hex, phrase_fingerprint_hex, updated_at
+		 )
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(account_id) DO NOTHING`,
+		recoveryKeyPackage.AccountID,
+		recoveryKeyPackage.Algorithm,
+		recoveryKeyPackage.KDF,
+		recoveryKeyPackage.MnemonicWordCount,
+		recoveryKeyPackage.WrapNonceHex,
+		recoveryKeyPackage.WrappedMasterKeyHex,
+		recoveryKeyPackage.PhraseFingerprintHex,
+		recoveryKeyPackage.UpdatedAt.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return models.RecoveryKeyPackage{}, fmt.Errorf("insert recovery key package: %w", err)
+	}
+	inserted, err := result.RowsAffected()
+	if err != nil {
+		return models.RecoveryKeyPackage{}, fmt.Errorf("insert recovery key package rows: %w", err) // codecov:ignore -- the SQLite driver reports RowsAffected from the completed exec and does not fail here.
+	}
+	if inserted == 0 {
+		return models.RecoveryKeyPackage{}, ErrConflict
+	}
+
+	if err := tx.Commit(); err != nil {
+		return models.RecoveryKeyPackage{}, fmt.Errorf("commit insert recovery key package: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteManagedAccount's COMMIT branch in fault_injection_test.go.
+	}
+	return recoveryKeyPackage, nil
 }
