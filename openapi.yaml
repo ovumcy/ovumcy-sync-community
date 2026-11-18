@@ -1833,7 +1833,7 @@ components:
             unsupportedMediaType:
               value: { error: unsupported_media_type }
     OriginNotAllowed:
-      description: The request carries an `Origin` header that is not in `ALLOWED_ORIGINS`. Answered on every route and method before any rate limiter, so the refused request spends no bucket; no CORS headers are set.
+      description: The request carries an `Origin` header that is not in `ALLOWED_ORIGINS`, or carries none and its `Sec-Fetch-Site` is `cross-site` or `same-site` (not on `/healthz`, `/readyz`, `/metrics`). Answered on every route and method before any rate limiter, so the refused request spends no bucket; no CORS headers are set.
       content:
         application/json:
           schema:
