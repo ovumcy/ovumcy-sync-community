@@ -62,6 +62,39 @@ func TestReplaceManagedRecoveryKeyPackageScopesToManagedAccounts(t *testing.T) {
 	}
 }
 
+// TestReplaceManagedRecoveryKeyPackageRepeatKeepsUpdatedAt: a retried re-key
+// with the stored content writes nothing, so updated_at still marks the last
+// real change; a different package moves it.
+func TestReplaceManagedRecoveryKeyPackageRepeatKeepsUpdatedAt(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	createLapseTestAccount(t, store, "managed-account", "managed")
+
+	first := testRecoveryKeyPackage("managed-account", strings.Repeat("d", 16))
+	first.UpdatedAt = time.Now().UTC().Add(-time.Hour)
+	if err := store.ReplaceManagedRecoveryKeyPackage(ctx, first); err != nil {
+		t.Fatalf("first re-key: %v", err)
+	}
+	repeat := first
+	repeat.UpdatedAt = time.Now().UTC()
+	if err := store.ReplaceManagedRecoveryKeyPackage(ctx, repeat); err != nil {
+		t.Fatalf("repeat re-key: %v", err)
+	}
+	stored, err := store.GetRecoveryKeyPackage(ctx, "managed-account")
+	if err != nil || !stored.UpdatedAt.Equal(first.UpdatedAt) {
+		t.Fatalf("expected the repeat to keep updated_at %v, got %+v, %v", first.UpdatedAt, stored, err)
+	}
+
+	changed := testRecoveryKeyPackage("managed-account", strings.Repeat("e", 16))
+	if err := store.ReplaceManagedRecoveryKeyPackage(ctx, changed); err != nil {
+		t.Fatalf("changed re-key: %v", err)
+	}
+	stored, err = store.GetRecoveryKeyPackage(ctx, "managed-account")
+	if err != nil || stored.PhraseFingerprintHex != strings.Repeat("e", 16) || !stored.UpdatedAt.Equal(changed.UpdatedAt) {
+		t.Fatalf("expected the changed package and its updated_at, got %+v, %v", stored, err)
+	}
+}
+
 func TestReplaceManagedRecoveryKeyPackageStoreFailures(t *testing.T) {
 	ctx := context.Background()
 

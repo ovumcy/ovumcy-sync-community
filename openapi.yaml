@@ -1273,7 +1273,9 @@ paths:
         first one. Sessions, devices, the encrypted sync blob and the lapse
         state are left as they are; revoking sessions after a re-key is the
         caller's side (`POST /managed/accounts/{account_id}/sessions/revoke`).
-        A repeat with the same package is safe. Only `mode=managed` accounts
+        A repeat with the same package writes nothing (`updated_at` is
+        unchanged) and answers the same 200. A lapsed managed account is
+        written like any other; its purge clock is unaffected. Only `mode=managed` accounts
         are written: an account that does not exist and a self-hosted account
         whose id matches both answer the same
         `404 managed_account_not_found` and nothing is written, so the answer
