@@ -365,24 +365,21 @@ func TestServerSyncRoutesEnforceSyncDisabled(t *testing.T) {
 	}
 }
 
-func TestServerManagedAccountPremiumRefusesSelfHostedAccount(t *testing.T) {
+func TestServerManagedAccountPremiumAnswersASelfHostedIDLikeAnAbsentOne(t *testing.T) {
 	handler := newTestServer(t)
 
 	registered := registerOwner(t, handler)
 
-	response := performJSONRequest(
-		t,
-		handler,
-		http.MethodPost,
-		"/managed/accounts/"+registered.AccountID+"/premium",
-		map[string]any{"active": false, "as_of": time.Now().UTC().Format(time.RFC3339Nano)},
-		"test-managed-bridge-token",
-		http.StatusBadRequest,
-	)
-	var payload map[string]string
-	decodeResponse(t, response.Body.Bytes(), &payload)
-	if payload["error"] != "invalid_managed_account" {
-		t.Fatalf("unexpected refusal payload: %#v", payload)
+	for _, active := range []bool{false, true} {
+		body := map[string]any{"active": active, "as_of": time.Now().UTC().Format(time.RFC3339Nano)}
+		absent := performJSONRequest(t, handler, http.MethodPost,
+			"/managed/accounts/neverexisted1234/premium", body, "test-managed-bridge-token", http.StatusOK)
+		selfHosted := performJSONRequest(t, handler, http.MethodPost,
+			"/managed/accounts/"+registered.AccountID+"/premium", body, "test-managed-bridge-token", http.StatusOK)
+		if absent.Body.String() != selfHosted.Body.String() || absent.Body.String() == "" {
+			t.Fatalf("active=%v: self-hosted answer %q differs from the absent answer %q",
+				active, selfHosted.Body.String(), absent.Body.String())
+		}
 	}
 
 	// The self-hosted account is untouched: its session still authenticates.
