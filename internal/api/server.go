@@ -122,7 +122,8 @@ func NewServer(
 //     from wherever the operator exposes it, and gated by METRICS_BEARER_TOKEN
 //     when set.
 //   - POST /managed/session, DELETE /managed/accounts/{account_id},
-//     POST /managed/accounts/{account_id}/premium — the machine-to-machine
+//     POST /managed/accounts/{account_id}/premium,
+//     POST /managed/accounts/{account_id}/sessions/revoke — the machine-to-machine
 //     bridge, disabled unless MANAGED_BRIDGE_TOKEN is set (503 otherwise) and
 //     unreachable without that operator-held secret. Its one legitimate caller
 //     is a first-party service on a single address that may reconcile in
@@ -148,6 +149,7 @@ func (s *Server) routes() {
 	s.handleRoute("POST /managed/session", "managed_session", s.withManagedBridge(s.handleManagedSession))
 	s.handleRoute("DELETE /managed/accounts/{account_id}", "managed_account_purge", s.withManagedBridge(s.handleManagedAccountPurge))
 	s.handleRoute("POST /managed/accounts/{account_id}/premium", "managed_account_premium", s.withManagedBridge(s.handleManagedAccountPremium))
+	s.handleRoute("POST /managed/accounts/{account_id}/sessions/revoke", "managed_account_sessions_revoke", s.withManagedBridge(s.handleManagedAccountSessionsRevoke))
 	s.handleRoute("GET /sync/capabilities", "sync_capabilities", s.withAuth(s.handleCapabilities))
 	s.handleRoute("POST /sync/devices", "sync_devices", s.withAuth(s.requireSyncEnabled(s.handleAttachDevice)))
 	s.handleRoute("GET /sync/devices", "sync_devices_list", s.withAuth(s.requireSyncEnabled(s.handleListDevices)))
@@ -888,6 +890,31 @@ func (s *Server) handleManagedAccountPurge(writer http.ResponseWriter, request *
 	}
 
 	writeJSON(writer, http.StatusOK, map[string]string{"status": "account_purged"})
+}
+
+// handleManagedAccountSessionsRevoke implements POST /managed/accounts/
+// {account_id}/sessions/revoke: it deletes every sync session of the managed
+// account, so one minted before a managed logout, password change or
+// operator revoke stops authenticating. Gated by withManagedBridge like the
+// other bridge routes, it takes no request body and relays the path id to
+// ManagedBridgeService.RevokeManagedAccountSessions, which owns
+// normalization, the managed-mode scope and idempotency: an unknown account,
+// one with no sessions and a self-hosted account whose id matches all answer
+// the same success, so a repeat is safe and nothing about a self-hosted
+// account leaks.
+func (s *Server) handleManagedAccountSessionsRevoke(writer http.ResponseWriter, request *http.Request) {
+	err := s.managedBridge.RevokeManagedAccountSessions(request.Context(), request.PathValue("account_id"))
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrInvalidManagedAccount):
+			writeError(writer, http.StatusBadRequest, "invalid_managed_account")
+		default:
+			writeError(writer, http.StatusInternalServerError, "internal_error")
+		}
+		return
+	}
+
+	writeJSON(writer, http.StatusOK, map[string]string{"status": "sessions_revoked"})
 }
 
 // handleManagedAccountPremium implements POST /managed/accounts/{account_id}

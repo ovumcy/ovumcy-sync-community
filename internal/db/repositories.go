@@ -1668,6 +1668,27 @@ func (s *Store) DeleteAllSessionsForAccount(ctx context.Context, accountID strin
 	return nil
 }
 
+// DeleteManagedAccountSessions deletes every session of accountID for the
+// bridge session revoke, and only when the account is mode='managed': the
+// mode predicate rides in the delete itself, so a self-hosted account whose id
+// matches keeps its sessions whatever the caller checked. An absent account,
+// a self-hosted one, and a managed one with no sessions all delete nothing and
+// return nil alike, so the caller cannot tell them apart. Sessions only — the
+// blob, devices, recovery-key package and lapse state stay as they are.
+func (s *Store) DeleteManagedAccountSessions(ctx context.Context, accountID string) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`DELETE FROM sessions WHERE account_id = ? AND EXISTS (SELECT 1 FROM accounts WHERE id = ? AND mode = 'managed')`,
+		accountID,
+		accountID,
+	)
+	if err != nil {
+		return fmt.Errorf("delete managed account sessions: %w", err)
+	}
+
+	return nil
+}
+
 func (s *Store) DeleteSessionByTokenHash(ctx context.Context, tokenHash string) error {
 	result, err := s.db.ExecContext(
 		ctx,

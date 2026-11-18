@@ -134,6 +134,33 @@ func (s *ManagedBridgeService) PurgeManagedAccount(
 	return nil
 }
 
+// RevokeManagedAccountSessions deletes every sync session of the managed
+// account (POST /managed/accounts/{account_id}/sessions/revoke). The managed
+// service calls it when the account's own credentials change or an operator
+// revokes its sessions, so a sync session minted earlier does not outlive
+// them; the next CreateManagedSession issues a fresh one.
+//
+// The id gets the same normalization and pattern gate as PurgeManagedAccount.
+// Only sessions go: the blob, devices, recovery-key package and lapse state
+// are left as they are. A managed account has no recovery code, so it never
+// holds a password-reset token to delete.
+//
+// An unknown account, a managed account with no sessions, and a self-hosted
+// account whose id matches all return nil and change nothing — the store's
+// delete is scoped to mode='managed' — so the answer never reveals whether a
+// self-hosted account exists, and a repeated call is safe.
+func (s *ManagedBridgeService) RevokeManagedAccountSessions(
+	ctx context.Context,
+	accountID string,
+) error {
+	accountID = strings.TrimSpace(strings.ToLower(accountID))
+	if !managedAccountIDPattern.MatchString(accountID) {
+		return ErrInvalidManagedAccount
+	}
+
+	return s.store.DeleteManagedAccountSessions(ctx, accountID)
+}
+
 // SetAccountLapseSignal implements the sync-plane half of the
 // entitlement-lapse bridge contract (POST /managed/accounts/{account_id}/
 // premium, {"active": bool, "as_of": RFC 3339}). The sync server stores the
