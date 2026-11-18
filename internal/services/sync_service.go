@@ -341,7 +341,9 @@ func (s *SyncService) GetBlob(ctx context.Context, accountID string) (models.Enc
 // stored row and needs no step-up (UnchangedRecoveryKeyPackage).
 //
 // A managed account has no password, so its session may store a first
-// package but never replace one (ErrManagedRecoveryKeyOverwrite).
+// package but never replace one (ErrManagedRecoveryKeyOverwrite); a re-key
+// goes through the bridge (ManagedBridgeService.ReplaceManagedRecoveryKeyPackage)
+// after ovumcy-managed's own re-authentication.
 func (s *SyncService) PutRecoveryKeyPackage(
 	ctx context.Context,
 	accountID string,
@@ -362,23 +364,8 @@ func (s *SyncService) PutRecoveryKeyPackage(
 		return models.RecoveryKeyPackage{}, err
 	}
 
-	if recoveryKeyPackage.Algorithm != "xchacha20poly1305" || recoveryKeyPackage.KDF != "bip39_seed_hkdf_sha256" {
-		return models.RecoveryKeyPackage{}, ErrInvalidRecoveryPackage
-	}
-	if recoveryKeyPackage.MnemonicWordCount != 12 {
-		return models.RecoveryKeyPackage{}, ErrInvalidRecoveryPackage
-	}
-	wrapNonceHex := recoveryKeyPackage.WrapNonceHex
-	if len(wrapNonceHex) != 48 || !lowercaseHexPattern.MatchString(wrapNonceHex) {
-		return models.RecoveryKeyPackage{}, ErrInvalidRecoveryPackage
-	}
-	wrappedMasterKeyHex := recoveryKeyPackage.WrappedMasterKeyHex
-	if len(wrappedMasterKeyHex) < 64 || len(wrappedMasterKeyHex)%2 != 0 || !lowercaseHexPattern.MatchString(wrappedMasterKeyHex) {
-		return models.RecoveryKeyPackage{}, ErrInvalidRecoveryPackage
-	}
-	phraseFingerprintHex := recoveryKeyPackage.PhraseFingerprintHex
-	if len(phraseFingerprintHex) != 16 || !lowercaseHexPattern.MatchString(phraseFingerprintHex) {
-		return models.RecoveryKeyPackage{}, ErrInvalidRecoveryPackage
+	if err := validateRecoveryKeyPackage(recoveryKeyPackage); err != nil {
+		return models.RecoveryKeyPackage{}, err
 	}
 
 	recoveryKeyPackage.UpdatedAt = s.now().UTC()
@@ -423,6 +410,31 @@ func (s *SyncService) UnchangedRecoveryKeyPackage(
 	input PutRecoveryKeyPackageInput,
 ) (models.RecoveryKeyPackage, bool, error) {
 	return s.matchStoredRecoveryKeyPackage(ctx, normalizeRecoveryKeyPackage(accountID, input))
+}
+
+// validateRecoveryKeyPackage is the one shape check every recovery-key write
+// runs on a normalized package: the session route and the managed bridge
+// re-key accept exactly the same packages.
+func validateRecoveryKeyPackage(recoveryKeyPackage models.RecoveryKeyPackage) error {
+	if recoveryKeyPackage.Algorithm != "xchacha20poly1305" || recoveryKeyPackage.KDF != "bip39_seed_hkdf_sha256" {
+		return ErrInvalidRecoveryPackage
+	}
+	if recoveryKeyPackage.MnemonicWordCount != 12 {
+		return ErrInvalidRecoveryPackage
+	}
+	wrapNonceHex := recoveryKeyPackage.WrapNonceHex
+	if len(wrapNonceHex) != 48 || !lowercaseHexPattern.MatchString(wrapNonceHex) {
+		return ErrInvalidRecoveryPackage
+	}
+	wrappedMasterKeyHex := recoveryKeyPackage.WrappedMasterKeyHex
+	if len(wrappedMasterKeyHex) < 64 || len(wrappedMasterKeyHex)%2 != 0 || !lowercaseHexPattern.MatchString(wrappedMasterKeyHex) {
+		return ErrInvalidRecoveryPackage
+	}
+	phraseFingerprintHex := recoveryKeyPackage.PhraseFingerprintHex
+	if len(phraseFingerprintHex) != 16 || !lowercaseHexPattern.MatchString(phraseFingerprintHex) {
+		return ErrInvalidRecoveryPackage
+	}
+	return nil
 }
 
 func normalizeRecoveryKeyPackage(accountID string, input PutRecoveryKeyPackageInput) models.RecoveryKeyPackage {

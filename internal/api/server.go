@@ -123,7 +123,8 @@ func NewServer(
 //     when set.
 //   - POST /managed/session, DELETE /managed/accounts/{account_id},
 //     POST /managed/accounts/{account_id}/premium,
-//     POST /managed/accounts/{account_id}/sessions/revoke — the machine-to-machine
+//     POST /managed/accounts/{account_id}/sessions/revoke,
+//     PUT /managed/accounts/{account_id}/recovery-key — the machine-to-machine
 //     bridge, disabled unless MANAGED_BRIDGE_TOKEN is set (503 otherwise) and
 //     unreachable without that operator-held secret. Its one legitimate caller
 //     is a first-party service on a single address that may reconcile in
@@ -150,6 +151,7 @@ func (s *Server) routes() {
 	s.handleRoute("DELETE /managed/accounts/{account_id}", "managed_account_purge", s.withManagedBridge(s.handleManagedAccountPurge))
 	s.handleRoute("POST /managed/accounts/{account_id}/premium", "managed_account_premium", s.withManagedBridge(s.handleManagedAccountPremium))
 	s.handleRoute("POST /managed/accounts/{account_id}/sessions/revoke", "managed_account_sessions_revoke", s.withManagedBridge(s.handleManagedAccountSessionsRevoke))
+	s.handleRoute("PUT /managed/accounts/{account_id}/recovery-key", "managed_account_recovery_key", s.withManagedBridge(s.handleManagedAccountRecoveryKey))
 	s.handleRoute("GET /sync/capabilities", "sync_capabilities", s.withAuth(s.handleCapabilities))
 	s.handleRoute("POST /sync/devices", "sync_devices", s.withAuth(s.requireSyncEnabled(s.handleAttachDevice)))
 	s.handleRoute("GET /sync/devices", "sync_devices_list", s.withAuth(s.requireSyncEnabled(s.handleListDevices)))
@@ -918,6 +920,45 @@ func (s *Server) handleManagedAccountSessionsRevoke(writer http.ResponseWriter, 
 	}
 
 	writeJSON(writer, http.StatusOK, map[string]string{"status": "sessions_revoked"})
+}
+
+// handleManagedAccountRecoveryKey implements PUT /managed/accounts/
+// {account_id}/recovery-key: the bridge re-key that replaces a managed
+// account's wrapped recovery-key package after ovumcy-managed's own
+// re-authentication, since a managed session can store only a first package.
+// Gated by withManagedBridge; ManagedBridgeService.ReplaceManagedRecoveryKeyPackage
+// owns normalization, the package validation shared with PUT /sync/recovery-key,
+// and the managed-mode scope. The answer carries a status only: the package is
+// ciphertext the caller already holds.
+func (s *Server) handleManagedAccountRecoveryKey(writer http.ResponseWriter, request *http.Request) {
+	var payload managedRecoveryKeyPackageRequest
+	if !decodeJSON(writer, request, &payload, 8<<10) {
+		return
+	}
+
+	err := s.managedBridge.ReplaceManagedRecoveryKeyPackage(request.Context(), request.PathValue("account_id"), services.PutRecoveryKeyPackageInput{
+		Algorithm:            payload.Algorithm,
+		KDF:                  payload.KDF,
+		MnemonicWordCount:    payload.MnemonicWordCount,
+		WrapNonceHex:         payload.WrapNonceHex,
+		WrappedMasterKeyHex:  payload.WrappedMasterKeyHex,
+		PhraseFingerprintHex: payload.PhraseFingerprintHex,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrInvalidManagedAccount):
+			writeError(writer, http.StatusBadRequest, "invalid_managed_account")
+		case errors.Is(err, services.ErrInvalidRecoveryPackage):
+			writeError(writer, http.StatusBadRequest, "invalid_recovery_package")
+		case errors.Is(err, services.ErrManagedAccountNotFound):
+			writeError(writer, http.StatusNotFound, "managed_account_not_found")
+		default:
+			writeError(writer, http.StatusInternalServerError, "internal_error")
+		}
+		return
+	}
+
+	writeJSON(writer, http.StatusOK, map[string]string{"status": "recovery_key_replaced"})
 }
 
 // handleManagedAccountPremium implements POST /managed/accounts/{account_id}
@@ -1750,6 +1791,18 @@ type blobResponse struct {
 	CiphertextBase64 string `json:"ciphertext_base64"`
 	CiphertextSize   int    `json:"ciphertext_size"`
 	UpdatedAt        string `json:"updated_at"`
+}
+
+// managedRecoveryKeyPackageRequest is the bridge re-key body: the package
+// fields of recoveryKeyPackageRequest without the step-up ones, which the
+// bridge does not take (an unknown field is refused).
+type managedRecoveryKeyPackageRequest struct {
+	Algorithm            string `json:"algorithm"`
+	KDF                  string `json:"kdf"`
+	MnemonicWordCount    int    `json:"mnemonic_word_count"`
+	WrapNonceHex         string `json:"wrap_nonce_hex"`
+	WrappedMasterKeyHex  string `json:"wrapped_master_key_hex"`
+	PhraseFingerprintHex string `json:"phrase_fingerprint_hex"`
 }
 
 type recoveryKeyPackageRequest struct {
