@@ -60,9 +60,10 @@ func TestVerifyStepUp(t *testing.T) {
 	}
 }
 
-// Managed accounts carry no password; their sessions come only from the
-// managed bridge, so the step-up must not lock them out.
-func TestVerifyStepUpPassesManagedAccount(t *testing.T) {
+// Managed accounts carry no password, so no step-up passes for them: a session
+// alone must never stand in for the re-authentication. Account deletion maps
+// the refusal to the bridge-only answer and erases nothing.
+func TestVerifyStepUpRefusesManagedAccount(t *testing.T) {
 	store := openTestStore(t)
 	auth := NewAuthService(store, 24*time.Hour)
 	bridge := NewManagedBridgeService(store, auth)
@@ -72,8 +73,18 @@ func TestVerifyStepUpPassesManagedAccount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create managed session: %v", err)
 	}
-	if _, err := verifyStepUp(ctx, store, session.AccountID, ""); err != nil {
-		t.Fatalf("expected a managed account to pass, got %v", err)
+	for _, password := range []string{"", "managed_service_only"} {
+		if _, err := verifyStepUp(ctx, store, session.AccountID, password); !errors.Is(err, ErrManagedStepUp) {
+			t.Fatalf("password %q: expected ErrManagedStepUp, got %v", password, err)
+		}
+	}
+
+	stepUp := StepUp{SessionTokenHash: security.HashToken(session.SessionToken)}
+	if err := auth.DeleteAccount(ctx, session.AccountID, stepUp); !errors.Is(err, ErrManagedAccountDeleteViaBridge) {
+		t.Fatalf("expected ErrManagedAccountDeleteViaBridge, got %v", err)
+	}
+	if _, err := store.FindAccountByID(ctx, session.AccountID); err != nil {
+		t.Fatalf("the managed account must survive a refused delete: %v", err)
 	}
 }
 

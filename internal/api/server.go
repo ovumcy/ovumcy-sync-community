@@ -839,6 +839,10 @@ func (s *Server) handleDeleteAccount(
 	stepUp.TOTPCode = payload.Code
 	err := s.auth.DeleteAccount(request.Context(), account.ID, stepUp)
 	s.settleStepUpAttempt(stepUpSlot, err)
+	if errors.Is(err, services.ErrManagedAccountDeleteViaBridge) {
+		writeError(writer, http.StatusForbidden, "managed_account_delete_via_bridge")
+		return
+	}
 	if err != nil {
 		mapTOTPError(writer, err)
 		return
@@ -1263,14 +1267,22 @@ func (s *Server) handlePutRecoveryKey(
 		writeJSON(writer, http.StatusOK, recoveryKeyPackageResponseFromModel(unchanged))
 		return
 	}
-	stepUpSlot, ok := s.allowStepUpAttempt(writer, account.ID)
-	if !ok {
-		return
+	// A managed account checks no password, so its first put neither waits on
+	// the step-up bucket nor earns refunds from it.
+	checksPassword := account.Mode != "managed"
+	var stepUpSlot security.Reservation
+	if checksPassword {
+		var ok bool
+		if stepUpSlot, ok = s.allowStepUpAttempt(writer, account.ID); !ok {
+			return
+		}
 	}
 	stepUp := stepUpFromRequest(request, payload.CurrentPassword)
 	stepUp.TOTPCode = payload.Code
 	recoveryKeyPackage, err := s.sync.PutRecoveryKeyPackage(request.Context(), account.ID, stepUp, input)
-	s.settleStepUpAttempt(stepUpSlot, err)
+	if checksPassword {
+		s.settleStepUpAttempt(stepUpSlot, err)
+	}
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrInvalidRecoveryPackage):

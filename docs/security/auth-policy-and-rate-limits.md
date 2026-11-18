@@ -50,7 +50,7 @@ authenticated account id; **login** is the lowercased, trimmed login from the re
 | `POST /sync/devices` | session | auth, account | 10/min | 4 KiB |
 | `DELETE /sync/devices/{device_id}` | session (+ current password and TOTP code if enrolled) | auth, account (stable key `sync_devices_remove:<account>`, not the path) | 10/min | 4 KiB, optional |
 | `GET /sync/recovery-key` | session | auth, account | 10/min | none |
-| `PUT /sync/recovery-key` | session + current password (+ TOTP code if enrolled); session alone when the package equals the stored one (no write, no step-up bucket) | auth, account | 10/min | 8 KiB |
+| `PUT /sync/recovery-key` | session + current password (+ TOTP code if enrolled); session alone when the package equals the stored one (no write, no step-up bucket); a managed session stores only a first package, with no password and no step-up bucket | auth, account | 10/min | 8 KiB |
 | `GET /sync/blob` | session | auth, account | 10/min | none |
 | `PUT /sync/blob` | session | auth, account | 10/min | base64 of `MAX_BLOB_BYTES` plus 8 KiB: 22377816 bytes at the default (`encodedBlobRequestLimit`) |
 | `POST /managed/session` | `MANAGED_BRIDGE_TOKEN` bearer; 503 if unset | none (deliberate) | unlimited | 4 KiB |

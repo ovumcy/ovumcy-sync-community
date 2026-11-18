@@ -16,6 +16,10 @@ var ErrRegistrationFailed = errors.New("registration_failed")
 var ErrInvalidCredentials = errors.New("invalid_credentials")
 var ErrUnauthorized = errors.New("unauthorized")
 var ErrInvalidCurrentPassword = errors.New("invalid_current_password")
+
+// ErrManagedAccountDeleteViaBridge refuses a managed session's own account
+// deletion: only the bridge purge erases a managed account.
+var ErrManagedAccountDeleteViaBridge = errors.New("managed_account_delete_via_bridge")
 var ErrNewPasswordMustDiffer = errors.New("new_password_must_differ")
 var ErrWeakNewPassword = errors.New("weak_new_password")
 var ErrInvalidRecoveryCredentials = errors.New("invalid_recovery_credentials")
@@ -608,8 +612,15 @@ func (s *AuthService) RevokeSession(ctx context.Context, sessionToken string) er
 // A TOTP-enrolled account must also present a current code, so a session and
 // password holder alone cannot erase the account. No configured TOTP verifier
 // fails closed.
+//
+// A managed account has no password to re-check, so its session alone cannot
+// erase it (ErrManagedAccountDeleteViaBridge); it is erased only through the
+// bridge purge, after ovumcy-managed's own re-authentication.
 func (s *AuthService) DeleteAccount(ctx context.Context, accountID string, stepUp StepUp) error {
 	account, err := verifyStepUp(ctx, s.store, accountID, stepUp.CurrentPassword)
+	if errors.Is(err, ErrManagedStepUp) {
+		return ErrManagedAccountDeleteViaBridge
+	}
 	if err == nil {
 		err = verifyStepUpCode(ctx, s.totpChallenges, account, stepUp.TOTPCode)
 	}

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -50,4 +51,41 @@ func TestPutRecoveryKeyManagedSessionCannotOverwrite(t *testing.T) {
 
 	performJSONRequest(t, handler, http.MethodPut, "/sync/recovery-key",
 		recoveryKeyBody(strings.ToUpper(packageA), nil), session.SessionToken, http.StatusOK)
+}
+
+// A managed first put checks no password, so the account's step-up bucket,
+// spent by a wrong password on another route, does not refuse it.
+func TestPutRecoveryKeyManagedFirstPutSkipsTheStepUpBucket(t *testing.T) {
+	handler := newTestServerWithOptions(t, serverTestOptions{authRateLimitCount: 1})
+
+	sessionResponse := performJSONRequest(t, handler, http.MethodPost, "/managed/session",
+		map[string]string{"account_id": "managedacct7788"}, "test-managed-bridge-token", http.StatusOK)
+	var session struct {
+		SessionToken string `json:"session_token"`
+	}
+	decodeResponse(t, sessionResponse.Body.Bytes(), &session)
+
+	changePassword := func(path string) int {
+		body := `{"current_password":"wrong password here"}`
+		if path == "/auth/change-password" {
+			body = `{"current_password":"wrong password here","new_password":"another correct horse battery"}`
+		}
+		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Authorization", "Bearer "+session.SessionToken)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		return recorder.Code
+	}
+	if code := changePassword("/auth/change-password"); code < 400 || code == http.StatusTooManyRequests {
+		t.Fatalf("expected the wrong password refused on its own, got %d", code)
+	}
+	// Another step-up route with a fresh per-route bucket: only the shared
+	// step-up bucket can refuse it now.
+	if code := changePassword("/auth/recovery-code/regenerate"); code != http.StatusTooManyRequests {
+		t.Fatalf("expected the spent step-up bucket to refuse, got %d", code)
+	}
+
+	performJSONRequest(t, handler, http.MethodPut, "/sync/recovery-key",
+		recoveryKeyBody(strings.Repeat("e", 16), nil), session.SessionToken, http.StatusOK)
 }

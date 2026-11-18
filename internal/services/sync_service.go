@@ -359,8 +359,14 @@ func (s *SyncService) PutRecoveryKeyPackage(
 		return existing, nil
 	}
 
-	account, err := verifyStepUp(ctx, s.store, accountID, stepUp.CurrentPassword)
+	account, err := findStepUpAccount(ctx, s.store, accountID)
 	if err != nil {
+		return models.RecoveryKeyPackage{}, err
+	}
+	if account.Mode == "managed" {
+		return s.putFirstManagedRecoveryKeyPackage(ctx, account, recoveryKeyPackage, stepUp)
+	}
+	if err := checkStepUpPassword(account, stepUp.CurrentPassword); err != nil {
 		return models.RecoveryKeyPackage{}, err
 	}
 
@@ -376,23 +382,41 @@ func (s *SyncService) PutRecoveryKeyPackage(
 		return models.RecoveryKeyPackage{}, err
 	}
 
-	if account.Mode == "managed" {
-		stored, err := s.store.InsertRecoveryKeyPackageForSession(ctx, recoveryKeyPackage, stepUp.SessionTokenHash)
-		if errors.Is(err, db.ErrConflict) {
-			return models.RecoveryKeyPackage{}, ErrManagedRecoveryKeyOverwrite
-		}
-		if err != nil {
-			return models.RecoveryKeyPackage{}, stepUpWriteError(err)
-		}
-		return stored, nil
-	}
-
 	stored, err := s.store.UpsertRecoveryKeyPackageForSession(
 		ctx,
 		recoveryKeyPackage,
 		account.PasswordHash,
 		stepUp.SessionTokenHash,
 	)
+	if err != nil {
+		return models.RecoveryKeyPackage{}, stepUpWriteError(err)
+	}
+	return stored, nil
+}
+
+// putFirstManagedRecoveryKeyPackage stores a managed account's first package
+// in the transaction that re-checks the caller's session; any stored package,
+// even one written concurrently, refuses the write.
+func (s *SyncService) putFirstManagedRecoveryKeyPackage(
+	ctx context.Context,
+	account models.Account,
+	recoveryKeyPackage models.RecoveryKeyPackage,
+	stepUp StepUp,
+) (models.RecoveryKeyPackage, error) {
+	if err := validateRecoveryKeyPackage(recoveryKeyPackage); err != nil {
+		return models.RecoveryKeyPackage{}, err
+	}
+	recoveryKeyPackage.UpdatedAt = s.now().UTC()
+	// A managed account cannot enroll TOTP (no password passes its step-up);
+	// should one ever hold it, the code is still required.
+	if err := verifyStepUpCode(ctx, s.totpCodes, account, stepUp.TOTPCode); err != nil {
+		return models.RecoveryKeyPackage{}, err
+	}
+
+	stored, err := s.store.InsertRecoveryKeyPackageForSession(ctx, recoveryKeyPackage, stepUp.SessionTokenHash)
+	if errors.Is(err, db.ErrConflict) {
+		return models.RecoveryKeyPackage{}, ErrManagedRecoveryKeyOverwrite
+	}
 	if err != nil {
 		return models.RecoveryKeyPackage{}, stepUpWriteError(err)
 	}
