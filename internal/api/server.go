@@ -176,16 +176,19 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("X-Frame-Options", "DENY")
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
 
+	// Ahead of every limiter, for every method: a cross-site page can send a
+	// body-less POST in no-cors mode, which needs no preflight and passes the
+	// content-type gate below, and it must not spend the victim's per-IP
+	// buckets. Native clients send no Origin.
 	if origin := request.Header.Get("Origin"); origin != "" {
 		writer.Header().Add("Vary", "Origin")
-		if _, ok := s.allowedOrigins[origin]; ok {
-			writer.Header().Set("Access-Control-Allow-Origin", origin)
-			writer.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
-			writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		} else if request.Method == http.MethodOptions {
+		if _, ok := s.allowedOrigins[origin]; !ok {
 			writeError(writer, http.StatusForbidden, "origin_not_allowed")
 			return
 		}
+		writer.Header().Set("Access-Control-Allow-Origin", origin)
+		writer.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 	}
 
 	if request.Method == http.MethodOptions {
