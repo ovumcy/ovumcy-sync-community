@@ -747,10 +747,15 @@ func (s *Store) GetAccountLapsedAt(ctx context.Context, accountID string) (*time
 // listLapsedManagedAccountsSQL filters and orders by exactly the migration
 // 0013 index key, (julianday(lapsed_at), id), and repeats its partial
 // predicate lapsed_at IS NOT NULL; changing one side without the other turns
-// every page back into a full scan and sort.
+// every page back into a full scan and sort. The bare >= term is what lets
+// the cursor bound the seek from below (the planner does not seek on the OR
+// or on a row-value compare over an expression); the zero cursor's empty
+// LapsedAt reads as NULL and falls back to -1, below every readable julianday.
 const listLapsedManagedAccountsSQL = `SELECT id, lapsed_at FROM accounts
-		WHERE mode = 'managed' AND lapsed_at IS NOT NULL AND julianday(lapsed_at) < julianday(?1)
-		  AND (?2 = '' OR julianday(lapsed_at) > julianday(?2) OR (julianday(lapsed_at) = julianday(?2) AND id > ?3))
+		WHERE mode = 'managed' AND lapsed_at IS NOT NULL
+		  AND julianday(lapsed_at) >= COALESCE(julianday(?2), -1)
+		  AND (julianday(lapsed_at) > COALESCE(julianday(?2), -1) OR id > ?3)
+		  AND julianday(lapsed_at) < julianday(?1)
 		ORDER BY julianday(lapsed_at), id LIMIT ?4`
 
 // LapsedCandidate is one row ListLapsedManagedAccountIDs returns. LapsedAt is
