@@ -57,8 +57,8 @@ func TestEmptyBodyNeedsNoContentType(t *testing.T) {
 }
 
 // TestChunkedBodyIsJudgedByItsBytes: an unknown length (chunked) with zero
-// bytes is no body and needs no content type; one with bytes still does, and
-// the peeked byte still reaches the handler.
+// bytes is no body and needs no content type; one with bytes still does, and a
+// chunked JSON body reaches the handler whole.
 func TestChunkedBodyIsJudgedByItsBytes(t *testing.T) {
 	handler := newTestServer(t)
 	send := func(body string, contentType string) int {
