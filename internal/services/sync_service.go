@@ -31,6 +31,12 @@ var ErrStaleGeneration = errors.New("stale_generation")
 var ErrInvalidRecoveryPackage = errors.New("invalid_recovery_package")
 var ErrRecoveryPackageNotFound = errors.New("recovery_package_not_found")
 
+// ErrManagedRecoveryKeyOverwrite refuses a managed session's change to a
+// stored recovery key: the account has no password to step up with, so the
+// session alone would be enough; ovumcy-managed re-keys after its own
+// re-authentication.
+var ErrManagedRecoveryKeyOverwrite = errors.New("managed_recovery_key_overwrite")
+
 var checksumPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var lowercaseHexPattern = regexp.MustCompile(`^[a-f0-9]+$`)
 
@@ -333,6 +339,9 @@ func (s *SyncService) GetBlob(ctx context.Context, accountID string) (models.Enc
 //
 // A package equal to the stored one after normalization is answered with the
 // stored row and needs no step-up (UnchangedRecoveryKeyPackage).
+//
+// A managed account has no password, so its session may store a first
+// package but never replace one (ErrManagedRecoveryKeyOverwrite).
 func (s *SyncService) PutRecoveryKeyPackage(
 	ctx context.Context,
 	accountID string,
@@ -378,6 +387,17 @@ func (s *SyncService) PutRecoveryKeyPackage(
 	// code's step.
 	if err := verifyStepUpCode(ctx, s.totpCodes, account, stepUp.TOTPCode); err != nil {
 		return models.RecoveryKeyPackage{}, err
+	}
+
+	if account.Mode == "managed" {
+		stored, err := s.store.InsertRecoveryKeyPackageForSession(ctx, recoveryKeyPackage, stepUp.SessionTokenHash)
+		if errors.Is(err, db.ErrConflict) {
+			return models.RecoveryKeyPackage{}, ErrManagedRecoveryKeyOverwrite
+		}
+		if err != nil {
+			return models.RecoveryKeyPackage{}, stepUpWriteError(err)
+		}
+		return stored, nil
 	}
 
 	stored, err := s.store.UpsertRecoveryKeyPackageForSession(

@@ -1472,8 +1472,11 @@ paths:
         derives or sees the unwrapped key. Requires the current password and,
         on a TOTP-enrolled account, a current TOTP `code` (single-use, counted
         toward the step-up TOTP budget; a missing code is not counted), so
-        a stolen session alone cannot overwrite the owner's recovery path;
-        managed accounts (no password) are exempt.
+        a stolen session alone cannot overwrite the owner's recovery path.
+        A managed account has no password: its session may store a first
+        package, but a package that differs from a stored one is refused with
+        `403 managed_recovery_key_overwrite` and nothing is written — a
+        managed client re-keys through ovumcy-managed.
 
         A package equal to the stored one (after the same trim + lowercase
         normalization, same `mnemonic_word_count`) is a no-op: it needs no
@@ -1520,7 +1523,16 @@ paths:
                 totpReplayed:
                   value: { error: totp_replayed }
         "403":
-          $ref: "#/components/responses/SyncDisabled"
+          description: The account reports `sync_enabled=false`, or a managed session sent a package that differs from the stored one.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                syncDisabled:
+                  value: { error: sync_disabled }
+                managedRecoveryKeyOverwrite:
+                  value: { error: managed_recovery_key_overwrite }
         "415":
           $ref: "#/components/responses/UnsupportedMediaType"
         "429":

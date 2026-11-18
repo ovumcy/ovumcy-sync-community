@@ -1207,6 +1207,8 @@ func (s *Server) handlePutRecoveryKey(
 		switch {
 		case errors.Is(err, services.ErrInvalidRecoveryPackage):
 			writeError(writer, http.StatusBadRequest, "invalid_recovery_package")
+		case errors.Is(err, services.ErrManagedRecoveryKeyOverwrite):
+			writeError(writer, http.StatusForbidden, "managed_recovery_key_overwrite")
 		default:
 			mapTOTPError(writer, err)
 		}
