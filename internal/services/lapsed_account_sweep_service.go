@@ -57,9 +57,10 @@ type lapsedSweepStore interface {
 	DeleteLapsedManagedAccount(ctx context.Context, accountID string, cutoff time.Time) error
 }
 
-// maxConsecutiveLapsedDeleteFailures is how many delete failures in a row
-// (a benign db.ErrNotFound or a success resets the count) end one run: a
-// persistent storage fault — a locked or read-only database — would
+// maxConsecutiveLapsedDeleteFailures is how many store-wide delete failures in
+// a row (a success, a benign db.ErrNotFound or a row-specific failure resets
+// the count) end one run: a persistent storage fault — a locked or read-only
+// database — would
 // otherwise make the run walk every remaining candidate, each attempt
 // possibly waiting out the busy timeout. The candidates stay eligible, so the
 // next scheduled run retries them.
@@ -148,7 +149,9 @@ func (s *LapsedAccountSweepService) WithMaxDeletesPerRun(n int) *LapsedAccountSw
 // and nothing about a failed delete changes the candidate's eligibility for
 // the next scheduled run — until maxConsecutiveLapsedDeleteFailures of them
 // fail in a row, which ends the run with ErrLapsedSweepAborted joined into the
-// error (the failures point at the store, not at one row). The abort adds no
+// error (the failures point at the store, not at one row). Only store-wide
+// failures (db.IsStoreWideFailure) count toward that streak; a row-specific
+// failure is joined into the error, skipped, and resets it. The abort adds no
 // account id or other field to any message.
 //
 // With a per-run cap (WithMaxDeletesPerRun) the run stops before the next
@@ -194,6 +197,13 @@ func (s *LapsedAccountSweepService) Run(ctx context.Context, limit int, dryRun b
 					continue
 				}
 				deleteErrs = append(deleteErrs, fmt.Errorf("delete lapsed account: %w", err))
+				if !db.IsStoreWideFailure(err) {
+					// A row-specific failure says nothing about the store: skip
+					// the row and keep going, or permanent failures at the
+					// keyset head would shield every later account from erasure.
+					consecutiveFailures = 0
+					continue
+				}
 				consecutiveFailures++
 				if consecutiveFailures >= maxConsecutiveLapsedDeleteFailures {
 					return result, errors.Join(append(deleteErrs, ErrLapsedSweepAborted)...)

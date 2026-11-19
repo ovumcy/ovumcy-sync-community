@@ -161,3 +161,49 @@ func TestLapsedAccountSweepServiceDeleteFailureStreakResets(t *testing.T) {
 		t.Fatalf("expected every candidate attempted, got examined=%d deletes=%d", result.Examined, len(store.deleteLog))
 	}
 }
+
+// TestLapsedAccountSweepServiceRowSpecificFailuresAtTheHeadDoNotShieldLaterRows
+// pins the erasure guarantee: rows whose delete fails permanently with a
+// row-specific error, more of them than the abort streak allows, are skipped,
+// and every later lapsed account is still erased in the same run, no abort.
+func TestLapsedAccountSweepServiceRowSpecificFailuresAtTheHeadDoNotShieldLaterRows(t *testing.T) {
+	store := newScriptedSweepStore(20)
+	stuck := 2 * maxConsecutiveLapsedDeleteFailures
+	for _, candidate := range store.candidates[:stuck] {
+		store.outcomes[candidate.ID] = errors.New("FOREIGN KEY constraint failed")
+	}
+
+	result, err := scriptedSweepService(store).Run(context.Background(), 4, false)
+	if errors.Is(err, ErrLapsedSweepAborted) {
+		t.Fatalf("row-specific failures must not abort the run, got %v", err)
+	}
+	if err == nil {
+		t.Fatal("expected the skipped rows' failures to still be reported")
+	}
+	if result.Examined != 20 || result.Deleted != 20-stuck {
+		t.Fatalf("expected 20 examined and %d erased past the stuck head, got %#v", 20-stuck, result)
+	}
+}
+
+// TestLapsedAccountSweepServiceStoreWideFailureStreakStillAborts keeps the
+// abort for each store-wide class: a streak of BUSY, LOCKED, READONLY, IOERR,
+// FULL, or a deadline error from the delete itself ends the run at the limit.
+func TestLapsedAccountSweepServiceStoreWideFailureStreakStillAborts(t *testing.T) {
+	for _, failure := range []error{
+		errors.New("database is locked (5) (SQLITE_BUSY)"),
+		errors.New("database table is locked (6) (SQLITE_LOCKED)"),
+		errors.New("attempt to write a readonly database (8) (SQLITE_READONLY)"),
+		errors.New("disk I/O error (10) (SQLITE_IOERR)"),
+		errors.New("database or disk is full (13) (SQLITE_FULL)"),
+		context.DeadlineExceeded,
+	} {
+		store := newScriptedSweepStore(20)
+		for _, candidate := range store.candidates {
+			store.outcomes[candidate.ID] = failure
+		}
+		_, err := scriptedSweepService(store).Run(context.Background(), 4, false)
+		if !errors.Is(err, ErrLapsedSweepAborted) || len(store.deleteLog) != maxConsecutiveLapsedDeleteFailures {
+			t.Fatalf("%v: expected an abort after %d attempts, got %d attempts, err %v", failure, maxConsecutiveLapsedDeleteFailures, len(store.deleteLog), err)
+		}
+	}
+}
