@@ -22,6 +22,11 @@ info:
     any rate limiter is charged — the `OriginNotAllowed` response, not repeated
     per operation. So does a request without `Origin` whose `Sec-Fetch-Site` is
     `cross-site` or `same-site`, except on `/healthz`, `/readyz` and `/metrics`.
+
+    When `ALLOWED_HOSTS` is set, a request whose `Host` (port ignored) is not
+    listed, is not an IP literal and is not `localhost` answers
+    `403 host_not_allowed` ahead of the origin check and every rate limiter —
+    the `HostNotAllowed` response, not repeated per operation.
     A request without either header (native clients, server-to-server callers,
     probes) is not affected.
   license:
@@ -1841,6 +1846,15 @@ components:
           examples:
             originNotAllowed:
               value: { error: origin_not_allowed }
+    HostNotAllowed:
+      description: The server has `ALLOWED_HOSTS` set and the request's `Host` (port ignored, ASCII case-insensitive, one trailing dot dropped) is not in it, is not an IP literal and is not `localhost`. Answered on every route and method ahead of the origin check and every rate limiter.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            hostNotAllowed:
+              value: { error: host_not_allowed }
 
   schemas:
     ErrorResponse:

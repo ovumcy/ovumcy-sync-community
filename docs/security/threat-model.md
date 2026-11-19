@@ -60,7 +60,8 @@ the strength of the phrase and the client KDF, which are client concerns and out
 - Mitigation: the service speaks plain HTTP and expects TLS termination in front of it
   (`docs/self-hosting.md`, `deploy/`). Responses carry `Cache-Control: no-store` and
   `X-Content-Type-Options: nosniff` (`internal/api/server.go`). CORS reflects only origins listed in
-  `ALLOWED_ORIGINS`. Server read and write timeouts and a 5 s header timeout are set in
+  `ALLOWED_ORIGINS`; with `ALLOWED_HOSTS` set (off by default), a request for any other name-based `Host` is
+  refused, which closes DNS rebinding; an IP-literal or `localhost` Host always passes. Server read and write timeouts and a 5 s header timeout are set in
   `cmd/ovumcy-sync-community/main.go`; request bodies are bounded with `http.MaxBytesReader`.
 - Residual: without TLS at the proxy, bearer tokens and passwords cross the network in clear. Blob
   contents remain ciphertext either way, but metadata and credentials do not.

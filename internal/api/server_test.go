@@ -1675,6 +1675,7 @@ func newTestServer(t *testing.T, allowedOrigins ...string) http.Handler {
 
 type serverTestOptions struct {
 	allowedOrigins     []string
+	allowedHosts       []string
 	maxDevices         int
 	maxBlobBytes       int
 	readinessCheck     func(context.Context) error
@@ -1811,6 +1812,7 @@ func newTestServerWithOptions(t *testing.T, options serverTestOptions) http.Hand
 			MetricsEnabled:      options.enableMetrics,
 			MetricsBearerToken:  options.metricsBearerToken,
 			AllowedOrigins:      options.allowedOrigins,
+			AllowedHosts:        options.allowedHosts,
 			AuthRateLimitCount:  authRateLimitCount,
 			AuthRateLimitWindow: time.Minute,
 			MaxBlobBytes:        maxBlobBytes,

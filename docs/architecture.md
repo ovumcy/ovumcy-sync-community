@@ -64,6 +64,10 @@ is the only place the layers are wired together.
   CORS headers and a `403 origin_not_allowed` on every request, ahead of the rate limiters. So does
   a request without `Origin` that `Sec-Fetch-Site` marks `cross-site` or `same-site`, except on the
   monitoring routes (`/healthz`, `/readyz`, `/metrics`).
+- **Host names.** With `ALLOWED_HOSTS` set, a request whose `Host` is not listed (an IP literal or
+  `localhost` always passes) gets `403 host_not_allowed` ahead of the origin check and the rate
+  limiters: a page on a domain rebound to the server's address (DNS rebinding) sends same-origin
+  requests without `Origin`, and only the `Host` still names that domain.
 
 ## Request lifecycle
 

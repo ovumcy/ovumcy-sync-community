@@ -78,6 +78,28 @@ func TestRunHealthcheckProbesTheBoundAddress(t *testing.T) {
 	}
 }
 
+// A BIND_ADDR name need not be in ALLOWED_HOSTS; the probe sends a Host the
+// server's host check always accepts.
+func TestRunHealthcheckSendsLocalhostForANamedBindAddr(t *testing.T) {
+	var gotHost string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHost = r.Host
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	_, port, _ := net.SplitHostPort(server.Listener.Addr().String())
+
+	if err := runHealthcheck(net.JoinHostPort("localhost", port), time.Second); err != nil {
+		t.Fatalf("probe failed: %v", err)
+	}
+	if gotHost != "localhost" {
+		t.Fatalf("Host = %q, want localhost", gotHost)
+	}
+	if got := healthcheckHostHeader("127.0.0.1"); got != "" {
+		t.Fatalf("an IP target must keep its own Host, got %q", got)
+	}
+}
+
 func TestRunHealthcheckAcceptsZonedIPv6Host(t *testing.T) {
 	err := runHealthcheck("[fe80::1%nonexistent0]:1", 200*time.Millisecond)
 	if err != nil && strings.Contains(err.Error(), "invalid URL") {
