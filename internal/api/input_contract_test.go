@@ -1,8 +1,11 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -118,6 +121,94 @@ func TestManagedBridgeBodiesNeedJSONContentType(t *testing.T) {
 	}
 	if got := send(http.MethodDelete, "/managed/accounts/managedacct1234", "", ""); got == http.StatusUnsupportedMediaType {
 		t.Fatalf("bodiless purge: status 415, want the route's own answer")
+	}
+}
+
+// TestEveryRegisteredRouteGatesANonJSONBody pins the 415 content-type gate for
+// every route the server registers. The route set is read from the
+// registrations in server.go, so a route added later is covered without
+// touching this test. The gate is universal (it runs ahead of the mux), so a
+// body on a route that never reads one is refused too, and the same body
+// declared as JSON is not.
+func TestEveryRegisteredRouteGatesANonJSONBody(t *testing.T) {
+	source, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatalf("read server.go: %v", err)
+	}
+	routes := regexp.MustCompile(`handleRoute\("([A-Z]+) (/[^"]*)"`).FindAllSubmatch(source, -1)
+	if len(routes) == 0 {
+		t.Fatal("found no handleRoute registrations in server.go")
+	}
+	handler := newTestServer(t)
+	wildcard := regexp.MustCompile(`\{[a-z_]+\}`)
+
+	send := func(method string, path string, contentType string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(method, path, strings.NewReader(`{"active":false}`))
+		request.RemoteAddr = "203.0.113.63:4000"
+		request.Header.Set("Authorization", "Bearer test-managed-bridge-token")
+		if contentType != "" {
+			request.Header.Set("Content-Type", contentType)
+		}
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		return recorder
+	}
+
+	for _, route := range routes {
+		method, pattern := string(route[1]), string(route[2])
+		path := wildcard.ReplaceAllString(pattern, "managedacct1234")
+		for _, contentType := range []string{"text/plain", ""} {
+			recorder := send(method, path, contentType)
+			if recorder.Code != http.StatusUnsupportedMediaType {
+				t.Fatalf("%s %s with Content-Type %q: status %d, want 415", method, pattern, contentType, recorder.Code)
+			}
+			var payload struct {
+				Error string `json:"error"`
+			}
+			decodeResponse(t, recorder.Body.Bytes(), &payload)
+			if payload.Error != "unsupported_media_type" {
+				t.Fatalf("%s %s with Content-Type %q: error %q, want unsupported_media_type", method, pattern, contentType, payload.Error)
+			}
+		}
+		if got := send(method, path, "application/json").Code; got == http.StatusUnsupportedMediaType {
+			t.Fatalf("%s %s with a JSON body: status 415, want the route's own answer", method, pattern)
+		}
+	}
+}
+
+// TestUnknownPathAndWrongMethodAreNotJSON pins the transport-level answers the
+// API description states: an unknown path or a method the path does not take
+// gets the standard library's plain-text 404/405 (405 with Allow), and OPTIONS
+// answers a bare 204, none of them the JSON error envelope.
+func TestUnknownPathAndWrongMethodAreNotJSON(t *testing.T) {
+	handler := newTestServer(t)
+	send := func(method string, path string) *httptest.ResponseRecorder {
+		return sendWithContentType(handler, method, path, "", "")
+	}
+
+	notFound := send(http.MethodGet, "/no/such/path")
+	if notFound.Code != http.StatusNotFound {
+		t.Fatalf("unknown path: status %d, want 404", notFound.Code)
+	}
+	wrongMethod := send(http.MethodGet, "/auth/login")
+	if wrongMethod.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET /auth/login: status %d, want 405", wrongMethod.Code)
+	}
+	if allow := wrongMethod.Header().Get("Allow"); !strings.Contains(allow, http.MethodPost) {
+		t.Fatalf("405 Allow = %q, want it to name POST", allow)
+	}
+	for name, recorder := range map[string]*httptest.ResponseRecorder{"404": notFound, "405": wrongMethod} {
+		if contentType := recorder.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "text/plain") {
+			t.Fatalf("%s Content-Type = %q, want text/plain", name, contentType)
+		}
+		if json.Valid(recorder.Body.Bytes()) {
+			t.Fatalf("%s body %q is JSON, want the plain-text stdlib answer", name, recorder.Body.String())
+		}
+	}
+
+	options := send(http.MethodOptions, "/auth/login")
+	if options.Code != http.StatusNoContent || options.Body.Len() != 0 {
+		t.Fatalf("OPTIONS: status %d, body %q, want a bare 204", options.Code, options.Body.String())
 	}
 }
 
