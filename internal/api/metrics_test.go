@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -52,4 +53,36 @@ func TestTOTPMetricsObserversTolerateNilMetrics(t *testing.T) {
 	var metrics *Metrics
 	metrics.ObserveTOTPEnrollmentCompletion("ok")
 	metrics.ObserveTOTPChallengeCompletion("ok")
+}
+
+// A panicking handler is counted: the recovery wrapper sits outside the
+// instrumented mux, so the request is recorded as the 500 it becomes.
+func TestInstrumentCountsAPanickingHandlerAs500(t *testing.T) {
+	metrics := NewMetrics()
+	mux := http.NewServeMux()
+	mux.Handle("GET /boom", metrics.Instrument("boom_route", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("boom")
+	})))
+
+	recorder := httptest.NewRecorder()
+	serveWithPanicRecovery(recorder, httptest.NewRequest(http.MethodGet, "/boom", nil), mux)
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("expected the recovery 500, got %d", recorder.Code)
+	}
+
+	scrape := httptest.NewRecorder()
+	metrics.Handler().ServeHTTP(scrape, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := scrape.Body.String()
+	for _, name := range []string{"http_requests_total", "http_request_duration_seconds_count"} {
+		found := false
+		for _, line := range strings.Split(body, "\n") {
+			if strings.Contains(line, name) && strings.Contains(line, `route="boom_route"`) &&
+				strings.Contains(line, `code="500"`) && strings.HasSuffix(line, " 1") {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("expected a boom_route 500 sample for %s with value 1, got:\n%s", name, body)
+		}
+	}
 }

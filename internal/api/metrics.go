@@ -131,11 +131,22 @@ func (m *Metrics) Instrument(route string, next http.Handler) http.Handler {
 			status:         http.StatusOK,
 		}
 
-		next.ServeHTTP(recorder, request)
+		// Recorded in a defer so a panicking handler is still counted: the
+		// recovery wrapper sits outside the mux and answers the client itself.
+		returned := false
+		defer func() {
+			status := recorder.status
+			if !returned && !recorder.wroteHeader {
+				// The panic reaches the recovery wrapper, which answers 500.
+				status = http.StatusInternalServerError
+			}
+			code := strconv.Itoa(status)
+			m.requestTotal.WithLabelValues(route, request.Method, code).Inc()
+			m.requestDuration.WithLabelValues(route, request.Method, code).Observe(time.Since(start).Seconds())
+		}()
 
-		code := strconv.Itoa(recorder.status)
-		m.requestTotal.WithLabelValues(route, request.Method, code).Inc()
-		m.requestDuration.WithLabelValues(route, request.Method, code).Observe(time.Since(start).Seconds())
+		next.ServeHTTP(recorder, request)
+		returned = true
 	})
 }
 

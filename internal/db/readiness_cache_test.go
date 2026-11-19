@@ -82,6 +82,11 @@ func gateReadiness(store *Store) (runs *atomic.Int32, started chan struct{}, rel
 func TestConcurrentCheckReadyCallersShareOneCheck(t *testing.T) {
 	store, _ := newFileBackedTestStore(t)
 	runs, started, release := gateReadiness(store)
+	// A goroutine scheduled late on a loaded runner must still land inside
+	// the cache window of the completed check.
+	store.ready.mu.Lock()
+	store.ready.ttl = time.Hour
+	store.ready.mu.Unlock()
 
 	var wg sync.WaitGroup
 	errs := make(chan error, 32)
