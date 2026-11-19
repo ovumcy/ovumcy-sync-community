@@ -40,10 +40,12 @@ const maxEntitlementSignalSkew = 5 * time.Minute
 // to k), and a (?i) flag would accept that rune too.
 var managedAccountIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$`)
 
-// normalizeManagedAccountID trims the bridge's account id, refuses one outside
-// the ASCII pattern (ErrInvalidManagedAccount) and lowercases the rest.
+// normalizeManagedAccountID trims ASCII whitespace from the bridge's account
+// id, refuses one outside the ASCII pattern (ErrInvalidManagedAccount) and
+// lowercases the rest. strings.TrimSpace would also strip Unicode spaces
+// (U+00A0, U+3000), letting a non-ASCII spelling name an ASCII account.
 func normalizeManagedAccountID(raw string) (string, error) {
-	accountID := strings.TrimSpace(raw)
+	accountID := strings.Trim(raw, " \t\r\n")
 	if !managedAccountIDPattern.MatchString(accountID) {
 		return "", ErrInvalidManagedAccount
 	}
