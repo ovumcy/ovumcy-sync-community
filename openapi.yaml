@@ -23,12 +23,31 @@ info:
     per operation. So does a request without `Origin` whose `Sec-Fetch-Site` is
     `cross-site` or `same-site`, except on `/healthz`, `/readyz` and `/metrics`.
 
-    When `ALLOWED_HOSTS` is set, a request whose `Host` (port ignored) is not
-    listed, is not an IP literal and is not `localhost` answers
-    `403 host_not_allowed` ahead of the origin check and every rate limiter —
-    the `HostNotAllowed` response, not repeated per operation.
-    A request without either header (native clients, server-to-server callers,
-    probes) is not affected.
+    A request with neither an `Origin` nor a `Sec-Fetch-Site` header (native
+    clients, server-to-server callers, probes) passes those two checks.
+
+    The host gate is separate and has no such exemption. When `ALLOWED_HOSTS`
+    is set, every request whose `Host` (port ignored) is not listed, is not an
+    IP literal and is not `localhost` answers `403 host_not_allowed` ahead of
+    the origin check and every rate limiter — the `HostNotAllowed` response,
+    not repeated per operation. A managed-bridge caller that reaches the
+    server by a name such as a compose service name is therefore refused
+    unless that name is listed.
+
+    Request bodies are JSON and capped: 4 KiB on every body-taking route
+    except the two recovery-key routes (`PUT /sync/recovery-key`,
+    `PUT /managed/accounts/{account_id}/recovery-key`), which allow 8 KiB, and
+    `PUT /sync/blob`, which allows base64(`MAX_BLOB_BYTES`) plus 8 KiB. A body
+    over its cap, malformed JSON, an unknown field, an empty body or data after
+    the first JSON value all answer `400 invalid_json` (the `InvalidJSON`
+    response, listed on each body-taking operation). A request with a body
+    that is not declared `Content-Type: application/json` answers
+    `415 unsupported_media_type` on any route, including routes that read no
+    body, before any rate limiter.
+
+    Outside the JSON error envelope: an unknown path or a method the path does
+    not take gets the standard library's plain-text `404` / `405` (the latter
+    with an `Allow` header), and `OPTIONS` answers a bare `204` with no body.
   license:
     name: PolyForm Noncommercial 1.0.0
     url: https://polyformproject.org/licenses/noncommercial/1.0.0/
@@ -108,11 +127,11 @@ paths:
       summary: Prometheus metrics
       description: |
         Only registered when `METRICS_ENABLED=true`; otherwise every request to
-        this path returns 404. When `METRICS_BEARER_TOKEN` is set, a matching
-        `Authorization: Bearer <token>` header is required.
+        this path returns 404. Startup refuses `METRICS_ENABLED=true` without
+        `METRICS_BEARER_TOKEN`, so a matching `Authorization: Bearer <token>`
+        header is always required.
       security:
         - metricsBearerAuth: []
-        - {}
       responses:
         "200":
           description: Prometheus text exposition format.
@@ -163,12 +182,14 @@ paths:
               schema:
                 $ref: "#/components/schemas/AuthResult"
         "400":
-          description: Invalid login/password, or the login is already taken.
+          description: Invalid login/password, the login is already taken, or the body is not acceptable JSON (`invalid_json`, see `InvalidJSON`).
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               examples:
+                invalidJSON:
+                  value: { error: invalid_json }
                 invalidInput:
                   value: { error: invalid_registration_input }
                 registrationFailed:
@@ -205,6 +226,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AuthResult"
+        "400":
+          $ref: "#/components/responses/InvalidJSON"
         "401":
           description: Unknown login or wrong password.
           content:
@@ -260,12 +283,14 @@ paths:
               schema:
                 $ref: "#/components/schemas/PasswordChangedResponse"
         "400":
-          description: New password fails the strength check, or equals the current password.
+          description: New password fails the strength check, equals the current password, or the body is not acceptable JSON (`invalid_json`, see `InvalidJSON`).
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               examples:
+                invalidJSON:
+                  value: { error: invalid_json }
                 mustDiffer:
                   value: { error: new_password_must_differ }
                 weak:
@@ -323,6 +348,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ForgotPasswordResult"
+        "400":
+          $ref: "#/components/responses/InvalidJSON"
         "401":
           description: Unknown login, or a recovery code that does not match.
           content:
@@ -365,12 +392,14 @@ paths:
               schema:
                 $ref: "#/components/schemas/PasswordResetResult"
         "400":
-          description: New password fails the strength check; the reset token is not consumed and stays usable.
+          description: New password fails the strength check (the reset token is not consumed and stays usable), or the body is not acceptable JSON (`invalid_json`, see `InvalidJSON`).
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               examples:
+                invalidJSON:
+                  value: { error: invalid_json }
                 weak:
                   value: { error: weak_new_password }
         "401":
@@ -415,6 +444,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RecoveryCodeResponse"
+        "400":
+          $ref: "#/components/responses/InvalidJSON"
         "401":
           description: Missing/invalid session, wrong current password, or a missing/wrong/replayed TOTP code on an enrolled account.
           content:
@@ -452,8 +483,9 @@ paths:
       description: |
         Requires the current password. Generates a fresh secret and stores it
         pending (`totp_enabled=false`) until confirmed by
-        `POST /auth/totp/verify`. Fails with 503 if the server has no
-        `FIELD_ENCRYPTION_KEY` configured, or if TOTP is already enabled.
+        `POST /auth/totp/verify`. Fails with 503 `totp_not_configured` if the
+        server has no `FIELD_ENCRYPTION_KEY` configured, and with
+        409 `totp_already_enabled` if TOTP is already enabled.
       security:
         - sessionBearerAuth: []
       requestBody:
@@ -469,6 +501,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TOTPEnrollmentStart"
+        "400":
+          $ref: "#/components/responses/InvalidJSON"
         "401":
           description: Missing/invalid session, or wrong current password.
           content:
@@ -545,6 +579,8 @@ paths:
               examples:
                 enabled:
                   value: { status: totp_enabled, recovery_code: 3f9c2a7e1b6d48c0a5e9f3b27d1c6e84 }
+        "400":
+          $ref: "#/components/responses/InvalidJSON"
         "401":
           description: Missing/invalid session, wrong/expired code, a replayed step, or a pending secret replaced by a newer `POST /auth/totp/enroll` (scan the new one).
           content:
@@ -579,10 +615,16 @@ paths:
             (10 attempts per pending secret, no window restart). A spent
             lifetime budget discards the pending secret: no wait makes it
             usable again, so restart with `POST /auth/totp/enroll`, which
-            needs the password.
+            needs the password (a retry without restarting answers
+            409 `totp_enrollment_not_started`).
           headers:
             Retry-After:
-              description: Seconds until the caller may retry.
+              description: |
+                Seconds until the caller may retry: the seconds left in the spent
+                `AUTH_RATE_LIMIT_WINDOW` (at most 60 by default) on a request rate-limit
+                refusal, 1 to 900 (the end of the spent window) on a spent
+                enrollment budget. The lifetime-budget refusal also carries
+                `Retry-After: 1`, but no wait helps there.
               schema:
                 type: string
                 example: "60"
@@ -644,6 +686,8 @@ paths:
               examples:
                 disabled:
                   value: { status: totp_disabled }
+        "400":
+          $ref: "#/components/responses/InvalidJSON"
         "401":
           description: Missing/invalid session, wrong current password, wrong/expired code, or a replayed step.
           content:
@@ -726,6 +770,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AuthResult"
+        "400":
+          $ref: "#/components/responses/InvalidJSON"
         "401":
           description: Unknown/expired/burnt challenge, or a wrong/replayed code.
           content:
@@ -815,6 +861,8 @@ paths:
                   value: { error: unauthorized }
         "429":
           $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
   /account:
     delete:
@@ -833,7 +881,10 @@ paths:
         session alone cannot erase the account. A managed account has no password, so a
         managed session is refused with `403 managed_account_delete_via_bridge`;
         it is erased only through `DELETE /managed/accounts/{account_id}`.
-        Idempotent: a retry after a successful delete still reports success.
+        Not idempotent for the same bearer token: the account's sessions are
+        deleted with it, so a retry after a successful delete answers
+        `401 unauthorized`; a client that sees that after sending the delete
+        should treat the account as gone.
       security:
         - sessionBearerAuth: []
       requestBody:
@@ -844,7 +895,7 @@ paths:
               $ref: "#/components/schemas/AccountDeleteRequest"
       responses:
         "200":
-          description: Account and all owned data erased (or already gone).
+          description: Account and all owned data erased. A retry with the same token answers 401, not 200.
           content:
             application/json:
               schema:
@@ -853,7 +904,7 @@ paths:
                 deleted:
                   value: { status: account_deleted }
         "400":
-          description: Missing or malformed JSON body.
+          description: The body is not acceptable JSON — missing, malformed, an unknown field, trailing data or over 4 KiB (see `InvalidJSON`). Not reached by a managed session, which gets 403 first.
           content:
             application/json:
               schema:
@@ -936,12 +987,14 @@ paths:
               schema:
                 $ref: "#/components/schemas/AuthResult"
         "400":
-          description: account_id fails the managed-account id pattern, or names an existing non-managed account.
+          description: account_id fails the managed-account id pattern, names an existing non-managed account, or the body is not acceptable JSON (`invalid_json`, see `InvalidJSON`).
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               examples:
+                invalidJSON:
+                  value: { error: invalid_json }
                 invalidManagedAccount:
                   value: { error: invalid_managed_account }
         "409":
@@ -1035,6 +1088,8 @@ paths:
               examples:
                 unauthorized:
                   value: { error: unauthorized }
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "500":
           $ref: "#/components/responses/InternalError"
         "503":
@@ -1121,25 +1176,27 @@ paths:
               $ref: "#/components/schemas/ManagedAccountPremiumRequest"
       responses:
         "200":
-          description: Lapse signal processed (recorded, retracted, already in that state, or the account does not exist here and nothing was stored).
+          description: Lapse signal processed (recorded, retracted, already in that state, or the account does not exist here and nothing was stored). `lapse_recorded` is also the answer for an absent account, where it is a no-op that stores nothing — the status does not prove a lapse was recorded.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/StatusResponse"
               examples:
                 lapseRecorded:
-                  summary: active=false
+                  summary: active=false (also answered, as a no-op, for an account this server does not hold)
                   value: { status: lapse_recorded }
                 lapseCleared:
                   summary: active=true
                   value: { status: lapse_cleared }
         "400":
-          description: "account_id fails the managed-account id pattern, or the signal is invalid (`active` missing or null, `as_of` missing, or an `as_of` before the Unix epoch or more than 5 minutes ahead of this server's clock)."
+          description: "account_id fails the managed-account id pattern (`invalid_managed_account`); the signal is invalid (`invalid_entitlement_signal`: `active` missing or null, `as_of` missing, or an `as_of` before the Unix epoch or more than 5 minutes ahead of this server's clock); or the body is not acceptable JSON (`invalid_json`, see `InvalidJSON`) — an `as_of` that is not RFC 3339 is `invalid_json`, not `invalid_entitlement_signal`."
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               examples:
+                invalidJSON:
+                  value: { error: invalid_json }
                 invalidManagedAccount:
                   value: { error: invalid_managed_account }
                 invalidEntitlementSignal:
@@ -1313,7 +1370,7 @@ paths:
                 replaced:
                   value: { status: recovery_key_replaced }
         "400":
-          description: account_id fails the managed-account id pattern, the body is malformed or carries an unknown field, or the package fails validation.
+          description: account_id fails the managed-account id pattern, the body is not acceptable JSON (malformed, an unknown field, trailing data or over 8 KiB; `invalid_json`, see `InvalidJSON`), or the package fails validation.
           content:
             application/json:
               schema:
@@ -1401,12 +1458,14 @@ paths:
               schema:
                 $ref: "#/components/schemas/Device"
         "400":
-          description: device_id shorter than 8 characters, or device_label shorter than 2 characters (after trimming).
+          description: device_id shorter than 8 bytes or longer than 128, device_label shorter than 2 bytes or longer than 64 (after trimming) (`invalid_device`), or the body is not acceptable JSON (`invalid_json`, see `InvalidJSON`).
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               examples:
+                invalidJSON:
+                  value: { error: invalid_json }
                 invalidDevice:
                   value: { error: invalid_device }
         "401":
@@ -1488,7 +1547,7 @@ paths:
                 removed:
                   value: { status: removed }
         "400":
-          description: Empty device_id, or a malformed JSON body.
+          description: Empty device_id, or a body that is not acceptable JSON (`invalid_json`, see `InvalidJSON`; an empty body is accepted here and means no step-up fields).
           content:
             application/json:
               schema:
@@ -1615,12 +1674,14 @@ paths:
               schema:
                 $ref: "#/components/schemas/RecoveryKeyPackageResponse"
         "400":
-          description: Package fails format validation (algorithm, KDF, mnemonic word count, or hex field length/format).
+          description: Package fails format validation (algorithm, KDF, mnemonic word count, or hex field length/format; `invalid_recovery_package`), or the body is not acceptable JSON (`invalid_json`, see `InvalidJSON`; the cap here is 8 KiB).
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               examples:
+                invalidJSON:
+                  value: { error: invalid_json }
                 invalidPackage:
                   value: { error: invalid_recovery_package }
         "401":
@@ -1725,12 +1786,15 @@ paths:
               schema:
                 $ref: "#/components/schemas/BlobResponse"
         "400":
-          description: Non-positive schema_version/generation, empty ciphertext, oversized ciphertext, malformed checksum_sha256, a checksum that does not match the ciphertext, or ciphertext_base64 that is not valid base64.
+          description: |
+            `invalid_blob`: non-positive schema_version/generation, a generation more than 15 minutes ahead of server time, empty ciphertext, ciphertext over `MAX_BLOB_BYTES`, malformed checksum_sha256, or a checksum that does not match the ciphertext. `invalid_ciphertext`: ciphertext_base64 is not valid base64. `invalid_json`: the body is not acceptable JSON (see `InvalidJSON`); an oversize request body (over base64(`MAX_BLOB_BYTES`) plus 8 KiB) answers `invalid_json`, while a body inside that cap whose decoded ciphertext is over `MAX_BLOB_BYTES` answers `invalid_blob`.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               examples:
+                invalidJSON:
+                  value: { error: invalid_json }
                 invalidBlob:
                   value: { error: invalid_blob }
                 invalidCiphertext:
@@ -1781,9 +1845,9 @@ components:
       scheme: bearer
       bearerFormat: METRICS_BEARER_TOKEN
       description: |
-        Optional static credential configured via METRICS_BEARER_TOKEN. Only
-        enforced when that variable is set; otherwise GET /metrics is
-        reachable by anyone once METRICS_ENABLED=true.
+        Static credential configured via METRICS_BEARER_TOKEN, required
+        whenever METRICS_ENABLED=true (startup refuses the combination
+        without it).
 
   responses:
     Unauthorized:
@@ -1805,10 +1869,19 @@ components:
             syncDisabled:
               value: { error: sync_disabled }
     RateLimited:
-      description: "Per-route auth rate limit exceeded (per-IP, per-account, and/or per-login-identifier depending on the route). Response includes a `Retry-After: 60` header."
+      description: |
+        Per-route auth rate limit exceeded (per-IP, per-account, and/or
+        per-login-identifier depending on the route), or a TOTP attempt budget
+        spent. The `Retry-After` value depends on the limiter: the seconds left in
+        the spent `AUTH_RATE_LIMIT_WINDOW` (at most 60 by default) on the
+        path-and-address / per-account request limiters, and 1 to 900 seconds
+        (the end of the spent budget's fixed 15-minute window) on a TOTP-budget
+        refusal. On `POST /auth/totp/verify` a spent per-secret lifetime budget
+        also carries `Retry-After: 1`, but no wait helps: the pending secret is
+        discarded and enrollment must restart.
       headers:
         Retry-After:
-          description: Seconds until the caller may retry.
+          description: Seconds until the caller may retry (the rest of the request-limit window, at most 60 by default, or 1 to 900 on a TOTP-budget refusal; see the response description).
           schema:
             type: string
             example: "60"
@@ -1828,6 +1901,15 @@ components:
           examples:
             internalError:
               value: { error: internal_error }
+    InvalidJSON:
+      description: "The request body is not acceptable JSON: malformed, an unknown field, an empty body, data after the first JSON value, or larger than the route's cap (4 KiB; 8 KiB on the recovery-key routes; base64(`MAX_BLOB_BYTES`) plus 8 KiB on `PUT /sync/blob`). A field of the wrong type, including a non-RFC 3339 `as_of`, is `invalid_json` too."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            invalidJSON:
+              value: { error: invalid_json }
     UnsupportedMediaType:
       description: "The request carries a body that is not declared `Content-Type: application/json` (parameters such as `charset` are allowed). Checked before any rate limiter, so the refused request spends no bucket. A request without a body needs no content type."
       content:
@@ -1884,7 +1966,7 @@ components:
         login:
           type: string
           maxLength: 254
-          description: Normalized (lowercased, trimmed) server-side; on registration it must be 3 to 254 bytes after normalizing (longer → 400 `invalid_registration_input`), and the `managed:` prefix is reserved and rejected. Login does not re-check the length, so an account registered before the cap keeps working.
+          description: Counted in bytes (UTF-8), not characters; `maxLength` is kept as a hint and understates multi-byte input. Normalized (lowercased, trimmed) server-side; on registration it must be 3 to 254 bytes after normalizing (longer → 400 `invalid_registration_input`), and the `managed:` prefix is reserved and rejected. Login does not re-check the length, so an account registered before the cap keeps working.
         password:
           type: string
           format: password
@@ -1949,7 +2031,7 @@ components:
         current_password:
           type: string
           format: password
-          description: Required for self-hosted accounts; ignored for managed accounts.
+          description: Required for self-hosted accounts. A managed session is refused with 403 before the body is read.
         code:
           type: string
           description: Current 6-digit TOTP code. Required when the account has TOTP enabled; ignored otherwise.
@@ -2056,7 +2138,7 @@ components:
 
     AuthTOTPChallenge:
       type: object
-      description: Present on AuthResult only when password verification succeeded but the account has TOTP enabled; session fields are absent in that case.
+      description: Present on AuthResult only when password verification succeeded but the account has TOTP enabled. The session fields are then emitted empty (`session_token` is `""`, `session_expires_at` is the zero time), not absent.
       properties:
         challenge_id:
           type: string
@@ -2072,22 +2154,26 @@ components:
         Returned by register, login, the TOTP login challenge, and the
         managed-bridge session endpoint. Either the session_token/
         session_expires_at pair is populated, or totp_challenge is populated
-        (login only) — never both.
+        (login only) — never both. `session_token` and `session_expires_at`
+        are always emitted: on a TOTP challenge they are `""` and
+        `0001-01-01T00:00:00Z`, so a client must discriminate on the presence
+        of `totp_challenge`, not on the presence of the session fields.
       properties:
         account_id:
           type: string
         session_token:
           type: string
-          description: "Opaque bearer token for Authorization: Bearer <token>. Empty when totp_challenge is present."
+          description: "Opaque bearer token for Authorization: Bearer <token>. Empty string when totp_challenge is present."
         session_expires_at:
           type: string
           format: date-time
+          description: Session expiry. The zero time `0001-01-01T00:00:00Z` when totp_challenge is present.
         recovery_code:
           type: string
           description: Plaintext account-level recovery code. Populated only on the register response.
         totp_challenge:
           $ref: "#/components/schemas/AuthTOTPChallenge"
-      required: [account_id]
+      required: [account_id, session_token, session_expires_at]
       additionalProperties: false
 
     ForgotPasswordResult:
@@ -2187,11 +2273,11 @@ components:
         device_id:
           type: string
           maxLength: 128
-          description: 8 to 128 bytes after trimming; otherwise 400 `invalid_device`.
+          description: 8 to 128 bytes (UTF-8, not characters; `maxLength` is a hint) after trimming; otherwise 400 `invalid_device`.
         device_label:
           type: string
           maxLength: 64
-          description: 2 to 64 bytes after trimming; otherwise 400 `invalid_device`.
+          description: 2 to 64 bytes (UTF-8, not characters; `maxLength` is a hint) after trimming; otherwise 400 `invalid_device`.
       required: [device_id, device_label]
       additionalProperties: false
 

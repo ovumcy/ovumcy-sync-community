@@ -864,9 +864,9 @@ func (s *Server) handleLogout(writer http.ResponseWriter, request *http.Request)
 // account is derived exclusively from the authenticated session via
 // s.withAuth — there is no request field the caller can use to name a
 // different account, so one session can never erase another account's data.
-// The service call is idempotent, so a retried request (e.g. a client that
-// did not see the first 200 due to a dropped connection) still reports
-// success instead of surfacing an error for an account that is already gone.
+// The erase is not idempotent for the same bearer token: the account's
+// sessions are deleted with it, so a retry after a dropped first 200 answers
+// 401 unauthorized, which a client treats as "the account is gone".
 //
 // A managed account has no password to re-check, so a session alone would be
 // enough to erase it; its deletion goes only through the bridge purge
