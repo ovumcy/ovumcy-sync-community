@@ -1680,11 +1680,13 @@ type serverTestOptions struct {
 	maxBlobBytes       int
 	readinessCheck     func(context.Context) error
 	authRateLimitCount int
-	trustedProxyCIDRs  []string
-	enableMetrics      bool
-	metricsBearerToken string
-	disableManaged     bool
-	enableTOTP         bool
+	// authRateLimitWindow overrides the one-minute default window.
+	authRateLimitWindow time.Duration
+	trustedProxyCIDRs   []string
+	enableMetrics       bool
+	metricsBearerToken  string
+	disableManaged      bool
+	enableTOTP          bool
 	// store, when non-nil, is used instead of opening a private in-memory
 	// database. The caller owns its lifecycle (open, migrations, close). This
 	// lets a test share one database between two server instances or keep the
@@ -1768,6 +1770,10 @@ func newTestServerWithOptions(t *testing.T, options serverTestOptions) http.Hand
 		maxBlobBytes = 16 << 20
 	}
 	authRateLimitCount := options.authRateLimitCount
+	authRateLimitWindow := options.authRateLimitWindow
+	if authRateLimitWindow == 0 {
+		authRateLimitWindow = time.Minute
+	}
 	if authRateLimitCount == 0 {
 		authRateLimitCount = 10
 	}
@@ -1814,7 +1820,7 @@ func newTestServerWithOptions(t *testing.T, options serverTestOptions) http.Hand
 			AllowedOrigins:      options.allowedOrigins,
 			AllowedHosts:        options.allowedHosts,
 			AuthRateLimitCount:  authRateLimitCount,
-			AuthRateLimitWindow: time.Minute,
+			AuthRateLimitWindow: authRateLimitWindow,
 			MaxBlobBytes:        maxBlobBytes,
 			ReadinessCheck:      options.readinessCheck,
 			TrustedProxyCIDRs:   options.trustedProxyCIDRs,

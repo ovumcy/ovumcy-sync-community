@@ -4,8 +4,32 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
+	"time"
 )
+
+// TestRetryAfterFollowsTheConfiguredWindow pins that a path:IP limiter 429
+// carries the seconds left in AUTH_RATE_LIMIT_WINDOW, not a fixed 60: with a
+// five-minute window the header is between 61 and 300.
+func TestRetryAfterFollowsTheConfiguredWindow(t *testing.T) {
+	handler := newTestServerWithOptions(t, serverTestOptions{
+		authRateLimitCount:  1,
+		authRateLimitWindow: 5 * time.Minute,
+	})
+
+	body := map[string]string{"login": "nobody@example.com", "password": "wrong-password-1"}
+	performJSONRequest(t, handler, http.MethodPost, "/auth/login", body, "", http.StatusUnauthorized)
+	response := performJSONRequest(t, handler, http.MethodPost, "/auth/login", body, "", http.StatusTooManyRequests)
+
+	seconds, err := strconv.Atoi(response.Header().Get("Retry-After"))
+	if err != nil {
+		t.Fatalf("Retry-After is not an integer: %q", response.Header().Get("Retry-After"))
+	}
+	if seconds <= 60 || seconds > 300 {
+		t.Fatalf("Retry-After = %d, want within (60, 300] for a 5m window", seconds)
+	}
+}
 
 // TestSyncReadEndpointsAreRateLimitedPerAccount pins that GET /sync/blob and
 // GET /sync/recovery-key pass the same per-account limiter as their PUT

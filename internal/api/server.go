@@ -1625,7 +1625,10 @@ func reserveUnderLimiter(limiter *security.RateLimiter, writer http.ResponseWrit
 		return slot, true
 	}
 
-	writer.Header().Set("Retry-After", "60")
+	// The seconds left in the spent window (rounded up, at least 1), so a
+	// configured AUTH_RATE_LIMIT_WINDOW is reflected rather than a fixed 60.
+	seconds := max(int64(math.Ceil(limiter.RetryAfter(slot).Seconds())), 1)
+	writer.Header().Set("Retry-After", fmt.Sprint(seconds))
 	writeError(writer, http.StatusTooManyRequests, "rate_limited")
 	return slot, false
 }

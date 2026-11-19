@@ -38,6 +38,8 @@ Core tracking in the Ovumcy app still remains local-first. This server is for op
 - reverse proxy forwards to `http://127.0.0.1:8080`
 - the reverse proxy is responsible for certificates, TLS policy, and internet exposure
 
+The app sets no `Strict-Transport-Security` header itself, so the TLS edge must send it (`max-age=31536000`); the example configs under `docs/examples/reverse-proxy` and `deploy/caddy` do.
+
 This service itself does not terminate TLS. Production deployments should not expose raw `http://` directly to the public internet.
 
 ## Recommended Environment Baseline
