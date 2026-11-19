@@ -39,6 +39,8 @@ func TestValidateAllowedOrigins(t *testing.T) {
 		"ftp://app.example.com", "app.example.com", "https://", "http://:80",
 		"https://app.example.com:", "https://app.example.com:99999",
 		"https://app.example.com:80a", "https:// app.example.com",
+		"https://App.example.com", "http://app.example.com:80", "https://app.example.com:443",
+		"https://app.example.com:0443", "HTTPS://app.example.com",
 	} {
 		cfg := validBase()
 		cfg.AllowedOrigins = []string{"https://ok.example.com", bad}

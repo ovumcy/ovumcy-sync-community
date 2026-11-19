@@ -35,10 +35,6 @@ func run(args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	for _, warning := range cfg.Warnings() {
-		log.Printf("config warning: %s", warning)
-	}
-
 	command := "serve"
 	if len(args) > 0 {
 		command = args[0]
@@ -46,6 +42,10 @@ func run(args []string) error {
 
 	switch command {
 	case "serve":
+		// Only at server start: the healthcheck subcommand runs every interval.
+		for _, warning := range cfg.Warnings() {
+			log.Printf("config warning: %s", warning)
+		}
 		return runServe(cfg)
 	case "migrate":
 		return runMigrate(cfg)
