@@ -2410,6 +2410,52 @@ func isUniqueConstraint(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
 }
 
+// SQLite primary result codes that describe the database as a whole rather
+// than the one row a statement touched.
+const (
+	sqliteBusy     = 5
+	sqliteLocked   = 6
+	sqliteReadonly = 8
+	sqliteIOErr    = 10
+	sqliteFull     = 13
+)
+
+// IsStoreWideFailure reports whether err says the store itself is unusable
+// (SQLITE_BUSY, LOCKED, READONLY, IOERR, FULL, or a cancelled / expired
+// context) as opposed to a failure particular to one row, such as a
+// constraint violation. The primary code is read from the extended code, so
+// SQLITE_IOERR_* and SQLITE_BUSY_* variants count too.
+func IsStoreWideFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var driverErr *sqlite.Error
+	if errors.As(err, &driverErr) {
+		switch driverErr.Code() & 0xff {
+		case sqliteBusy, sqliteLocked, sqliteReadonly, sqliteIOErr, sqliteFull:
+			return true
+		}
+		return false
+	}
+	// Errors re-wrapped without the driver type keep SQLite's stable messages.
+	message := err.Error()
+	for _, fragment := range []string{
+		"database is locked",
+		"database table is locked",
+		"attempt to write a readonly database",
+		"disk I/O error",
+		"database or disk is full",
+	} {
+		if strings.Contains(message, fragment) {
+			return true
+		}
+	}
+	return false
+}
+
 func boolToInt(value bool) int {
 	if value {
 		return 1
