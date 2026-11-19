@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -24,6 +25,7 @@ func TestBridgeRoutesRefuseAnIDThatOnlyLowercasingMakesASCII(t *testing.T) {
 		{http.MethodDelete, "/managed/accounts/" + folded, nil},
 		{http.MethodPost, "/managed/accounts/" + folded + "/premium", map[string]any{"active": false, "as_of": asOf}},
 		{http.MethodPost, "/managed/accounts/" + folded + "/sessions/revoke", nil},
+		{http.MethodPut, managedRecoveryKeyPath(folded), recoveryKeyBody(strings.Repeat("d", 16), nil)},
 	} {
 		response := performJSONRequest(t, handler, route.method, route.path, route.body,
 			"test-managed-bridge-token", http.StatusBadRequest)
@@ -36,6 +38,9 @@ func TestBridgeRoutesRefuseAnIDThatOnlyLowercasingMakesASCII(t *testing.T) {
 
 	performJSONRequest(t, handler, http.MethodGet, "/auth/session", nil, sessionToken, http.StatusOK)
 	performJSONRequest(t, handler, http.MethodGet, "/sync/blob", nil, sessionToken, http.StatusOK)
+	if got := storedRecoveryFingerprint(t, handler, sessionToken); got != strings.Repeat("c", 16) {
+		t.Fatalf("expected the refused re-key to leave the package, got fingerprint %q", got)
+	}
 
 	performJSONRequest(t, handler, http.MethodPost, "/managed/session",
 		map[string]string{"account_id": " KELVIN-ACCT "}, "test-managed-bridge-token", http.StatusOK)

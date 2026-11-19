@@ -1286,7 +1286,7 @@ paths:
         - name: account_id
           in: path
           required: true
-          description: Opaque managed-account identifier (lowercased/trimmed server-side); must match `^[a-z0-9][a-z0-9_-]{7,127}$`, the same shape as the `POST /managed/session` account_id.
+          description: Opaque managed-account identifier; trimmed, it must match `^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$` (ASCII only — a non-ASCII id answers 400 `invalid_managed_account` even where lowercasing would fold it into ASCII), then is lowercased server-side, the same shape as the `POST /managed/session` account_id.
           schema:
             type: string
       requestBody:

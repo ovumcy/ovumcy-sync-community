@@ -197,9 +197,9 @@ func (s *ManagedBridgeService) ReplaceManagedRecoveryKeyPackage(
 	accountID string,
 	input PutRecoveryKeyPackageInput,
 ) error {
-	accountID = strings.TrimSpace(strings.ToLower(accountID))
-	if !managedAccountIDPattern.MatchString(accountID) {
-		return ErrInvalidManagedAccount
+	accountID, err := normalizeManagedAccountID(accountID)
+	if err != nil {
+		return err
 	}
 
 	recoveryKeyPackage := normalizeRecoveryKeyPackage(accountID, input)
@@ -208,7 +208,7 @@ func (s *ManagedBridgeService) ReplaceManagedRecoveryKeyPackage(
 	}
 	recoveryKeyPackage.UpdatedAt = s.now().UTC()
 
-	err := s.store.ReplaceManagedRecoveryKeyPackage(ctx, recoveryKeyPackage)
+	err = s.store.ReplaceManagedRecoveryKeyPackage(ctx, recoveryKeyPackage)
 	if errors.Is(err, db.ErrNotFound) {
 		return ErrManagedAccountNotFound
 	}
