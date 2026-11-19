@@ -87,6 +87,8 @@ func TestAllowedHostsMatching(t *testing.T) {
 		"app.localhost",
 		"127.0.0.1.",
 		"127.0.0.1.nip.io",
+		"[sync.example.com]",
+		"[sync.example.com]:443",
 	} {
 		if code := serveWithHost(handler, http.MethodGet, "/healthz", host, nil).Code; code != http.StatusForbidden {
 			t.Fatalf("Host %q: status %d, want 403", host, code)
@@ -103,6 +105,13 @@ func TestAllowedHostsMatching(t *testing.T) {
 	decodeResponse(t, recorder.Body.Bytes(), &payload)
 	if recorder.Code != http.StatusForbidden || payload["error"] != "host_not_allowed" {
 		t.Fatalf("rebound Host with a foreign Origin: status %d, payload %#v", recorder.Code, payload)
+	}
+}
+
+func TestUnparseableAllowedHostsRefuseEveryName(t *testing.T) {
+	handler := newTestServerWithOptions(t, serverTestOptions{allowedHosts: []string{"https://sync.example.com"}})
+	if code := serveWithHost(handler, http.MethodGet, "/healthz", "sync.example.com", nil).Code; code != http.StatusForbidden {
+		t.Fatalf("an allowlist of only invalid entries must refuse names: status %d", code)
 	}
 }
 

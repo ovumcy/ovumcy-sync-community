@@ -232,16 +232,21 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 // Host passes. An IP literal or localhost always passes: DNS rebinding needs a
 // name the attacker controls, and the container healthcheck probes loopback.
 func (s *Server) hostAllowed(hostHeader string) bool {
-	if len(s.allowedHosts) == 0 {
+	if s.allowedHosts == nil {
 		return true
 	}
 	host := hostHeader
 	if name, _, err := net.SplitHostPort(host); err == nil {
 		host = name
+	} else if inner, ok := strings.CutPrefix(host, "["); ok {
+		host = strings.TrimSuffix(inner, "]")
 	}
-	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
 	if _, err := netip.ParseAddr(host); err == nil {
 		return true
+	}
+	// Brackets belong to an IPv6 literal only.
+	if strings.HasPrefix(hostHeader, "[") {
+		return false
 	}
 	name, err := config.ParseAllowedHost(host)
 	if err != nil {
@@ -254,7 +259,12 @@ func (s *Server) hostAllowed(hostHeader string) bool {
 	return ok
 }
 
+// parseAllowedHosts returns nil (no check) only for an empty list: a list
+// whose entries all fail to parse refuses every name rather than none.
 func parseAllowedHosts(values []string) map[string]struct{} {
+	if len(values) == 0 {
+		return nil
+	}
 	result := make(map[string]struct{}, len(values))
 	for _, value := range values {
 		// Validated by config.Validate at startup, as for the proxy CIDRs.
