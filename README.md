@@ -116,7 +116,7 @@ go run ./cmd/ovumcy-sync-community serve
 | `METRICS_ENABLED` | `false` | Enables `GET /metrics` |
 | `METRICS_BEARER_TOKEN` | _(unset)_ | Bearer token for `/metrics` (at least 32 bytes); required when `METRICS_ENABLED=true`, rejected otherwise |
 | `MANAGED_BRIDGE_TOKEN` | _(unset)_ | Enables the managed-bridge endpoints (leave unset for community use) |
-| `ALLOWED_ORIGINS` | _(empty)_ | Explicit CORS allowlist for browser clients |
+| `ALLOWED_ORIGINS` | _(empty)_ | Explicit CORS allowlist for browser clients; each entry exactly `scheme://host[:port]` as a browser sends it, or startup stops |
 | `ALLOWED_HOSTS` | _(empty: any host)_ | Host names the server answers for; any other `Host` gets 403 (DNS-rebinding guard). IP literals and `localhost` always pass |
 | `TRUSTED_PROXY_CIDRS` | _(unset)_ | Reverse-proxy CIDRs whose forwarded client IP is trusted for rate limiting; a public range wider than an IPv4 /12 or an IPv6 /32 fails startup (private, loopback, CGNAT and link-local ranges may be as wide as the range itself) |
 | `FIELD_ENCRYPTION_KEY` | _(unset)_ | Hex key (≥32 bytes / 64 hex chars) that enables the optional TOTP surface |

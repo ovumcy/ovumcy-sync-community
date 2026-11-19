@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/netip"
 	"net/url"
@@ -345,29 +346,35 @@ func (c Config) Validate() error {
 // https scheme: the shape of a browser's Origin header, which the server
 // compares byte for byte. `null` would admit every opaque origin (sandboxed
 // iframes, file: pages); the rest (*, a path, a query, a fragment, userinfo)
-// can never match a real Origin and is a mistyped entry.
+// can never match a real Origin and is a mistyped entry. Browsers serialize
+// the host in lower case and omit a default port, so an upper-case host, an
+// explicit :80 on http or :443 on https, or a zero-padded port is refused too.
 func validateAllowedOrigin(value string) error {
-	shape := fmt.Errorf("must be exactly scheme://host[:port] with an http or https scheme")
-	rest, ok := strings.CutPrefix(value, "http://")
-	if !ok {
+	scheme, rest, ok := "http", "", false
+	if rest, ok = strings.CutPrefix(value, "http://"); !ok {
+		scheme = "https"
 		rest, ok = strings.CutPrefix(value, "https://")
 	}
-	if !ok || rest == "" || strings.ContainsAny(rest, "/?#@*\\ \t") {
-		return shape
+	if !ok || rest == "" || rest != strings.ToLower(rest) || strings.ContainsAny(rest, "/?#@*\\ \t") {
+		return errOriginShape
 	}
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.Hostname() == "" || parsed.Host != rest {
-		return shape
+		return errOriginShape
 	}
 	if port := parsed.Port(); port != "" {
-		if n, convErr := strconv.Atoi(port); convErr != nil || n < 1 || n > 65535 {
-			return shape
+		n, convErr := strconv.Atoi(port)
+		if convErr != nil || n < 1 || n > 65535 || strconv.Itoa(n) != port ||
+			(scheme == "http" && n == 80) || (scheme == "https" && n == 443) {
+			return errOriginShape
 		}
 	} else if strings.HasSuffix(rest, ":") {
-		return shape
+		return errOriginShape
 	}
 	return nil
 }
+
+var errOriginShape = errors.New("must be exactly scheme://host[:port] as a browser sends it: http or https, lower-case host, no default port")
 
 // Warnings lists startup conditions that are accepted but unsafe, one
 // sentence each, never quoting a secret.
