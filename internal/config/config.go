@@ -519,12 +519,16 @@ func ParseAllowedHost(value string) (string, error) {
 		if label == "" {
 			return "", fmt.Errorf("must not contain an empty label")
 		}
-		for i := 0; i < len(label); i++ {
-			c := label[i] | 0x20
-			if !(c >= 'a' && c <= 'z' || label[i] >= '0' && label[i] <= '9' || label[i] == '-' || label[i] == '_') {
+		for i := range len(label) {
+			if !isHostNameByte(label[i]) {
 				return "", fmt.Errorf("must be a bare host name (letters, digits, '-', '_', '.') without scheme, port, path or wildcard")
 			}
 		}
 	}
 	return strings.ToLower(host), nil
+}
+
+func isHostNameByte(b byte) bool {
+	lower := b | 0x20
+	return lower >= 'a' && lower <= 'z' || b >= '0' && b <= '9' || b == '-' || b == '_'
 }
