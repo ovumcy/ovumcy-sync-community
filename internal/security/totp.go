@@ -93,8 +93,10 @@ func GenerateTOTPCode(secret []byte, step int64) string {
 
 // VerifyTOTPCode checks whether code matches the secret at the current step
 // or ±1 step of clock skew. Returns the matching step and true on success;
-// 0 and false on mismatch or malformed input. Comparison is constant-time
-// to keep verification from leaking which step matched through latency.
+// 0 and false on mismatch or malformed input. Each per-step comparison is
+// constant-time, so a wrong digit position leaks nothing. The loop returns at
+// the first matching step, so which step matched can show as a difference of
+// a couple of HMACs in latency; that is not exploitable over the network.
 //
 // The caller MUST follow up with an atomic "claim this step" database
 // update to prevent replay within the same step's lifetime — see

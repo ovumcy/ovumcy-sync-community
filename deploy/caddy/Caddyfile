@@ -1,4 +1,9 @@
 {$SYNC_SITE_ADDRESS} {
+	# The app sets no HSTS itself; the TLS edge must. Add includeSubDomains
+	# only when every subdomain is served over HTTPS, and preload only if you
+	# intend to submit the domain to the preload list (hard to undo).
+	header Strict-Transport-Security "max-age=31536000"
+
 	@metrics path /metrics
 	respond @metrics 403 {
 		body "metrics_not_exposed"

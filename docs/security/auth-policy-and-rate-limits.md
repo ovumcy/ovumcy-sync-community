@@ -14,11 +14,13 @@ numbers at their defaults from `internal/config/config.go`. The claims are pinne
 | `MAX_BLOB_BYTES` | 16 MiB (16777216) |
 | `SESSION_TTL` | 720h |
 
-A throttled request gets `429` with `{"error": "rate_limited"}` and `Retry-After: 60`
-(`allowUnderLimiter`). Each limiter key is prefixed with the request path (or an explicit route key), so
-every route has its own bucket. Limiter state is in memory, per process. The one exception is the
-per-account TOTP code window below: it lives in the database (`totp_failure_windows`), so it survives a
-restart, and its `429` carries a `Retry-After` of the seconds left in the window (1–900).
+A throttled request gets `429` with `{"error": "rate_limited"}` and `Retry-After` set to
+the seconds left in the spent window, rounded up (`allowUnderLimiter`; at most `AUTH_RATE_LIMIT_WINDOW`, so
+60 by default). Each limiter key is prefixed with the request path (or an explicit route key), so
+every route has its own bucket. Limiter state is in memory, per process, and a restart clears it. The
+TOTP code budgets below are in memory too; the one stored count is the per-pending-enrollment lifetime
+count (`totp_failure_windows`, `ReserveTOTPAttempt`), which survives a restart. A TOTP budget's `429`
+carries a `Retry-After` of the seconds left in its window (1–900).
 
 Limiter keys: **IP** is the client IP resolved by `clientIPForRateLimit` (the socket peer, or the
 rightmost non-trusted forwarded address when the peer is in `TRUSTED_PROXY_CIDRS`), an IPv6 client

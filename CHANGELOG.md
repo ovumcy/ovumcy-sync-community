@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`Retry-After` on a per-IP or per-account rate-limit 429 follows `AUTH_RATE_LIMIT_WINDOW`.** The header was always `60`; it is now the seconds left in the spent window (rounded up, at least 1), so it is still `60` at most with the default one-minute window and no longer understates a longer configured one.
+
 - **A cross-site request without an `Origin` header is refused by its fetch metadata.** A cross-site no-cors `GET` (an `<img>` or `<script>` tag pointing at the server) sends no `Origin`, so it passed the origin gate and spent the victim's per-IP session-lookup bucket. A request without `Origin` whose `Sec-Fetch-Site` is `cross-site` or `same-site` now answers 403 `origin_not_allowed` before any rate limiter. Browsers send `Sec-Fetch-Site` only over HTTPS or to localhost, so a server reached over plain HTTP keeps the old exposure. `/healthz`, `/readyz` and `/metrics` are exempt; requests with neither header (native apps, bridge calls, probes) are unaffected.
 
 - **Account deletion refuses a managed account in the service, not only at the transport.** A managed account has no password, so the step-up behind `DELETE /account` passed it and only the transport refused it. That step-up now refuses a managed account, so `AuthService.DeleteAccount` refuses it too (the route still answers 403 `managed_account_delete_via_bridge`), and a managed session's first `PUT /sync/recovery-key` is handled before the step-up, so it no longer draws on (or waits for) the account's step-up bucket.

@@ -10,9 +10,9 @@ http:
       tls:
         certResolver: le
       service: ovumcy-sync
-      middlewares: [ovumcy-sync-body]
+      middlewares: [ovumcy-sync-body, ovumcy-sync-hsts]
 
-    # /metrics and the managed bridge are never public: a higher-priority
+  # /metrics and the managed bridge are never public: a higher-priority
     # router answered by the same service, behind an IP allowlist that matches
     # nothing, giving 403.
     ovumcy-sync-internal:
@@ -31,6 +31,13 @@ http:
           - url: "http://ovumcy-sync-community:8080"
 
   middlewares:
+    # The app sets no HSTS itself; the TLS edge must. Add
+    # stsIncludeSubdomains only when every subdomain is served over HTTPS, and
+    # stsPreload only if you intend to submit the domain to the preload list
+    # (hard to undo).
+    ovumcy-sync-hsts:
+      headers:
+        stsSeconds: 31536000
     # Body limit: 32 MiB (the app accepts about 21.3 MiB for a 16 MiB blob).
     ovumcy-sync-body:
       buffering:

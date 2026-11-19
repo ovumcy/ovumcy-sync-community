@@ -60,6 +60,16 @@ type Reservation struct {
 	windowStart time.Time
 }
 
+// RetryAfter is the time left in the window r was granted in: how long a
+// caller refused by Reserve should wait before its key starts a fresh window.
+// It is never negative.
+func (l *RateLimiter) RetryAfter(r Reservation) time.Duration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return max(r.windowStart.Add(l.window).Sub(l.now().UTC()), 0)
+}
+
 func (l *RateLimiter) Allow(key string) bool {
 	_, allowed := l.Reserve(key)
 	return allowed
