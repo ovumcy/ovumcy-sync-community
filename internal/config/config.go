@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/netip"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -308,6 +309,16 @@ func (c Config) Validate() error {
 			len(token),
 		)
 	}
+	// The two bearer secrets guard different surfaces (the managed bridge and
+	// the metrics scrape); one value for both lets a scraper act as the bridge.
+	if bridge := strings.TrimSpace(c.ManagedBridgeToken); bridge != "" && bridge == strings.TrimSpace(c.MetricsBearerToken) {
+		return fmt.Errorf("MANAGED_BRIDGE_TOKEN and METRICS_BEARER_TOKEN must be different values")
+	}
+	for _, value := range c.AllowedOrigins {
+		if err := validateAllowedOrigin(value); err != nil {
+			return fmt.Errorf("ALLOWED_ORIGINS entry %q is invalid: %w", value, err)
+		}
+	}
 	for _, value := range c.AllowedHosts {
 		if _, err := ParseAllowedHost(value); err != nil {
 			return fmt.Errorf("ALLOWED_HOSTS entry %q is invalid: %w", value, err)
@@ -328,6 +339,53 @@ func (c Config) Validate() error {
 	}
 
 	return nil
+}
+
+// validateAllowedOrigin accepts exactly scheme://host[:port] with an http or
+// https scheme: the shape of a browser's Origin header, which the server
+// compares byte for byte. `null` would admit every opaque origin (sandboxed
+// iframes, file: pages); the rest (*, a path, a query, a fragment, userinfo)
+// can never match a real Origin and is a mistyped entry.
+func validateAllowedOrigin(value string) error {
+	shape := fmt.Errorf("must be exactly scheme://host[:port] with an http or https scheme")
+	rest, ok := strings.CutPrefix(value, "http://")
+	if !ok {
+		rest, ok = strings.CutPrefix(value, "https://")
+	}
+	if !ok || rest == "" || strings.ContainsAny(rest, "/?#@*\\ \t") {
+		return shape
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Hostname() == "" || parsed.Host != rest {
+		return shape
+	}
+	if port := parsed.Port(); port != "" {
+		if n, convErr := strconv.Atoi(port); convErr != nil || n < 1 || n > 65535 {
+			return shape
+		}
+	} else if strings.HasSuffix(rest, ":") {
+		return shape
+	}
+	return nil
+}
+
+// Warnings lists startup conditions that are accepted but unsafe, one
+// sentence each, never quoting a secret.
+func (c Config) Warnings() []string {
+	var warnings []string
+	if len(c.FieldEncryptionKey) > 0 && allZeroBytes(c.FieldEncryptionKey) {
+		warnings = append(warnings, "FIELD_ENCRYPTION_KEY is all zero bytes; generate a real key with `openssl rand -hex 32` and replace it before any account enrolls TOTP")
+	}
+	return warnings
+}
+
+func allZeroBytes(b []byte) bool {
+	for _, v := range b {
+		if v != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func stringFromEnv(name string, fallback string) string {

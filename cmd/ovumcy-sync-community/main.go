@@ -35,6 +35,10 @@ func run(args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
+	for _, warning := range cfg.Warnings() {
+		log.Printf("config warning: %s", warning)
+	}
+
 	command := "serve"
 	if len(args) > 0 {
 		command = args[0]
