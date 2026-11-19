@@ -30,7 +30,17 @@ type Store struct {
 		epoch uint64
 		// check replaces checkReadyUncached in tests.
 		check func(context.Context) error
+		// ttl replaces readinessCacheTTL in tests when non-zero.
+		ttl time.Duration
 	}
+}
+
+// readinessTTL is the cache lifetime; the caller holds s.ready.mu.
+func (s *Store) readinessTTL() time.Duration {
+	if s.ready.ttl > 0 {
+		return s.ready.ttl
+	}
+	return readinessCacheTTL
 }
 
 // readinessCacheTTL is how long one CheckReady answer is reused. /readyz is
@@ -204,7 +214,7 @@ func (s *Store) CheckReady(ctx context.Context) error {
 	}
 	for {
 		s.ready.mu.Lock()
-		if !s.ready.checkedAt.IsZero() && time.Since(s.ready.checkedAt) < readinessCacheTTL {
+		if !s.ready.checkedAt.IsZero() && time.Since(s.ready.checkedAt) < s.readinessTTL() {
 			err := s.ready.err
 			s.ready.mu.Unlock()
 			return err
@@ -217,7 +227,9 @@ func (s *Store) CheckReady(ctx context.Context) error {
 			if check == nil {
 				check = s.checkReadyUncached
 			}
-			go s.runReadinessCheck(context.WithoutCancel(ctx), check, s.ready.epoch, done)
+			// Detached from the first caller entirely: its request values
+			// must not stay alive for the check's timeout.
+			go s.runReadinessCheck(context.Background(), check, s.ready.epoch, done)
 		}
 		s.ready.mu.Unlock()
 
