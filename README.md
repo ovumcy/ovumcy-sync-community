@@ -115,6 +115,7 @@ go run ./cmd/ovumcy-sync-community serve
 | `METRICS_BEARER_TOKEN` | _(unset)_ | Bearer token for `/metrics` (at least 32 bytes); required when `METRICS_ENABLED=true`, rejected otherwise |
 | `MANAGED_BRIDGE_TOKEN` | _(unset)_ | Enables the managed-bridge endpoints (leave unset for community use) |
 | `ALLOWED_ORIGINS` | _(empty)_ | Explicit CORS allowlist for browser clients |
+| `ALLOWED_HOSTS` | _(empty: any host)_ | Host names the server answers for; any other `Host` gets 403 (DNS-rebinding guard). IP literals and `localhost` always pass |
 | `TRUSTED_PROXY_CIDRS` | _(unset)_ | Reverse-proxy CIDRs whose forwarded client IP is trusted for rate limiting; a public range wider than an IPv4 /12 or an IPv6 /32 fails startup (private, loopback, CGNAT and link-local ranges may be as wide as the range itself) |
 | `FIELD_ENCRYPTION_KEY` | _(unset)_ | Hex key (≥32 bytes / 64 hex chars) that enables the optional TOTP surface |
 | `TOTP_ISSUER` | `ovumcy-sync-community` | Issuer label embedded in `otpauth://` provisioning URIs |
@@ -153,6 +154,7 @@ TOTP endpoints stay inactive (`503 totp_not_configured`) until `FIELD_ENCRYPTION
 - Enable `METRICS_ENABLED` only when needed; it requires `METRICS_BEARER_TOKEN`, and `/metrics` should stay internal as well.
 - Leave `MANAGED_BRIDGE_TOKEN` unset unless you operate a separate trusted managed-auth service.
 - Set `ALLOWED_ORIGINS` whenever a browser client calls the server, including one served from the server's own origin; any request with an unlisted `Origin` answers 403.
+- Set `ALLOWED_HOSTS` to the name(s) clients use to reach the server; without it a page on a domain rebound to the server's address can send it same-origin requests.
 
 A ready-to-adapt Caddy edge (which blocks `/metrics` and `/managed/*` publicly). It requires `SYNC_SITE_ADDRESS` — the public hostname Caddy obtains a certificate for — and pins Caddy to a fixed address on its own network (`SYNC_PROXY_IP`, default `172.30.99.10`, inside `SYNC_EDGE_SUBNET`, default `172.30.99.0/24`) and trusts only that address via `TRUSTED_PROXY_CIDRS`. It also drops the base file's `127.0.0.1:8080` host mapping (`ports: !reset []`, Docker Compose 2.24.4 or newer), so nothing on the host reaches the app around Caddy:
 

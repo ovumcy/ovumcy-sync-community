@@ -118,6 +118,13 @@ another site, not an API client: `ALLOWED_ORIGINS` does not apply to it; call th
 Authorization, Content-Type` and methods `GET, POST, PUT, DELETE, OPTIONS`. If the proxy
 answers `OPTIONS` itself, make sure it does not strip these headers.
 
+## Every request rejected: `403 host_not_allowed`
+
+`ALLOWED_HOSTS` is set and the request's `Host` is not in it. Add the name clients use to reach the
+server (port and case do not matter). Behind a reverse proxy that rewrites `Host` (nginx's
+`proxy_set_header Host $proxy_host`, for one), pass the original `Host` through (`$host`) or list
+the name the proxy sends. A request to an IP address or to `localhost` always passes.
+
 ## `/metrics` returns `404 not_found`, `401 unauthorized` or `403`
 
 - `404 not_found` — `METRICS_ENABLED` is not `true`; the endpoint is off by default.

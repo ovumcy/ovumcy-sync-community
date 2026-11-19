@@ -40,8 +40,13 @@ func runHealthcheck(bindAddr string, timeout time.Duration) error {
 	for _, host := range hosts {
 		// url.URL escapes an IPv6 zone ("fe80::1%eth0") that a concatenated string would leave unparseable.
 		target := url.URL{Scheme: "http", Host: net.JoinHostPort(host, port), Path: healthcheckPath}
+		request, reqErr := http.NewRequest(http.MethodGet, target.String(), nil)
+		if reqErr != nil {
+			return reqErr
+		}
+		request.Host = healthcheckHostHeader(host)
 		var resp *http.Response
-		resp, err = client.Get(target.String())
+		resp, err = client.Do(request)
 		var opErr *net.OpError
 		if errors.As(err, &opErr) && opErr.Op == "dial" {
 			continue
@@ -56,6 +61,16 @@ func runHealthcheck(bindAddr string, timeout time.Duration) error {
 		return nil
 	}
 	return err
+}
+
+// healthcheckHostHeader is the Host the probe sends: a BIND_ADDR name need
+// not be in ALLOWED_HOSTS, while an IP literal or localhost always passes it.
+// Empty keeps the dialed IP as the Host.
+func healthcheckHostHeader(dialHost string) string {
+	if net.ParseIP(dialHost) != nil {
+		return ""
+	}
+	return "localhost"
 }
 
 // healthcheckTargets returns the hosts to probe, in order, and the port the

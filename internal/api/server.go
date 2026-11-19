@@ -37,6 +37,7 @@ type Server struct {
 	authLimiter         *security.RateLimiter
 	sessionReadLimiter  *security.RateLimiter
 	allowedOrigins      map[string]struct{}
+	allowedHosts        map[string]struct{}
 	trustedProxyCIDRs   []netip.Prefix
 	maxBlobRequestBytes int64
 	readinessCheck      func(context.Context) error
@@ -48,6 +49,7 @@ type ServerOptions struct {
 	MetricsEnabled      bool
 	MetricsBearerToken  string
 	AllowedOrigins      []string
+	AllowedHosts        []string
 	AuthRateLimitCount  int
 	AuthRateLimitWindow time.Duration
 	MaxBlobBytes        int
@@ -90,6 +92,7 @@ func NewServer(
 			options.AuthRateLimitWindow,
 		),
 		allowedOrigins:      originSet,
+		allowedHosts:        parseAllowedHosts(options.AllowedHosts),
 		trustedProxyCIDRs:   parseTrustedProxyCIDRs(options.TrustedProxyCIDRs),
 		maxBlobRequestBytes: encodedBlobRequestLimit(options.MaxBlobBytes),
 		readinessCheck:      options.ReadinessCheck,
@@ -178,6 +181,14 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("X-Frame-Options", "DENY")
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
 
+	// A page on a domain rebound to this server's address sends same-origin
+	// fetches with no Origin, which the gates below let through; only the Host
+	// still names the attacker's domain.
+	if !s.hostAllowed(request.Host) {
+		writeError(writer, http.StatusForbidden, "host_not_allowed")
+		return
+	}
+
 	// Ahead of every limiter, for every method: a cross-site page can send a
 	// body-less POST in no-cors mode, which needs no preflight and passes the
 	// content-type gate below, and it must not spend the victim's per-IP
@@ -215,6 +226,43 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	request = request.WithContext(services.WithClientKey(request.Context(), s.clientIPForRateLimit(request)))
 	serveWithPanicRecovery(writer, request, s.mux)
+}
+
+// hostAllowed reports a Host the server answers for. With no allowlist every
+// Host passes. An IP literal or localhost always passes: DNS rebinding needs a
+// name the attacker controls, and the container healthcheck probes loopback.
+func (s *Server) hostAllowed(hostHeader string) bool {
+	if len(s.allowedHosts) == 0 {
+		return true
+	}
+	host := hostHeader
+	if name, _, err := net.SplitHostPort(host); err == nil {
+		host = name
+	}
+	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	if _, err := netip.ParseAddr(host); err == nil {
+		return true
+	}
+	name, err := config.ParseAllowedHost(host)
+	if err != nil {
+		return false
+	}
+	if name == "localhost" {
+		return true
+	}
+	_, ok := s.allowedHosts[name]
+	return ok
+}
+
+func parseAllowedHosts(values []string) map[string]struct{} {
+	result := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		// Validated by config.Validate at startup, as for the proxy CIDRs.
+		if name, err := config.ParseAllowedHost(value); err == nil {
+			result[name] = struct{}{}
+		}
+	}
+	return result
 }
 
 func isCrossSiteFetch(request *http.Request) bool {

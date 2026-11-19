@@ -36,6 +36,7 @@ type Config struct {
 	MetricsEnabled      bool
 	MetricsBearerToken  string
 	AllowedOrigins      []string
+	AllowedHosts        []string
 	TrustedProxyCIDRs   []string
 	// FieldEncryptionKey holds the master key used to encrypt privacy-sensitive
 	// account-row fields (currently the TOTP secret); HKDF derives the per-field
@@ -203,6 +204,7 @@ func Load() (Config, error) {
 		MetricsEnabled:             metricsEnabled,
 		MetricsBearerToken:         os.Getenv("METRICS_BEARER_TOKEN"),
 		AllowedOrigins:             csvListFromEnv("ALLOWED_ORIGINS"),
+		AllowedHosts:               csvListFromEnv("ALLOWED_HOSTS"),
 		TrustedProxyCIDRs:          csvListFromEnv("TRUSTED_PROXY_CIDRS"),
 		FieldEncryptionKey:         fieldKey,
 		TOTPIssuer:                 stringFromEnv("TOTP_ISSUER", "ovumcy-sync-community"),
@@ -285,6 +287,11 @@ func (c Config) Validate() error {
 			MinMetricsBearerTokenBytes,
 			len(token),
 		)
+	}
+	for _, value := range c.AllowedHosts {
+		if _, err := ParseAllowedHost(value); err != nil {
+			return fmt.Errorf("ALLOWED_HOSTS entry %q is invalid: %w", value, err)
+		}
 	}
 	for _, value := range c.TrustedProxyCIDRs {
 		if _, err := ParseTrustedProxyCIDR(value); err != nil {
@@ -493,4 +500,31 @@ func ParseTrustedProxyCIDR(value string) (netip.Prefix, error) {
 	}
 
 	return prefix, nil
+}
+
+// ParseAllowedHost normalizes one ALLOWED_HOSTS entry, or a request's Host
+// with its port already stripped: lowercased, one trailing dot dropped. Only
+// DNS-name characters pass, so a scheme, port, path or wildcard is refused
+// rather than silently never matching, and non-ASCII is refused rather than
+// case-folded onto an ASCII name. It is the single parser shared by config
+// validation and the API host check.
+func ParseAllowedHost(value string) (string, error) {
+	// ASCII-only trim and check before lowercasing: strings.TrimSpace strips
+	// U+00A0 and strings.ToLower folds U+212A onto 'k'.
+	host := strings.TrimSuffix(strings.Trim(value, " \t\r\n"), ".")
+	if host == "" {
+		return "", fmt.Errorf("must be a host name")
+	}
+	for label := range strings.SplitSeq(host, ".") {
+		if label == "" {
+			return "", fmt.Errorf("must not contain an empty label")
+		}
+		for i := 0; i < len(label); i++ {
+			c := label[i] | 0x20
+			if !(c >= 'a' && c <= 'z' || label[i] >= '0' && label[i] <= '9' || label[i] == '-' || label[i] == '_') {
+				return "", fmt.Errorf("must be a bare host name (letters, digits, '-', '_', '.') without scheme, port, path or wildcard")
+			}
+		}
+	}
+	return strings.ToLower(host), nil
 }

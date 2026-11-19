@@ -132,6 +132,7 @@ func runServe(cfg config.Config) error {
 				MetricsEnabled:      cfg.MetricsEnabled,
 				MetricsBearerToken:  cfg.MetricsBearerToken,
 				AllowedOrigins:      cfg.AllowedOrigins,
+				AllowedHosts:        cfg.AllowedHosts,
 				AuthRateLimitCount:  cfg.AuthRateLimitCount,
 				AuthRateLimitWindow: cfg.AuthRateLimitWindow,
 				MaxBlobBytes:        cfg.MaxBlobBytes,
