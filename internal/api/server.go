@@ -839,10 +839,6 @@ func (s *Server) handleDeleteAccount(
 	stepUp.TOTPCode = payload.Code
 	err := s.auth.DeleteAccount(request.Context(), account.ID, stepUp)
 	s.settleStepUpAttempt(stepUpSlot, err)
-	if errors.Is(err, services.ErrManagedAccountDeleteViaBridge) {
-		writeError(writer, http.StatusForbidden, "managed_account_delete_via_bridge")
-		return
-	}
 	if err != nil {
 		mapTOTPError(writer, err)
 		return
