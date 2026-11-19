@@ -40,11 +40,7 @@ func runHealthcheck(bindAddr string, timeout time.Duration) error {
 	for _, host := range hosts {
 		// url.URL escapes an IPv6 zone ("fe80::1%eth0") that a concatenated string would leave unparseable.
 		target := url.URL{Scheme: "http", Host: net.JoinHostPort(host, port), Path: healthcheckPath}
-		request, reqErr := http.NewRequest(http.MethodGet, target.String(), nil)
-		if reqErr != nil {
-			return reqErr
-		}
-		request.Host = healthcheckHostHeader(host)
+		request := &http.Request{Method: http.MethodGet, URL: &target, Header: make(http.Header), Host: healthcheckHostHeader(host)}
 		var resp *http.Response
 		resp, err = client.Do(request)
 		var opErr *net.OpError
