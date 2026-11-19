@@ -186,8 +186,9 @@ func TestLapsedAccountSweepServiceRowSpecificFailuresAtTheHeadDoNotShieldLaterRo
 }
 
 // TestLapsedAccountSweepServiceStoreWideFailureStreakStillAborts keeps the
-// abort for each store-wide class: a streak of BUSY, LOCKED, READONLY, IOERR,
-// FULL, or a deadline error from the delete itself ends the run at the limit.
+// abort for every failure that is not row-specific: a streak of BUSY, LOCKED,
+// READONLY, IOERR, FULL, a missing table, a closed store or a deadline error
+// from the delete itself ends the run at the limit.
 func TestLapsedAccountSweepServiceStoreWideFailureStreakStillAborts(t *testing.T) {
 	for _, failure := range []error{
 		errors.New("database is locked (5) (SQLITE_BUSY)"),
@@ -195,6 +196,8 @@ func TestLapsedAccountSweepServiceStoreWideFailureStreakStillAborts(t *testing.T
 		errors.New("attempt to write a readonly database (8) (SQLITE_READONLY)"),
 		errors.New("disk I/O error (10) (SQLITE_IOERR)"),
 		errors.New("database or disk is full (13) (SQLITE_FULL)"),
+		errors.New("no such table: accounts"),
+		errors.New("sql: database is closed"),
 		context.DeadlineExceeded,
 	} {
 		store := newScriptedSweepStore(20)
