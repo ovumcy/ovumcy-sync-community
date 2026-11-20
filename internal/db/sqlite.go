@@ -229,7 +229,7 @@ func (s *Store) CheckReady(ctx context.Context) error {
 			}
 			// Detached from the first caller entirely: its request values
 			// must not stay alive for the check's timeout.
-			go s.runReadinessCheck(context.Background(), check, s.ready.epoch, done)
+			go s.runReadinessCheck(context.Background(), check, s.ready.epoch, done) // #nosec G118 -- detached on purpose, bounded by readinessCheckTimeout
 		}
 		s.ready.mu.Unlock()
 
