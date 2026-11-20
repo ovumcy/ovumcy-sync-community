@@ -241,9 +241,12 @@ func (s *ManagedBridgeService) ReplaceManagedRecoveryKeyPackage(
 // newer lapse. Replaying an identical lapse is a no-op success that never
 // pushes lapsed_at forward.
 //
-// An account this server has never heard of, or one that vanished between
-// the lookup and the write, is a benign no-op success, as in
-// PurgeManagedAccount. A self-hosted account whose id matches gets that same
+// For an account this server has never heard of, or one that vanished
+// between the lookup and the write, the call returns nil (the route answers
+// `lapse_recorded`) and stores nothing: no lapse marker is kept, so a later
+// CreateManagedSession for that id is not refused, and the signal takes
+// effect only if it is sent again once the account exists. PurgeManagedAccount
+// answers an absent account the same way. A self-hosted account whose id matches gets that same
 // nil and is left untouched: the bridge credential must never affect a
 // self-hosted user's account, and the answer must not reveal that one exists.
 func (s *ManagedBridgeService) SetAccountLapseSignal(

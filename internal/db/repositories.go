@@ -1363,28 +1363,6 @@ func (s *Store) ClaimTOTPStep(
 	return affected == 1, nil
 }
 
-func (s *Store) UpsertTOTPChallenge(
-	ctx context.Context,
-	challenge models.TOTPChallenge,
-) error {
-	_, err := s.db.ExecContext(
-		ctx,
-		`
-INSERT INTO totp_challenges (challenge_id_hash, account_id, created_at, expires_at)
-VALUES (?, ?, ?, ?)
-`,
-		challenge.ChallengeIDHash,
-		challenge.AccountID,
-		challenge.CreatedAt.UTC().Format(time.RFC3339Nano),
-		challenge.ExpiresAt.UTC().Format(time.RFC3339Nano),
-	)
-	if err != nil {
-		return fmt.Errorf("insert totp challenge: %w", err)
-	}
-
-	return nil
-}
-
 func (s *Store) FindTOTPChallengeByHash(
 	ctx context.Context,
 	challengeIDHash string,
@@ -1810,7 +1788,7 @@ func (s *Store) UpsertDevice(
 }
 
 type execer interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
 func upsertDevice(
@@ -1819,7 +1797,10 @@ func upsertDevice(
 	device models.Device,
 	maxDevices int,
 ) (models.Device, error) {
-	result, err := exec.ExecContext(
+	// RETURNING hands back the stored row, so a re-attach reports the
+	// original created_at (the upsert leaves it untouched) rather than the
+	// caller's "now". No returned row means the ceiling refused the insert.
+	row := exec.QueryRowContext(
 		ctx,
 		`
 INSERT INTO devices (device_id, account_id, device_label, created_at, last_seen_at)
@@ -1829,6 +1810,7 @@ WHERE EXISTS (SELECT 1 FROM devices WHERE account_id = ? AND device_id = ?)
 ON CONFLICT(account_id, device_id) DO UPDATE SET
   device_label = excluded.device_label,
   last_seen_at = excluded.last_seen_at
+RETURNING device_id, account_id, device_label, created_at, last_seen_at
 `,
 		device.DeviceID,
 		device.AccountID,
@@ -1840,19 +1822,16 @@ ON CONFLICT(account_id, device_id) DO UPDATE SET
 		device.AccountID,
 		maxDevices,
 	)
+
+	stored, err := scanDevice(row)
+	if errors.Is(err, ErrNotFound) {
+		return models.Device{}, ErrDeviceLimitReached
+	}
 	if err != nil {
 		return models.Device{}, fmt.Errorf("upsert device: %w", err)
 	}
 
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return models.Device{}, fmt.Errorf("upsert device rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
-	}
-	if affected == 0 {
-		return models.Device{}, ErrDeviceLimitReached
-	}
-
-	return device, nil
+	return stored, nil
 }
 
 // ListDevicesForAccount returns every device attached to the account, oldest

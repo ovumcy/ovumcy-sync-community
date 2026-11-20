@@ -390,6 +390,9 @@ func TestLapseForAbsentAccountIsNotRememberedUntilResent(t *testing.T) {
 			if !account.PremiumActive {
 				t.Fatal("expected the mint to create the account with premium_active")
 			}
+			if _, err := authService.Authenticate(ctx, minted.SessionToken); err != nil {
+				t.Fatalf("expected the minted session to authenticate before the lapse is re-sent, got %v", err)
+			}
 
 			if err := bridgeService.SetAccountLapseSignal(ctx, tc.account, false, lapseAsOf); err != nil {
 				t.Fatalf("re-sent lapse after mint: %v", err)
