@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -56,7 +57,51 @@ var ErrInvalidEntitlementSignal = errors.New("invalid_entitlement_signal")
 var ErrTOTPPendingSecretChanged = errors.New("totp_pending_secret_changed")
 
 func (s *Store) CreateAccount(ctx context.Context, account models.Account) (models.Account, error) {
-	_, err := s.db.ExecContext(
+	if err := insertAccount(ctx, s.db, account); err != nil {
+		return models.Account{}, err
+	}
+	return account, nil
+}
+
+// CreateAccountWithSession inserts the account and its first session in one
+// transaction, so a failed session insert leaves no account that registration
+// reported as failed. ErrConflict when the login is taken; nothing is stored.
+func (s *Store) CreateAccountWithSession(ctx context.Context, account models.Account, session models.Session) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin create account: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if err := insertAccount(ctx, tx, account); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO sessions (id, account_id, token_hash, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		session.ID,
+		session.AccountID,
+		session.TokenHash,
+		session.CreatedAt.UTC().Format(time.RFC3339Nano),
+		session.LastSeenAt.UTC().Format(time.RFC3339Nano),
+		session.ExpiresAt.UTC().Format(time.RFC3339Nano),
+	); err != nil {
+		return fmt.Errorf("insert session: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit create account: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteManagedAccount's COMMIT branch.
+	}
+	return nil
+}
+
+type accountExecer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func insertAccount(ctx context.Context, execer accountExecer, account models.Account) error {
+	_, err := execer.ExecContext(
 		ctx,
 		`INSERT INTO accounts (id, login, password_hash, recovery_code_hash, mode, premium_active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		account.ID,
@@ -69,12 +114,11 @@ func (s *Store) CreateAccount(ctx context.Context, account models.Account) (mode
 	)
 	if err != nil {
 		if isUniqueConstraint(err) {
-			return models.Account{}, ErrConflict
+			return ErrConflict
 		}
-		return models.Account{}, fmt.Errorf("insert account: %w", err)
+		return fmt.Errorf("insert account: %w", err)
 	}
-
-	return account, nil
+	return nil
 }
 
 // UpsertManagedAccount provisions or refreshes a mode=managed account. It
@@ -460,7 +504,22 @@ func (s *Store) DeleteManagedAccount(ctx context.Context, accountID string) erro
 		return fmt.Errorf("commit delete account: %w", err) // codecov:ignore -- on this store's single-connection sqlite (WAL, busy_timeout) a COMMIT whose statements all succeeded has no deterministically injectable in-process failure; needs a fake driver, the same deviation documented for DeleteLapsedManagedAccount's commit branch below.
 	}
 
+	s.checkpointAfterErase(ctx)
 	return nil
+}
+
+// checkpointAfterErase folds the WAL into the main file and truncates it, so
+// the erased rows' pages do not stay readable in -wal until a passive
+// checkpoint gets to them. Best effort: the erase has committed, so a failed
+// or blocked checkpoint never fails it; only the error's type is logged.
+func (s *Store) checkpointAfterErase(ctx context.Context) {
+	var busy, walPages, checkpointedPages int
+	err := s.db.QueryRowContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE);`).Scan(&busy, &walPages, &checkpointedPages)
+	if err != nil {
+		log.Printf("wal checkpoint after erase failed: %T", err)
+	} else if busy != 0 {
+		log.Printf("wal checkpoint after erase blocked by a concurrent connection")
+	}
 }
 
 const (
@@ -862,6 +921,7 @@ func (s *Store) DeleteLapsedManagedAccount(ctx context.Context, accountID string
 		return fmt.Errorf("commit delete lapsed account: %w", err) // codecov:ignore -- on this store's single-connection sqlite (WAL, busy_timeout) a COMMIT whose statements all succeeded has no deterministically injectable in-process failure; needs a fake driver.
 	}
 
+	s.checkpointAfterErase(ctx)
 	return nil
 }
 
@@ -2414,8 +2474,9 @@ func (s *Store) DeleteExpiredTOTPChallenges(ctx context.Context, cutoff time.Tim
 // format is accepted as a defensive fallback for rows written by a different
 // default. A value matching neither is corruption (for example a raw write
 // into the database file) and surfaces as an error the calling scan wraps
-// with its column context — a clean 500 with a diagnosable log line instead
-// of a recovered panic that only names the method and path.
+// with its column context — an ordinary error return instead of a recovered
+// panic that only names the method and path. Nothing logs such an error;
+// only a recovered panic leaves a log line.
 func parseStoredTime(value string) (time.Time, error) {
 	parsed, err := time.Parse(time.RFC3339Nano, value)
 	if err == nil {

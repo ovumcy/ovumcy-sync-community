@@ -100,11 +100,14 @@ func TestOpenReportsAnUncreatableDatabaseFile(t *testing.T) {
 	}
 }
 
-func TestCreatePlainDBFileLeavesURIAndQueryPathsToSQLite(t *testing.T) {
-	for _, path := range []string{"file:/nonexistent/dir/x.sqlite", "/nonexistent/dir/x.sqlite?mode=ro"} {
-		if err := createPlainDBFileOwnerOnly(path); err != nil {
-			t.Fatalf("createPlainDBFileOwnerOnly(%q) = %v, want nil", path, err)
-		}
+func TestOpenReportsAnUncreatableFileURIDatabase(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatalf("write blocker: %v", err)
+	}
+	uri := "file:" + filepath.ToSlash(filepath.Join(blocker, "x.sqlite")) + "?mode=rwc"
+	if _, err := Open(uri); err == nil || !strings.Contains(err.Error(), "create db dir") {
+		t.Fatalf("expected a file: URI under a regular file to fail creating its dir, got %v", err)
 	}
 }
 

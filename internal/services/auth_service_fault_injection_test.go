@@ -36,6 +36,12 @@ func TestRegisterSurfacesCreateSessionStoreError(t *testing.T) {
 	if !strings.Contains(err.Error(), "insert session") {
 		t.Fatalf("expected the session-creation store error to surface, got %v", err)
 	}
+	// The account insert rolled back with the session: the login is still
+	// free, so a retry reaches the session insert again instead of colliding.
+	_, err = service.Register(context.Background(), "owner@example.com", "correct horse battery staple")
+	if errors.Is(err, ErrRegistrationFailed) {
+		t.Fatal("a failed registration left its account behind")
+	}
 }
 
 // TestLoginSurfacesTOTPChallengeIssueStoreError exercises IssueChallenge's

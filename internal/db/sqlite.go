@@ -60,10 +60,11 @@ func Open(path string) (*Store, error) {
 	}
 	inMemory := isInMemoryPath(path)
 	if !inMemory {
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		filename := plainDBFilename(path)
+		if err := os.MkdirAll(filepath.Dir(filename), 0o700); err != nil {
 			return nil, fmt.Errorf("create db dir: %w", err)
 		}
-		if err := createPlainDBFileOwnerOnly(path); err != nil {
+		if err := createPlainDBFileOwnerOnly(filename); err != nil {
 			return nil, err
 		}
 	}
@@ -99,15 +100,33 @@ func isInMemoryPath(path string) bool {
 	return hasQuery && strings.Contains("&"+query+"&", "&mode=memory&")
 }
 
+// plainDBFilename is the file SQLite opens for path: the path itself up to its
+// query, or for a `file:` URI the part after the scheme (and an authority),
+// percent-decoded as SQLite does.
+func plainDBFilename(path string) string {
+	name, _, _ := strings.Cut(path, "?")
+	rest, isURI := strings.CutPrefix(name, "file:")
+	if !isURI {
+		return name
+	}
+	if after, ok := strings.CutPrefix(rest, "//"); ok {
+		rest = after
+		if i := strings.Index(rest, "/"); i >= 0 {
+			rest = rest[i:]
+		}
+	}
+	if decoded, err := url.PathUnescape(rest); err == nil {
+		rest = decoded
+	}
+	return rest
+}
+
 // createPlainDBFileOwnerOnly creates a missing database file as 0600 before
 // SQLite opens it: SQLite would create it under the process umask (commonly
-// 0644), and it gives the -wal and -shm files the main file's mode. URI and
-// query paths are left to SQLite. An existing file keeps its mode.
-func createPlainDBFileOwnerOnly(path string) error {
-	if strings.HasPrefix(path, "file:") || strings.Contains(path, "?") {
-		return nil
-	}
-	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600) // #nosec G304 -- DB_PATH is operator config
+// 0644), and it gives the -wal and -shm files the main file's mode. An
+// existing file keeps its mode.
+func createPlainDBFileOwnerOnly(filename string) error {
+	file, err := os.OpenFile(filename,os.O_RDWR|os.O_CREATE, 0o600) // #nosec G304 -- DB_PATH is operator config
 	if err != nil {
 		return fmt.Errorf("create db file: %w", err)
 	}
