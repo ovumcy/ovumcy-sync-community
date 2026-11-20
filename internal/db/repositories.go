@@ -1583,9 +1583,10 @@ ON CONFLICT(account_id) DO UPDATE SET
 // consumeResetTokenSQL is the reset-token claim CAS, shared by
 // ConsumePasswordResetToken and ResetAccountCredentials: it matches only an
 // unconsumed, unexpired token, so the claim is the single source of truth for
-// "is this reset token still actionable" — callers must not pre-check expiry
-// or pre-load the token, or the race the CAS prevents reopens. Args: now,
-// token hash, now.
+// "is this reset token still actionable" — a caller may skip work for a token
+// already dead (ResetTokenUsable), but must never treat a pre-check as
+// permission: only this claim decides, or the race the CAS prevents reopens.
+// Args: now, token hash, now.
 //
 // Stored instants are RFC3339Nano, which drops trailing zeros, so as text
 // "…:05Z" sorts after "…:05.5Z": every instant compare in SQL goes through
