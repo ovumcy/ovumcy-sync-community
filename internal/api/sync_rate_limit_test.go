@@ -134,6 +134,24 @@ func TestSuccessfulLogoutsDoNotSpendTheCredentialBudget(t *testing.T) {
 	performJSONRequest(t, handler, http.MethodDelete, "/auth/session", nil, "no-such-token", http.StatusTooManyRequests)
 }
 
+// TestSuccessfulLoginsDoNotSpendThePerIPBudget: a login that issues a session
+// refunds its per-IP slot, so sign-ins behind one address do not lock each
+// other out; a wrong password stays charged.
+func TestSuccessfulLoginsDoNotSpendThePerIPBudget(t *testing.T) {
+	handler := newTestServerWithOptions(t, serverTestOptions{
+		authRateLimitCount:  1,
+		authRateLimitWindow: 15 * time.Minute,
+	})
+	registerOwner(t, handler)
+	good := map[string]string{"login": "owner@example.com", "password": "correct horse battery staple"}
+	for range 3 {
+		performJSONRequest(t, handler, http.MethodPost, "/auth/login", good, "", http.StatusOK)
+	}
+	bad := map[string]string{"login": "someone@example.com", "password": "wrong-password-1"}
+	performJSONRequest(t, handler, http.MethodPost, "/auth/login", bad, "", http.StatusUnauthorized)
+	performJSONRequest(t, handler, http.MethodPost, "/auth/login", good, "", http.StatusTooManyRequests)
+}
+
 func retryAfterSeconds(t *testing.T, response interface{ Header() http.Header }) int {
 	t.Helper()
 	seconds, err := strconv.Atoi(response.Header().Get("Retry-After"))
