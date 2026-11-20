@@ -40,7 +40,7 @@ authenticated account id; **login** is the lowercased, trimmed login from the re
 | `POST /auth/forgot-password` | none | auth, IP | 5/15min | 4 KiB |
 | `POST /auth/reset-password` | reset token in body | auth, IP | 5/15min | 4 KiB |
 | `POST /auth/totp/challenge` | challenge id in body; 503 if no `FIELD_ENCRYPTION_KEY` | auth, IP | 5/15min | 4 KiB |
-| `DELETE /auth/session` | the bearer token it revokes | auth, IP | 5/15min | none read |
+| `DELETE /auth/session` | the bearer token it revokes | auth, IP; a revoke that finds its session refunds the slot | 5/15min | none read |
 | `POST /auth/change-password` | session | auth, account | 5/15min | 4 KiB |
 | `POST /auth/recovery-code/regenerate` | session | auth, account | 5/15min | 4 KiB |
 | `POST /auth/totp/enroll` | session | auth, account | 5/15min | 4 KiB |

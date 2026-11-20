@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -115,6 +116,22 @@ func TestEveryRouteIsOnItsIntendedLimiter(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestSuccessfulLogoutsDoNotSpendTheCredentialBudget: a revoke that finds its
+// session refunds the per-IP slot, so users sharing an address can all sign
+// out; a token with no session stays charged.
+func TestSuccessfulLogoutsDoNotSpendTheCredentialBudget(t *testing.T) {
+	handler := newTestServerWithOptions(t, serverTestOptions{
+		authRateLimitCount:  1,
+		authRateLimitWindow: 15 * time.Minute,
+	})
+	for i := range 3 {
+		token := registerAccountFrom(t, handler, fmt.Sprintf("logout-%d@example.com", i), fmt.Sprintf("198.51.100.%d:4000", i+1))
+		performJSONRequest(t, handler, http.MethodDelete, "/auth/session", nil, token, http.StatusOK)
+	}
+	performJSONRequest(t, handler, http.MethodDelete, "/auth/session", nil, "no-such-token", http.StatusUnauthorized)
+	performJSONRequest(t, handler, http.MethodDelete, "/auth/session", nil, "no-such-token", http.StatusTooManyRequests)
 }
 
 func retryAfterSeconds(t *testing.T, response interface{ Header() http.Header }) int {

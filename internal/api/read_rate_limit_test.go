@@ -208,8 +208,9 @@ func TestSessionStateReadsKeyOnAccountNotClientIP(t *testing.T) {
 // auth budget. The route consumes the bearer token instead of authenticating
 // through it, so there is no account to key on before the revoke; the client
 // address is the only identity available, and it is the one that matters for an
-// anonymous caller replaying invented tokens. The throttle runs ahead of the
-// store, so the second attempt is refused whatever token it carries.
+// anonymous caller replaying invented tokens. Only a token with no session
+// stays charged; once the budget is spent the throttle runs ahead of the
+// store, so the next attempt is refused whatever token it carries.
 func TestLogoutIsRateLimitedPerClientIP(t *testing.T) {
 	const (
 		firstClient  = "203.0.113.20:5001"
@@ -223,9 +224,17 @@ func TestLogoutIsRateLimitedPerClientIP(t *testing.T) {
 		handler:        handler,
 		method:         http.MethodDelete,
 		path:           "/auth/session",
+		sessionToken:   "invented-session-token",
+		remoteAddr:     firstClient,
+		expectedStatus: http.StatusUnauthorized,
+	})
+	performJSONRequestWithOptions(t, requestOptions{
+		handler:        handler,
+		method:         http.MethodDelete,
+		path:           "/auth/session",
 		sessionToken:   registered.SessionToken,
 		remoteAddr:     firstClient,
-		expectedStatus: http.StatusOK,
+		expectedStatus: http.StatusTooManyRequests,
 	})
 
 	response := performJSONRequestWithOptions(t, requestOptions{
