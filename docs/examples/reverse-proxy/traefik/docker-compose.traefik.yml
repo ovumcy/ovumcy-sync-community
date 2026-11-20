@@ -32,6 +32,9 @@ services:
       - ./docs/examples/reverse-proxy/traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
       - traefik-acme:/acme
     read_only: true
+    # Request bodies over memRequestBodyBytes (dynamic.yml) are buffered to
+    # disk, which a read-only root filesystem refuses; give them a tmpfs.
+    tmpfs: ["/tmp"]
     # Traefik runs as root in its image and binds 80/443: that is the one
     # capability it keeps.
     cap_drop: [ALL]
