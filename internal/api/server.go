@@ -864,6 +864,9 @@ func (s *Server) handleLogout(writer http.ResponseWriter, request *http.Request)
 		writeError(writer, http.StatusInternalServerError, "internal_error")
 		return
 	}
+	// Only a token with no session stays charged: at the credential budget a
+	// shared address would otherwise run out of successful logouts.
+	s.authLimiter.Refund(slot)
 
 	writeJSON(writer, http.StatusOK, map[string]string{"status": "revoked"})
 }
