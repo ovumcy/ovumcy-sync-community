@@ -41,6 +41,7 @@ type Server struct {
 	allowedHosts        map[string]struct{}
 	trustedProxyCIDRs   []netip.Prefix
 	maxBlobRequestBytes int64
+	blobSlots           chan struct{}
 	readinessCheck      func(context.Context) error
 	mux                 *http.ServeMux
 }
@@ -92,20 +93,21 @@ func NewServer(
 	}
 
 	server := &Server{
-		auth:               auth,
-		sync:               sync,
-		managedBridge:      managedBridge,
-		totp:               totp,
-		managedBridgeToken: strings.TrimSpace(options.ManagedBridgeToken),
-		metrics:            metrics,
-		metricsBearerToken: strings.TrimSpace(options.MetricsBearerToken),
-		authLimiter:        security.NewRateLimiter(options.AuthRateLimitCount, options.AuthRateLimitWindow),
-		syncLimiter:        security.NewRateLimiter(syncCount, syncWindow),
-		sessionReadLimiter: security.NewRateLimiter(sessionReadRateLimitCount(syncCount), syncWindow),
+		auth:                auth,
+		sync:                sync,
+		managedBridge:       managedBridge,
+		totp:                totp,
+		managedBridgeToken:  strings.TrimSpace(options.ManagedBridgeToken),
+		metrics:             metrics,
+		metricsBearerToken:  strings.TrimSpace(options.MetricsBearerToken),
+		authLimiter:         security.NewRateLimiter(options.AuthRateLimitCount, options.AuthRateLimitWindow),
+		syncLimiter:         security.NewRateLimiter(syncCount, syncWindow),
+		sessionReadLimiter:  security.NewRateLimiter(sessionReadRateLimitCount(syncCount), syncWindow),
 		allowedOrigins:      originSet,
 		allowedHosts:        parseAllowedHosts(options.AllowedHosts),
 		trustedProxyCIDRs:   parseTrustedProxyCIDRs(options.TrustedProxyCIDRs),
 		maxBlobRequestBytes: encodedBlobRequestLimit(options.MaxBlobBytes),
+		blobSlots:           make(chan struct{}, maxConcurrentBlobTransfers),
 		readinessCheck:      options.ReadinessCheck,
 		mux:                 http.NewServeMux(),
 	}
@@ -1248,6 +1250,11 @@ func (s *Server) handlePutBlob(
 	account models.Account,
 ) {
 
+	if !s.acquireBlobSlot(request.Context()) {
+		return
+	}
+	defer s.releaseBlobSlot()
+
 	var payload blobPutRequest
 	if !decodeJSON(writer, request, &payload, s.maxBlobRequestBytes) {
 		return
@@ -1346,6 +1353,11 @@ func (s *Server) handleGetBlob(
 	request *http.Request,
 	account models.Account,
 ) {
+	if !s.acquireBlobSlot(request.Context()) {
+		return
+	}
+	defer s.releaseBlobSlot()
+
 	blob, err := s.sync.GetBlob(request.Context(), account.ID)
 	if err != nil {
 		switch {
@@ -1462,6 +1474,31 @@ func (s *Server) requireSyncEnabled(
 
 		next(writer, request, account)
 	}
+}
+
+// maxConcurrentBlobTransfers bounds the blob PUTs and GETs holding a body in
+// memory at once, server-wide. The per-account meter caps the rate, not the
+// overlap: a max-size PUT peaks near 7×MAX_BLOB_BYTES of heap (raw body,
+// decoder buffer, base64 string, decoded bytes, the echoed response) and a GET
+// near 4×, so the cap holds blob work to about 4×7×MAX_BLOB_BYTES (≈450 MB at
+// the 16 MiB default) whatever the number of sessions.
+const maxConcurrentBlobTransfers = 4
+
+// acquireBlobSlot waits for a blob transfer slot. It fails only when the
+// request context ends, which without a BaseContext means the client is gone,
+// so the caller writes nothing. The wait spends the connection's
+// HTTP_READ_TIMEOUT / HTTP_WRITE_TIMEOUT like a slow transfer would.
+func (s *Server) acquireBlobSlot(ctx context.Context) bool {
+	select {
+	case s.blobSlots <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func (s *Server) releaseBlobSlot() {
+	<-s.blobSlots
 }
 
 const unauthenticatedRateLimitKeyPrefix = "unauthenticated:"
