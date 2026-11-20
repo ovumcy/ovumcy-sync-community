@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -66,6 +67,26 @@ func TestRefusedChallengeIssueKeepsTheEarlierChallenge(t *testing.T) {
 	}
 	if _, err := store.FindTOTPChallengeByHash(ctx, "first"); err != nil {
 		t.Fatalf("earlier challenge lost to a refused issue: %v", err)
+	}
+}
+
+func TestChallengeIssueSurfacesStoreErrors(t *testing.T) {
+	ctx := context.Background()
+
+	closed := openTestStore(t)
+	if err := closed.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	err := closed.CreateTOTPChallengeForVerifiedPassword(ctx, guardChallenge("a", "h"), "v")
+	if err == nil || !strings.Contains(err.Error(), "begin insert totp challenge") {
+		t.Fatalf("expected the begin error, got %v", err)
+	}
+
+	store, dbPath := newFileBackedTestStore(t)
+	dropTable(t, dbPath, "totp_challenges")
+	err = store.CreateTOTPChallengeForVerifiedPassword(ctx, guardChallenge("a", "h"), "v")
+	if err == nil || !strings.Contains(err.Error(), "delete totp challenges for account") {
+		t.Fatalf("expected the delete error, got %v", err)
 	}
 }
 
