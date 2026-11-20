@@ -1606,13 +1606,13 @@ const sessionReadRateLimitMultiplier = 30
 // sessionReadRateLimitCount derives the read budget, leaving a non-positive or
 // overflow-prone configured count untouched: a silently negative product would
 // invert the intent and make the most generous bucket the strictest one.
-// config.Validate already rejects a non-positive AUTH_RATE_LIMIT_COUNT at
+// config.Validate already rejects a non-positive SYNC_RATE_LIMIT_COUNT at
 // startup, so in a running server this only guards the arithmetic.
-func sessionReadRateLimitCount(authRateLimitCount int) int {
-	if authRateLimitCount <= 0 || authRateLimitCount > math.MaxInt/sessionReadRateLimitMultiplier {
-		return authRateLimitCount
+func sessionReadRateLimitCount(syncRateLimitCount int) int {
+	if syncRateLimitCount <= 0 || syncRateLimitCount > math.MaxInt/sessionReadRateLimitMultiplier {
+		return syncRateLimitCount
 	}
-	return authRateLimitCount * sessionReadRateLimitMultiplier
+	return syncRateLimitCount * sessionReadRateLimitMultiplier
 }
 
 // allowSessionReadRequestForAccount applies the read-state limiter, keyed per

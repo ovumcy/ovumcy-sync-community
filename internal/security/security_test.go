@@ -271,6 +271,31 @@ func TestRateLimiterRefundAndReset(t *testing.T) {
 	}
 }
 
+// TestRateLimiterRefundThatEmptiesTheWindowDropsIt: once every slot is
+// refunded, a later caller's window starts at its own first request, so its
+// Retry-After cannot reveal when the refunded request was made.
+func TestRateLimiterRefundThatEmptiesTheWindowDropsIt(t *testing.T) {
+	limiter := NewRateLimiter(1, 15*time.Minute)
+	base := time.Date(2026, 3, 23, 9, 0, 0, 0, time.UTC)
+	limiter.now = func() time.Time { return base }
+
+	owner, _ := limiter.Reserve("k")
+	limiter.Refund(owner)
+	if _, ok := limiter.entries["k"]; ok {
+		t.Fatal("an emptied window stayed in the map")
+	}
+
+	base = base.Add(10 * time.Minute)
+	limiter.Allow("k")
+	refused, ok := limiter.Reserve("k")
+	if ok {
+		t.Fatal("expected the ceiling to hold")
+	}
+	if got := limiter.RetryAfter(refused); got != 15*time.Minute {
+		t.Fatalf("Retry-After = %s, want the full window from the caller's own first request", got)
+	}
+}
+
 // TestRateLimiterRefundAfterRolloverGrantsNoExtraSlot: a slot reserved in one
 // window and refunded after the next window opened belongs to the old window,
 // so it must not lower the new window's count.

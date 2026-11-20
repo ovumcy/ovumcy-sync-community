@@ -68,6 +68,16 @@ snapshot.
   can tighten `AUTH_RATE_LIMIT_COUNT` and `AUTH_RATE_LIMIT_WINDOW`. Every
   limiter window is fixed, both the request limiters and the TOTP attempt
   budgets, so up to twice the limit can pass across a window boundary.
+- **The tight credential budget is also a lockout lever.** Five wrong
+  passwords in a window spend a bucket for everyone who shares its key: from
+  anywhere, five failed logins hold a known login's identifier bucket for 15
+  minutes, so the owner's own correct login is refused until it rolls over;
+  a stolen session's five wrong step-up passwords hold `stepup:<account>`,
+  so the owner cannot change the password, disable TOTP or delete the
+  account in that window. Sustaining it costs the attacker about 480 requests
+  a day. Accepted: the alternative is a looser guess ceiling; the owner can
+  still sign in with the recovery code (`POST /auth/forgot-password` clears
+  the identifier bucket), and a password reset revokes every session.
 - **Field-encryption key rotation.** Rotating `FIELD_ENCRYPTION_KEY`
   invalidates every stored TOTP ciphertext; affected accounts fail closed on
   the next login until they sign in with a recovery code and re-enroll. Operator
