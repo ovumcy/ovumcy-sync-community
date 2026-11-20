@@ -68,8 +68,10 @@ func TestSyncDisabledAnswerIsMetered(t *testing.T) {
 		t.Fatalf("set account lapsed: %v", err)
 	}
 
-	// refusals is the route's budget left after provisioning, which spent one
-	// slot each on POST /sync/devices, PUT /sync/recovery-key and PUT /sync/blob.
+	// refusals is the budget left in the route's bucket. Provisioning spent one
+	// slot each on POST /sync/devices, PUT /sync/recovery-key and PUT
+	// /sync/blob; GET and PUT of one path share a bucket (the key is the path),
+	// so each PUT below finds its bucket already spent by the GET before it.
 	routes := []struct {
 		method   string
 		path     string
@@ -78,13 +80,13 @@ func TestSyncDisabledAnswerIsMetered(t *testing.T) {
 		{http.MethodPost, "/sync/devices", 1},
 		{http.MethodGet, "/sync/devices", 2 * sessionReadRateLimitMultiplier},
 		{http.MethodDelete, "/sync/devices/device-1aaaa", 2},
-		{http.MethodGet, "/sync/recovery-key", 2},
-		{http.MethodPut, "/sync/recovery-key", 1},
-		{http.MethodGet, "/sync/blob", 2},
-		{http.MethodPut, "/sync/blob", 1},
+		{http.MethodGet, "/sync/recovery-key", 1},
+		{http.MethodPut, "/sync/recovery-key", 0},
+		{http.MethodGet, "/sync/blob", 1},
+		{http.MethodPut, "/sync/blob", 0},
 	}
 	for _, route := range routes {
-		for attempt := 0; attempt < route.refusals; attempt++ {
+		for attempt := range route.refusals {
 			response := serveJSON(t, handler, route.method, route.path, nil, sessionToken)
 			var payload map[string]string
 			decodeResponse(t, response.Body.Bytes(), &payload)
