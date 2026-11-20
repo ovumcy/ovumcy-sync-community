@@ -15,6 +15,8 @@ func validBase() Config {
 		MaxBlobBytes:             1,
 		AuthRateLimitCount:       1,
 		AuthRateLimitWindow:      time.Minute,
+		SyncRateLimitCount:       1,
+		SyncRateLimitWindow:      time.Minute,
 		LapsedAccountGracePeriod: MinLapsedAccountGracePeriod,
 	}
 }
