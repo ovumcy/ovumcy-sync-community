@@ -77,7 +77,9 @@ Notes on the table:
   known login's budget for as long as they keep failing; a successful `POST /auth/forgot-password`
   (the recovery code proven) clears that login's bucket. An empty login consumes no slot.
 - `POST /auth/totp/challenge` is limited before it reports `503 totp_not_configured`, so the
-  configuration cannot be probed at an unmetered rate.
+  configuration cannot be probed at an unmetered rate. TOTP enroll, verify and disable charge their
+  per-account bucket before the same answer, and every device, recovery-key and blob route charges its
+  per-account bucket before it answers `403 sync_disabled`: no early refusal is unmetered.
 - Every session-authenticated route first passes a per-client-IP bucket (`unauthenticated:<ip>` in the
   read-state limiter, 30x budget) before the session lookup. A valid session refunds its slot, so only
   failed lookups stay charged and callers sharing an address are not throttled by each other's traffic.

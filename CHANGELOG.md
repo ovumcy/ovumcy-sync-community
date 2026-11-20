@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Early refusals are rate-limited.** TOTP enroll, verify and disable answered `503 totp_not_configured`, and the device, recovery-key and blob routes answered `403 sync_disabled`, before charging their per-account limiter; each now charges it first, so a session cannot loop on those answers unmetered.
 - **Re-attaching a device returns its original `created_at`.** `POST /sync/devices` for a device the account already owns answered `created_at` as the time of the request, while the stored row kept the first attach time; it now answers the stored value.
 
 - **TOTP account-state refusals are 409, not 503.** `POST /auth/totp/disable` on an account without TOTP — including the loser of two concurrent disables — now answers `409 totp_not_enabled` (once the winning disable has committed, the loser's code spends no step-up TOTP attempt), and `POST /auth/totp/verify` with no pending secret answers `409 totp_enrollment_not_started`. Both used to answer `503 totp_not_configured`, which now means only a server without `FIELD_ENCRYPTION_KEY`. **Client change:** treat `totp_not_enabled` as "already off" and `totp_enrollment_not_started` as "restart enrollment".

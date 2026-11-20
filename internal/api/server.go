@@ -167,13 +167,13 @@ func (s *Server) routes() {
 	s.handleRoute("POST /managed/accounts/{account_id}/sessions/revoke", "managed_account_sessions_revoke", s.withManagedBridge(s.handleManagedAccountSessionsRevoke))
 	s.handleRoute("PUT /managed/accounts/{account_id}/recovery-key", "managed_account_recovery_key", s.withManagedBridge(s.handleManagedAccountRecoveryKey))
 	s.handleRoute("GET /sync/capabilities", "sync_capabilities", s.withAuth(s.handleCapabilities))
-	s.handleRoute("POST /sync/devices", "sync_devices", s.withAuth(s.requireSyncEnabled(s.handleAttachDevice)))
-	s.handleRoute("GET /sync/devices", "sync_devices_list", s.withAuth(s.requireSyncEnabled(s.handleListDevices)))
-	s.handleRoute("DELETE /sync/devices/{device_id}", "sync_devices_remove", s.withAuth(s.requireSyncEnabled(s.handleRemoveDevice)))
-	s.handleRoute("GET /sync/recovery-key", "sync_recovery_key_get", s.withAuth(s.requireSyncEnabled(s.handleGetRecoveryKey)))
-	s.handleRoute("PUT /sync/recovery-key", "sync_recovery_key_put", s.withAuth(s.requireSyncEnabled(s.handlePutRecoveryKey)))
-	s.handleRoute("GET /sync/blob", "sync_blob_get", s.withAuth(s.requireSyncEnabled(s.handleGetBlob)))
-	s.handleRoute("PUT /sync/blob", "sync_blob_put", s.withAuth(s.requireSyncEnabled(s.handlePutBlob)))
+	s.handleRoute("POST /sync/devices", "sync_devices", s.withAuth(s.requireSyncEnabled(s.allowSyncRequestForAccount, s.handleAttachDevice)))
+	s.handleRoute("GET /sync/devices", "sync_devices_list", s.withAuth(s.requireSyncEnabled(s.allowSessionReadRequestForAccount, s.handleListDevices)))
+	s.handleRoute("DELETE /sync/devices/{device_id}", "sync_devices_remove", s.withAuth(s.requireSyncEnabled(s.allowRemoveDeviceRequestForAccount, s.handleRemoveDevice)))
+	s.handleRoute("GET /sync/recovery-key", "sync_recovery_key_get", s.withAuth(s.requireSyncEnabled(s.allowSyncRequestForAccount, s.handleGetRecoveryKey)))
+	s.handleRoute("PUT /sync/recovery-key", "sync_recovery_key_put", s.withAuth(s.requireSyncEnabled(s.allowSyncRequestForAccount, s.handlePutRecoveryKey)))
+	s.handleRoute("GET /sync/blob", "sync_blob_get", s.withAuth(s.requireSyncEnabled(s.allowSyncRequestForAccount, s.handleGetBlob)))
+	s.handleRoute("PUT /sync/blob", "sync_blob_put", s.withAuth(s.requireSyncEnabled(s.allowSyncRequestForAccount, s.handlePutBlob)))
 }
 
 func (s *Server) handleRoute(pattern string, metricsRoute string, handler http.Handler) {
@@ -686,11 +686,11 @@ func (s *Server) handleTOTPEnroll(
 	request *http.Request,
 	account models.Account,
 ) {
-	if s.totp == nil {
-		writeError(writer, http.StatusServiceUnavailable, "totp_not_configured")
+	if !s.allowAuthRequestForAccount(writer, request, account.ID) {
 		return
 	}
-	if !s.allowAuthRequestForAccount(writer, request, account.ID) {
+	if s.totp == nil {
+		writeError(writer, http.StatusServiceUnavailable, "totp_not_configured")
 		return
 	}
 
@@ -718,11 +718,11 @@ func (s *Server) handleTOTPVerifyEnrollment(
 	request *http.Request,
 	account models.Account,
 ) {
-	if s.totp == nil {
-		writeError(writer, http.StatusServiceUnavailable, "totp_not_configured")
+	if !s.allowAuthRequestForAccount(writer, request, account.ID) {
 		return
 	}
-	if !s.allowAuthRequestForAccount(writer, request, account.ID) {
+	if s.totp == nil {
+		writeError(writer, http.StatusServiceUnavailable, "totp_not_configured")
 		return
 	}
 
@@ -755,11 +755,11 @@ func (s *Server) handleTOTPDisable(
 	request *http.Request,
 	account models.Account,
 ) {
-	if s.totp == nil {
-		writeError(writer, http.StatusServiceUnavailable, "totp_not_configured")
+	if !s.allowAuthRequestForAccount(writer, request, account.ID) {
 		return
 	}
-	if !s.allowAuthRequestForAccount(writer, request, account.ID) {
+	if s.totp == nil {
+		writeError(writer, http.StatusServiceUnavailable, "totp_not_configured")
 		return
 	}
 
@@ -1151,13 +1151,6 @@ func (s *Server) handleAttachDevice(
 	request *http.Request,
 	account models.Account,
 ) {
-	// Per-account ceiling: even though MaxDevices caps the row count inside
-	// the UpsertDevice statement, unbounded attach attempts thrash that
-	// insert and its count sub-select under contention.
-	if !s.allowSyncRequestForAccount(writer, request, account.ID) {
-		return
-	}
-
 	var payload deviceRequest
 	if !decodeJSON(writer, request, &payload, 4<<10) {
 		return
@@ -1194,10 +1187,6 @@ func (s *Server) handleListDevices(
 	request *http.Request,
 	account models.Account,
 ) {
-	if !s.allowSessionReadRequestForAccount(writer, request, account.ID) {
-		return
-	}
-
 	devices, err := s.sync.ListDevices(request.Context(), account.ID)
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, "internal_error")
@@ -1212,12 +1201,6 @@ func (s *Server) handleRemoveDevice(
 	request *http.Request,
 	account models.Account,
 ) {
-	// Mutating account op — rate-limit like attach, keyed on a stable
-	// route-scoped string (not the path, whose device_id segment varies).
-	if !allowUnderLimiter(s.syncLimiter, writer, "sync_devices_remove:"+account.ID) {
-		return
-	}
-
 	// The body is optional: only a TOTP-enrolled account needs one, to carry
 	// the password and the code.
 	var payload deviceRemoveRequest
@@ -1264,13 +1247,6 @@ func (s *Server) handlePutBlob(
 	request *http.Request,
 	account models.Account,
 ) {
-	// Per-account ceiling: each upload runs a base64 decode and SHA-256
-	// over up to MaxBlobBytes (16 MB default) plus two DB queries. Without
-	// a per-account limit, a captured session can flood CPU/IO regardless
-	// of the per-IP gate.
-	if !s.allowSyncRequestForAccount(writer, request, account.ID) {
-		return
-	}
 
 	var payload blobPutRequest
 	if !decodeJSON(writer, request, &payload, s.maxBlobRequestBytes) {
@@ -1311,12 +1287,6 @@ func (s *Server) handlePutRecoveryKey(
 	request *http.Request,
 	account models.Account,
 ) {
-	// Per-account ceiling: single-row UPSERT per account, but unbounded
-	// calls thrash DB writers under contention.
-	if !s.allowSyncRequestForAccount(writer, request, account.ID) {
-		return
-	}
-
 	var payload recoveryKeyPackageRequest
 	if !decodeJSON(writer, request, &payload, 8<<10) {
 		return
@@ -1376,13 +1346,6 @@ func (s *Server) handleGetBlob(
 	request *http.Request,
 	account models.Account,
 ) {
-	// Same per-account limiter as the PUT side: without it a valid session
-	// can drive unmetered reads of up to MAX_BLOB_BYTES ciphertext (plus the
-	// base64 encoding cost) past the per-IP auth gate.
-	if !s.allowSyncRequestForAccount(writer, request, account.ID) {
-		return
-	}
-
 	blob, err := s.sync.GetBlob(request.Context(), account.ID)
 	if err != nil {
 		switch {
@@ -1402,11 +1365,6 @@ func (s *Server) handleGetRecoveryKey(
 	request *http.Request,
 	account models.Account,
 ) {
-	// Same per-account limiter as the PUT side — see handleGetBlob.
-	if !s.allowSyncRequestForAccount(writer, request, account.ID) {
-		return
-	}
-
 	recoveryKeyPackage, err := s.sync.GetRecoveryKeyPackage(request.Context(), account.ID)
 	if err != nil {
 		switch {
@@ -1482,10 +1440,21 @@ func (r *statusRecorder) Unwrap() http.ResponseWriter {
 // gets 403 sync_disabled. It backs the lapse revocation for a session minted
 // in a race with it. GET /sync/capabilities is not gated, so the client can
 // still read why.
+//
+// meter is the route's per-account limiter and runs ahead of the gate, so a
+// refused account is metered like any other: a captured session must not get
+// an unmetered 403 loop, nor an unmetered read of the account's sync state. It
+// is also the route's only limiter — a valid session refunds withAuth's per-IP
+// slot, and without it a session could drive unbounded blob decodes and
+// hashes, device-row upserts or MAX_BLOB_BYTES reads.
 func (s *Server) requireSyncEnabled(
+	meter func(http.ResponseWriter, *http.Request, string) bool,
 	next func(http.ResponseWriter, *http.Request, models.Account),
 ) func(http.ResponseWriter, *http.Request, models.Account) {
 	return func(writer http.ResponseWriter, request *http.Request, account models.Account) {
+		if !meter(writer, request, account.ID) {
+			return
+		}
 		if !s.sync.CapabilitiesForAccount(account).SyncEnabled {
 			writeError(writer, http.StatusForbidden, "sync_disabled")
 			return
@@ -1590,6 +1559,16 @@ func (s *Server) allowSyncRequestForAccount(
 	accountID string,
 ) bool {
 	return allowUnderLimiter(s.syncLimiter, writer, request.URL.Path+":"+accountID)
+}
+
+// allowRemoveDeviceRequestForAccount is allowSyncRequestForAccount for DELETE
+// /sync/devices/{device_id}, keyed on a stable route string.
+func (s *Server) allowRemoveDeviceRequestForAccount(
+	writer http.ResponseWriter,
+	_ *http.Request,
+	accountID string,
+) bool {
+	return allowUnderLimiter(s.syncLimiter, writer, "sync_devices_remove:"+accountID)
 }
 
 // sessionReadRateLimitMultiplier scales SYNC_RATE_LIMIT_COUNT into the budget
