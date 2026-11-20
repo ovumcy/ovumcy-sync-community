@@ -1480,7 +1480,7 @@ func (s *Server) requireSyncEnabled(
 // memory at once, server-wide. The per-account meter caps the rate, not the
 // overlap: a max-size PUT peaks near 7×MAX_BLOB_BYTES of heap (raw body,
 // decoder buffer, base64 string, decoded bytes, the echoed response) and a GET
-// near 4×, so the cap holds blob work to about 4×7×MAX_BLOB_BYTES (≈450 MB at
+// near 4×, so the cap holds blob work to about 4×7×MAX_BLOB_BYTES (≈450 MiB at
 // the 16 MiB default) whatever the number of sessions.
 const maxConcurrentBlobTransfers = 4
 
