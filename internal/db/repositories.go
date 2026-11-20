@@ -937,12 +937,31 @@ func (s *Store) CreateSessionForVerifiedPassword(
 // CreateTOTPChallengeForVerifiedPassword is the challenge counterpart of
 // CreateSessionForVerifiedPassword: the login challenge is inserted only
 // while the password hash still equals verifiedHash and TOTP is still on.
+// The account's earlier challenges are deleted in the same transaction (the
+// index on account_id is not unique), so concurrent issues leave exactly one
+// live challenge, and a refused insert leaves the earlier ones untouched.
 func (s *Store) CreateTOTPChallengeForVerifiedPassword(
 	ctx context.Context,
 	challenge models.TOTPChallenge,
 	verifiedHash string,
 ) error {
-	result, err := s.db.ExecContext(
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin insert totp challenge: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`DELETE FROM totp_challenges WHERE account_id = ?`,
+		challenge.AccountID,
+	); err != nil {
+		return fmt.Errorf("delete totp challenges for account: %w", err)
+	}
+
+	result, err := tx.ExecContext(
 		ctx,
 		`INSERT INTO totp_challenges (challenge_id_hash, account_id, created_at, expires_at)
 		 SELECT ?, id, ?, ? FROM accounts WHERE id = ? AND password_hash = ? AND totp_enabled = 1`,
@@ -955,7 +974,13 @@ func (s *Store) CreateTOTPChallengeForVerifiedPassword(
 	if err != nil {
 		return fmt.Errorf("insert totp challenge for verified password: %w", err)
 	}
-	return requireOneRow(result, "insert totp challenge for verified password")
+	if err := requireOneRow(result, "insert totp challenge for verified password"); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit insert totp challenge: %w", err) // codecov:ignore -- commit failure after successful statements in an immediate tx needs a fault driver; same class as the other store commit branches.
+	}
+	return nil
 }
 
 // ConsumeTOTPChallengeAndCreateSession deletes the challenge and inserts the
@@ -1571,6 +1596,34 @@ const consumeResetTokenSQL = `UPDATE password_reset_tokens
 	   AND consumed_at IS NULL
 	   AND julianday(expires_at) > julianday(?)
 	 RETURNING account_id, token_hash, created_at, expires_at`
+
+// ResetTokenUsable reports, read-only, whether the token is currently
+// unconsumed and unexpired (the same predicate as consumeResetTokenSQL). It
+// only lets a caller skip work for a token that is already dead; it never
+// authorizes a reset, because the claim in ResetAccountCredentials stays the
+// single decision (a token that is dead now cannot become live again).
+func (s *Store) ResetTokenUsable(
+	ctx context.Context,
+	tokenHash string,
+	now time.Time,
+) (bool, error) {
+	var one int
+	err := s.db.QueryRowContext(
+		ctx,
+		`SELECT 1 FROM password_reset_tokens
+		 WHERE token_hash = ? AND consumed_at IS NULL
+		   AND julianday(expires_at) > julianday(?)`,
+		tokenHash,
+		now.UTC().Format(time.RFC3339Nano),
+	).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("check password reset token: %w", err)
+	}
+	return true, nil
+}
 
 // ConsumePasswordResetToken claims the matching token with consumeResetTokenSQL
 // on its own, outside any transaction, and returns the claimed row;

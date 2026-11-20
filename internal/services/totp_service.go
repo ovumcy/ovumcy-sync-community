@@ -546,10 +546,8 @@ func (s *TOTPService) IssueChallengeForVerifiedPassword(
 	// A fresh login challenge supersedes any earlier in-flight (or already
 	// expired) challenge for this account: only the newest is valid, and the
 	// row count stays bounded to one per account instead of growing with
-	// every uncompleted login attempt.
-	if delErr := s.store.DeleteTOTPChallengesForAccount(ctx, accountID); delErr != nil {
-		return "", time.Time{}, delErr
-	}
+	// every uncompleted login attempt. The store deletes the old ones in the
+	// same transaction as the insert, so racing issues leave exactly one.
 
 	now := s.now().UTC()
 	expiresAt = now.Add(TOTPChallengeTTL)
