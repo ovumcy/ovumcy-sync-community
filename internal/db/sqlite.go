@@ -126,7 +126,7 @@ func plainDBFilename(path string) string {
 // 0644), and it gives the -wal and -shm files the main file's mode. An
 // existing file keeps its mode.
 func createPlainDBFileOwnerOnly(filename string) error {
-	file, err := os.OpenFile(filename,os.O_RDWR|os.O_CREATE, 0o600) // #nosec G304 -- DB_PATH is operator config
+	file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0o600) // #nosec G304 -- DB_PATH is operator config
 	if err != nil {
 		return fmt.Errorf("create db file: %w", err)
 	}
