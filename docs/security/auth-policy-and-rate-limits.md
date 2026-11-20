@@ -64,8 +64,9 @@ authenticated account id; **login** is the lowercased, trimmed login from the re
 
 Notes on the table:
 
-- Session routes authenticate first (`withAuth`), so an invalid bearer token answers 401 without touching
-  a limiter; per-account limiting only ever applies to a caller with a valid session.
+- Session routes authenticate first (`withAuth`): an invalid bearer token answers 401 after charging only
+  the per-IP `unauthenticated:<ip>` bucket (below); per-account limiting only ever applies to a caller with
+  a valid session.
 - The 30x read budget covers exactly three routes: `GET /auth/session`, `GET /sync/capabilities`,
   `GET /sync/devices`. `GET /sync/blob` and `GET /sync/recovery-key` are not in that set and use the
   10/min per-account sync budget.

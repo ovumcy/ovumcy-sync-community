@@ -111,7 +111,9 @@ func (l *RateLimiter) allowLocked(key string, now time.Time) (time.Time, bool) {
 // Refund returns the slot r holds while its key is still in the window r was
 // granted in. Once that window has rolled over the slot belongs to a window
 // that no longer counts, and returning it would grant the new window an extra
-// one.
+// one. A refund that empties the window drops it, so the next caller's window
+// (and its Retry-After) starts fresh instead of revealing when the refunded
+// request was made.
 func (l *RateLimiter) Refund(r Reservation) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -122,6 +124,10 @@ func (l *RateLimiter) Refund(r Reservation) {
 		return
 	}
 	entry.count--
+	if entry.count == 0 {
+		delete(l.entries, r.key)
+		return
+	}
 	l.entries[r.key] = entry
 }
 

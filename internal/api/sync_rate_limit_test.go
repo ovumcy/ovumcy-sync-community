@@ -2,7 +2,9 @@ package api
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -51,6 +53,68 @@ func TestSessionReadBudgetFollowsTheSyncCount(t *testing.T) {
 		performJSONRequest(t, handler, http.MethodGet, "/auth/session", nil, token, http.StatusOK)
 	}
 	performJSONRequest(t, handler, http.MethodGet, "/auth/session", nil, token, http.StatusTooManyRequests)
+}
+
+// TestEveryRouteIsOnItsIntendedLimiter pins the split route by route. With an
+// auth budget of 1 and a sync budget of 100, a credential route answers its
+// second request 429 and a sync route does not. The body is not a JSON object,
+// so each request stops at decoding, after the route limiter and before any
+// step-up bucket or login-identifier bucket is charged.
+func TestEveryRouteIsOnItsIntendedLimiter(t *testing.T) {
+	handler := newTestServerWithOptions(t, serverTestOptions{
+		authRateLimitCount:  1,
+		authRateLimitWindow: 15 * time.Minute,
+		syncRateLimitCount:  100,
+		syncRateLimitWindow: time.Minute,
+		enableTOTP:          true,
+	})
+	token := registerStepUpOwner(t, handler)
+
+	send := func(method, path string) int {
+		request := httptest.NewRequest(method, path, strings.NewReader(`"x"`))
+		request.RemoteAddr = "203.0.113.70:4000"
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Authorization", "Bearer "+token)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		return recorder.Code
+	}
+
+	credential := [][2]string{
+		{http.MethodPost, "/auth/login"},
+		{http.MethodPost, "/auth/forgot-password"},
+		{http.MethodPost, "/auth/reset-password"},
+		{http.MethodPost, "/auth/totp/challenge"},
+		{http.MethodPost, "/auth/change-password"},
+		{http.MethodPost, "/auth/recovery-code/regenerate"},
+		{http.MethodPost, "/auth/totp/enroll"},
+		{http.MethodPost, "/auth/totp/verify"},
+		{http.MethodPost, "/auth/totp/disable"},
+		{http.MethodDelete, "/account"},
+	}
+	for _, route := range credential {
+		first := send(route[0], route[1])
+		if second := send(route[0], route[1]); first == http.StatusTooManyRequests || second != http.StatusTooManyRequests {
+			t.Errorf("%s %s: statuses %d, %d; want the auth budget of 1 to refuse the second", route[0], route[1], first, second)
+		}
+	}
+
+	sync := [][2]string{
+		{http.MethodPost, "/sync/devices"},
+		{http.MethodDelete, "/sync/devices/device-0001"},
+		{http.MethodGet, "/sync/recovery-key"},
+		{http.MethodPut, "/sync/recovery-key"},
+		{http.MethodGet, "/sync/blob"},
+		{http.MethodPut, "/sync/blob"},
+	}
+	for _, route := range sync {
+		for range 3 {
+			if got := send(route[0], route[1]); got == http.StatusTooManyRequests {
+				t.Errorf("%s %s: 429 inside the sync budget of 100", route[0], route[1])
+				break
+			}
+		}
+	}
 }
 
 func retryAfterSeconds(t *testing.T, response interface{ Header() http.Header }) int {
