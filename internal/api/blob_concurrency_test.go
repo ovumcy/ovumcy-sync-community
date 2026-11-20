@@ -204,12 +204,20 @@ func TestBlobTransferWaitingForASlotEndsWithItsClient(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	waiter := startBlobTransfer(ctx, handler, http.MethodPut, token, newGatedBody(t, payload))
+	getWaiter := startBlobTransfer(ctx, handler, http.MethodGet, token, nil)
 	time.Sleep(blobSlotSilence)
-	cancel()
 	select {
-	case <-waiter.done:
-	case <-time.After(blobSlotWait):
-		t.Fatal("a waiting PUT outlived its client")
+	case <-getWaiter.done:
+		t.Fatalf("GET finished while every slot was held: %d", getWaiter.response.Code)
+	default:
+	}
+	cancel()
+	for _, pending := range []*pendingTransfer{waiter, getWaiter} {
+		select {
+		case <-pending.done:
+		case <-time.After(blobSlotWait):
+			t.Fatal("a waiting blob transfer outlived its client")
+		}
 	}
 	select {
 	case <-waiter.body.started:
