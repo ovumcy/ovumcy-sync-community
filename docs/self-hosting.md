@@ -202,7 +202,7 @@ The published image is cosign-signed and carries build provenance. **Verificatio
 
 ```bash
 cosign verify ghcr.io/ovumcy/ovumcy-sync-community:<tag> \
-  --certificate-identity-regexp '^https://github.com/ovumcy/ovumcy-sync-community/\.github/workflows/docker-image\.yml@.*' \
+  --certificate-identity-regexp '^https://github.com/ovumcy/ovumcy-sync-community/\.github/workflows/docker-image\.yml@refs/(heads/main|tags/v.+)$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 

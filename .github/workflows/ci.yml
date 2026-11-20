@@ -52,7 +52,9 @@ jobs:
             exit 0
           fi
           changed=$(git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD)
-          if printf '%s\n' "$changed" | grep -qvE '^$|^\.github/|^\.clusterfuzzlite/|^docs/|\.md$|^LICENSE$|^\.gitignore$|^\.dockerignore$|^Dockerfile$|^docker-compose[^/]*\.ya?ml$'; then
+          # Here-string, not a pipe: under pipefail, grep -q exiting early can
+          # SIGPIPE printf on a large path list and flip the test to false.
+          if grep -qvE '^$|^\.github/|^\.clusterfuzzlite/|^docs/|\.md$|^LICENSE$|^\.gitignore$|^\.dockerignore$|^Dockerfile$|^docker-compose[^/]*\.ya?ml$' <<< "$changed"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             echo "Go-relevant changes present: full battery"
           else
