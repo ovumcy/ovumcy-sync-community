@@ -68,39 +68,33 @@ func TestSyncDisabledAnswerIsMetered(t *testing.T) {
 		t.Fatalf("set account lapsed: %v", err)
 	}
 
+	// refusals is the route's budget left after provisioning, which spent one
+	// slot each on POST /sync/devices, PUT /sync/recovery-key and PUT /sync/blob.
 	routes := []struct {
-		method string
-		path   string
+		method   string
+		path     string
+		refusals int
 	}{
-		{http.MethodPost, "/sync/devices"},
-		{http.MethodGet, "/sync/devices"},
-		{http.MethodDelete, "/sync/devices/device-1aaaa"},
-		{http.MethodGet, "/sync/recovery-key"},
-		{http.MethodPut, "/sync/recovery-key"},
-		{http.MethodGet, "/sync/blob"},
-		{http.MethodPut, "/sync/blob"},
+		{http.MethodPost, "/sync/devices", 1},
+		{http.MethodGet, "/sync/devices", 2 * sessionReadRateLimitMultiplier},
+		{http.MethodDelete, "/sync/devices/device-1aaaa", 2},
+		{http.MethodGet, "/sync/recovery-key", 2},
+		{http.MethodPut, "/sync/recovery-key", 1},
+		{http.MethodGet, "/sync/blob", 2},
+		{http.MethodPut, "/sync/blob", 1},
 	}
-	// The largest budget is the read routes': SYNC count × the read multiplier.
-	maxAttempts := 2*sessionReadRateLimitMultiplier + 1
 	for _, route := range routes {
-		throttled := false
-		for attempt := 0; attempt < maxAttempts && !throttled; attempt++ {
+		for attempt := 0; attempt < route.refusals; attempt++ {
 			response := serveJSON(t, handler, route.method, route.path, nil, sessionToken)
-			switch response.Code {
-			case http.StatusTooManyRequests:
-				throttled = true
-			case http.StatusForbidden:
-				var payload map[string]string
-				decodeResponse(t, response.Body.Bytes(), &payload)
-				if payload["error"] != "sync_disabled" {
-					t.Fatalf("%s %s: unexpected payload %#v", route.method, route.path, payload)
-				}
-			default:
-				t.Fatalf("%s %s: status %d, body=%s", route.method, route.path, response.Code, response.Body.String())
+			var payload map[string]string
+			decodeResponse(t, response.Body.Bytes(), &payload)
+			if response.Code != http.StatusForbidden || payload["error"] != "sync_disabled" {
+				t.Fatalf("%s %s attempt %d: status %d, payload %#v", route.method, route.path, attempt+1, response.Code, payload)
 			}
 		}
-		if !throttled {
-			t.Fatalf("%s %s: no 429 within %d sync_disabled answers", route.method, route.path, maxAttempts)
+		response := serveJSON(t, handler, route.method, route.path, nil, sessionToken)
+		if response.Code != http.StatusTooManyRequests || response.Header().Get("Retry-After") == "" {
+			t.Fatalf("%s %s past its budget: status %d, body=%s", route.method, route.path, response.Code, response.Body.String())
 		}
 	}
 }
