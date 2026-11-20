@@ -40,7 +40,10 @@ docker volume create "${VOLUME_NAME}" >/dev/null
 # runs under it.
 HARDEN=(--read-only --tmpfs /tmp:size=64m --cap-drop ALL --security-opt no-new-privileges:true)
 docker run --rm "${HARDEN[@]}" -v "${VOLUME_NAME}:/data" "${IMAGE}" migrate
+# One client address drives every credential flow below, past the default
+# credential budget of 5 per 15 minutes; the smoke checks behavior, not limits.
 docker run -d --rm --name "${CONTAINER_NAME}" "${HARDEN[@]}" \
+  -e "AUTH_RATE_LIMIT_COUNT=100" \
   -e "METRICS_ENABLED=${METRICS_ENABLED}" \
   -e "METRICS_BEARER_TOKEN=${METRICS_BEARER_TOKEN}" \
   -e "FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY}" \

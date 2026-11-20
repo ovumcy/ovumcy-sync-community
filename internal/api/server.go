@@ -497,7 +497,11 @@ func (s *Server) handleRegister(writer http.ResponseWriter, request *http.Reques
 }
 
 func (s *Server) handleLogin(writer http.ResponseWriter, request *http.Request) {
-	if !s.allowAuthRequest(writer, request) {
+	// The per-IP slot is refunded like the identifier slot below: at the
+	// credential budget, successful sign-ins behind one address must not
+	// lock each other out; only failures stay charged.
+	ipSlot, ok := reserveUnderLimiter(s.authLimiter, writer, request.URL.Path+":"+s.clientIPForRateLimit(request))
+	if !ok {
 		return
 	}
 
@@ -526,6 +530,7 @@ func (s *Server) handleLogin(writer http.ResponseWriter, request *http.Request) 
 	result, err := s.auth.Login(request.Context(), payload.Login, payload.Password)
 	if err == nil && result.TOTPChallenge == nil {
 		s.authLimiter.Refund(identifierSlot)
+		s.authLimiter.Refund(ipSlot)
 	}
 	if err != nil {
 		switch {

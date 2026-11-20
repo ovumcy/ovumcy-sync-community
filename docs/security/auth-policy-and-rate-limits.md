@@ -36,7 +36,7 @@ authenticated account id; **login** is the lowercased, trimmed login from the re
 | `GET /readyz` | none | none (deliberate) | unlimited | none |
 | `GET /metrics` | bearer `METRICS_BEARER_TOKEN` (required when `METRICS_ENABLED`); 404 unless `METRICS_ENABLED` | none (deliberate) | unlimited | none |
 | `POST /auth/register` | none | auth, IP | 5/15min | 4 KiB |
-| `POST /auth/login` | none | auth, IP, and a second auth bucket on login | 5/15min each; both must pass | 4 KiB |
+| `POST /auth/login` | none | auth, IP, and a second auth bucket on login; a login that issues a session refunds both | 5/15min each; both must pass | 4 KiB |
 | `POST /auth/forgot-password` | none | auth, IP | 5/15min | 4 KiB |
 | `POST /auth/reset-password` | reset token in body | auth, IP | 5/15min | 4 KiB |
 | `POST /auth/totp/challenge` | challenge id in body; 503 if no `FIELD_ENCRYPTION_KEY` | auth, IP | 5/15min | 4 KiB |
