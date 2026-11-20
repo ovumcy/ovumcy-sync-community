@@ -45,6 +45,12 @@ info:
     `415 unsupported_media_type` on any route, including routes that read no
     body, before any rate limiter.
 
+    `PUT /sync/blob` and `GET /sync/blob` share a server-wide limit of 4
+    transfers in progress. A further transfer waits for a free slot before its
+    body is read or its blob loaded; the wait has no status code of its own and
+    counts against the server's HTTP read/write timeouts, so on a busy server a
+    blob request can take longer or end as a timed-out request.
+
     Outside the JSON error envelope: an unknown path or a method the path does
     not take gets the standard library's plain-text `404` / `405` (the latter
     with an `Allow` header), and `OPTIONS` answers a bare `204` with no body.

@@ -149,6 +149,21 @@ func TestConcurrentBlobTransfersNeverExceedTheCap(t *testing.T) {
 	// Freeing one slot admits exactly one waiter.
 	held[0].body.release()
 	<-held[0].done
+	admitted := func() bool {
+		select {
+		case <-get.done:
+			return true
+		default:
+			return len(reading()) > maxConcurrentBlobTransfers
+		}
+	}
+	deadline = time.Now().Add(blobSlotWait)
+	for !admitted() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !admitted() {
+		t.Fatal("a freed slot admitted no waiter")
+	}
 	time.Sleep(blobSlotSilence)
 	if got := len(reading()); got > maxConcurrentBlobTransfers+1 {
 		t.Fatalf("one freed slot admitted %d transfers", got-maxConcurrentBlobTransfers)
