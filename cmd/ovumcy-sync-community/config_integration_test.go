@@ -16,6 +16,8 @@ func TestConfigLoadReturnsDefaults(t *testing.T) {
 	t.Setenv("MAX_BLOB_BYTES", "")
 	t.Setenv("AUTH_RATE_LIMIT_COUNT", "")
 	t.Setenv("AUTH_RATE_LIMIT_WINDOW", "")
+	t.Setenv("SYNC_RATE_LIMIT_COUNT", "")
+	t.Setenv("SYNC_RATE_LIMIT_WINDOW", "")
 	t.Setenv("METRICS_ENABLED", "")
 	t.Setenv("METRICS_BEARER_TOKEN", "")
 	t.Setenv("MANAGED_BRIDGE_TOKEN", "")
@@ -42,11 +44,14 @@ func TestConfigLoadReturnsDefaults(t *testing.T) {
 	if cfg.MaxBlobBytes != 16<<20 {
 		t.Fatalf("unexpected max blob bytes %d", cfg.MaxBlobBytes)
 	}
-	if cfg.AuthRateLimitCount != 10 {
+	if cfg.AuthRateLimitCount != 5 {
 		t.Fatalf("unexpected auth limit count %d", cfg.AuthRateLimitCount)
 	}
-	if cfg.AuthRateLimitWindow != time.Minute {
+	if cfg.AuthRateLimitWindow != 15*time.Minute {
 		t.Fatalf("unexpected auth limit window %s", cfg.AuthRateLimitWindow)
+	}
+	if cfg.SyncRateLimitCount != 10 || cfg.SyncRateLimitWindow != time.Minute {
+		t.Fatalf("unexpected sync limit %d per %s", cfg.SyncRateLimitCount, cfg.SyncRateLimitWindow)
 	}
 	if cfg.MetricsEnabled {
 		t.Fatal("expected metrics to be disabled by default")

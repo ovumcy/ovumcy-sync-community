@@ -69,7 +69,8 @@ the strength of the phrase and the client KDF, which are client concerns and out
 ### Credential stuffer or brute-force client
 
 - Mitigation: a per-IP and per-account fixed-window limiter on auth routes
-  (`AUTH_RATE_LIMIT_COUNT`, default 10 per `AUTH_RATE_LIMIT_WINDOW`, default 1 minute;
+  (`AUTH_RATE_LIMIT_COUNT`, default 5 per `AUTH_RATE_LIMIT_WINDOW`, default 15 minutes; the sync
+  routes have their own `SYNC_RATE_LIMIT_COUNT` / `SYNC_RATE_LIMIT_WINDOW`, default 10 per minute;
   `allowAuthRequest*` in `internal/api/server.go`, `internal/security/rate_limiter.go`). Passwords
   need at least 12 runes. bcrypt cost 12 slows offline guessing. Login timing is equalized between
   known and unknown accounts (`internal/services/auth_service_timing.go`). A TOTP challenge is

@@ -18,6 +18,8 @@ var loadEnvVars = []string{
 	"MAX_BLOB_BYTES",
 	"AUTH_RATE_LIMIT_COUNT",
 	"AUTH_RATE_LIMIT_WINDOW",
+	"SYNC_RATE_LIMIT_COUNT",
+	"SYNC_RATE_LIMIT_WINDOW",
 	"MANAGED_BRIDGE_TOKEN",
 	"METRICS_ENABLED",
 	"METRICS_BEARER_TOKEN",
@@ -60,8 +62,10 @@ func TestLoadReturnsDefaultsWhenEnvironmentIsEmpty(t *testing.T) {
 		SessionTTL:               720 * time.Hour,
 		MaxDevices:               5,
 		MaxBlobBytes:             16 << 20,
-		AuthRateLimitCount:       10,
-		AuthRateLimitWindow:      time.Minute,
+		AuthRateLimitCount:       5,
+		AuthRateLimitWindow:      15 * time.Minute,
+		SyncRateLimitCount:       10,
+		SyncRateLimitWindow:      time.Minute,
 		ManagedBridgeToken:       "",
 		MetricsEnabled:           false,
 		MetricsBearerToken:       "",
@@ -92,6 +96,12 @@ func TestLoadReturnsDefaultsWhenEnvironmentIsEmpty(t *testing.T) {
 	}
 	if cfg.AuthRateLimitWindow != want.AuthRateLimitWindow {
 		t.Errorf("AuthRateLimitWindow = %s, want %s", cfg.AuthRateLimitWindow, want.AuthRateLimitWindow)
+	}
+	if cfg.SyncRateLimitCount != want.SyncRateLimitCount {
+		t.Errorf("SyncRateLimitCount = %d, want %d", cfg.SyncRateLimitCount, want.SyncRateLimitCount)
+	}
+	if cfg.SyncRateLimitWindow != want.SyncRateLimitWindow {
+		t.Errorf("SyncRateLimitWindow = %s, want %s", cfg.SyncRateLimitWindow, want.SyncRateLimitWindow)
 	}
 	if cfg.ManagedBridgeToken != want.ManagedBridgeToken {
 		t.Errorf("ManagedBridgeToken = %q, want %q", cfg.ManagedBridgeToken, want.ManagedBridgeToken)
@@ -134,6 +144,8 @@ func TestLoadAppliesEveryEnvOverride(t *testing.T) {
 	t.Setenv("MAX_BLOB_BYTES", "1048576")
 	t.Setenv("AUTH_RATE_LIMIT_COUNT", "20")
 	t.Setenv("AUTH_RATE_LIMIT_WINDOW", "30s")
+	t.Setenv("SYNC_RATE_LIMIT_COUNT", "40")
+	t.Setenv("SYNC_RATE_LIMIT_WINDOW", "2m")
 	t.Setenv("MANAGED_BRIDGE_TOKEN", bridgeTokenFixture)
 	t.Setenv("METRICS_ENABLED", "true")
 	t.Setenv("METRICS_BEARER_TOKEN", metricsTokenFixture)
@@ -168,6 +180,9 @@ func TestLoadAppliesEveryEnvOverride(t *testing.T) {
 	}
 	if cfg.AuthRateLimitWindow != 30*time.Second {
 		t.Errorf("AuthRateLimitWindow = %s, want %s", cfg.AuthRateLimitWindow, 30*time.Second)
+	}
+	if cfg.SyncRateLimitCount != 40 || cfg.SyncRateLimitWindow != 2*time.Minute {
+		t.Errorf("SyncRateLimit = %d per %s, want 40 per 2m", cfg.SyncRateLimitCount, cfg.SyncRateLimitWindow)
 	}
 	if cfg.ManagedBridgeToken != bridgeTokenFixture {
 		t.Errorf("ManagedBridgeToken = %q, want %q", cfg.ManagedBridgeToken, bridgeTokenFixture)
@@ -247,6 +262,18 @@ func TestLoadSurfacesEveryValidationAndParseError(t *testing.T) {
 			envName: "AUTH_RATE_LIMIT_WINDOW",
 			envValu: "not-a-duration",
 			wantErr: "AUTH_RATE_LIMIT_WINDOW",
+		},
+		{
+			name:    "malformed sync rate limit count int",
+			envName: "SYNC_RATE_LIMIT_COUNT",
+			envValu: "not-an-int",
+			wantErr: "SYNC_RATE_LIMIT_COUNT",
+		},
+		{
+			name:    "malformed sync rate limit window duration",
+			envName: "SYNC_RATE_LIMIT_WINDOW",
+			envValu: "not-a-duration",
+			wantErr: "SYNC_RATE_LIMIT_WINDOW",
 		},
 		{
 			name:    "malformed metrics enabled bool",

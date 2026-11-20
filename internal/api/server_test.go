@@ -1682,6 +1682,10 @@ type serverTestOptions struct {
 	authRateLimitCount int
 	// authRateLimitWindow overrides the one-minute default window.
 	authRateLimitWindow time.Duration
+	// syncRateLimitCount/Window, when zero, fall back to the auth values in
+	// NewServer.
+	syncRateLimitCount  int
+	syncRateLimitWindow time.Duration
 	trustedProxyCIDRs   []string
 	enableMetrics       bool
 	metricsBearerToken  string
@@ -1821,6 +1825,8 @@ func newTestServerWithOptions(t *testing.T, options serverTestOptions) http.Hand
 			AllowedHosts:        options.allowedHosts,
 			AuthRateLimitCount:  authRateLimitCount,
 			AuthRateLimitWindow: authRateLimitWindow,
+			SyncRateLimitCount:  options.syncRateLimitCount,
+			SyncRateLimitWindow: options.syncRateLimitWindow,
 			MaxBlobBytes:        maxBlobBytes,
 			ReadinessCheck:      options.readinessCheck,
 			TrustedProxyCIDRs:   options.trustedProxyCIDRs,

@@ -49,8 +49,10 @@ This service itself does not terminate TLS. Production deployments should not ex
 - `SESSION_TTL=720h`
 - `MAX_DEVICES=5`
 - `MAX_BLOB_BYTES=16777216`
-- `AUTH_RATE_LIMIT_COUNT=10` requests per window, keyed on the client IP for the public auth surface and on the account for authenticated routes. The authenticated read-only routes — `GET /auth/session`, `GET /sync/capabilities`, `GET /sync/devices` — get 30× this budget per account (300/min at the default), because they answer from state the caller's session already owns and a client calls them on screen focus rather than on a timer. `GET /healthz` and `GET /readyz` are never rate-limited, so a container healthcheck or uptime monitor polling on a fixed interval can never be throttled into reporting an outage
-- `AUTH_RATE_LIMIT_WINDOW=1m`
+- `AUTH_RATE_LIMIT_COUNT=5` requests per window on the credential routes, keyed on the client IP for the public auth surface and on the account for authenticated credential routes (password change, recovery code, TOTP, account deletion, step-up)
+- `AUTH_RATE_LIMIT_WINDOW=15m`
+- `SYNC_RATE_LIMIT_COUNT=10` requests per window, per account, on the `/sync/devices`, `/sync/recovery-key` and `/sync/blob` routes. The authenticated read-only routes — `GET /auth/session`, `GET /sync/capabilities`, `GET /sync/devices` — get 30× this budget per account (300/min at the default), because they answer from state the caller's session already owns and a client calls them on screen focus rather than on a timer. `GET /healthz` and `GET /readyz` are never rate-limited, so a container healthcheck or uptime monitor polling on a fixed interval can never be throttled into reporting an outage
+- `SYNC_RATE_LIMIT_WINDOW=1m`
 - `METRICS_ENABLED=false`
 - `METRICS_BEARER_TOKEN=` bearer token for `GET /metrics` (at least 32 bytes, e.g. `openssl rand -hex 32`); required when `METRICS_ENABLED=true`
 - `TRUSTED_PROXY_CIDRS=` set this to your reverse-proxy IP or CIDR when you want forwarded client IPs to participate in auth rate limiting

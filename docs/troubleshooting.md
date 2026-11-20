@@ -15,8 +15,8 @@ First checks, in order:
 ## Everyone gets `429 rate_limited` behind a reverse proxy
 
 **Cause.** `TRUSTED_PROXY_CIDRS` is unset (or does not contain the proxy's address), so the server
-keys the auth rate limiter on the TCP peer, which is the proxy. All users then share one bucket
-(`AUTH_RATE_LIMIT_COUNT` per `AUTH_RATE_LIMIT_WINDOW`, default 10 per minute).
+keys the auth rate limiter on the TCP peer, which is the proxy. All users then share one bucket per
+route (`AUTH_RATE_LIMIT_COUNT` per `AUTH_RATE_LIMIT_WINDOW`, default 5 per 15 minutes).
 
 **Fix.**
 
