@@ -323,12 +323,12 @@ func TestDisableRollsBackWhenEitherCleanupFails(t *testing.T) {
 
 		// Without the table the caller-session check fails before anything is
 		// written; the challenge surviving shows nothing was.
-		if err := totp.store.UpsertTOTPChallenge(context.Background(), models.TOTPChallenge{
+		if err := totp.store.CreateTOTPChallengeForVerifiedPassword(context.Background(), models.TOTPChallenge{
 			ChallengeIDHash: "pending-challenge",
 			AccountID:       accountID,
 			CreatedAt:       now,
 			ExpiresAt:       now.Add(TOTPChallengeTTL),
-		}); err != nil {
+		}, account.PasswordHash); err != nil {
 			t.Fatalf("seed challenge: %v", err)
 		}
 		dropTable(t, dbPath, "sessions")
@@ -413,8 +413,8 @@ func TestDisableSurfacesDecryptFieldError(t *testing.T) {
 }
 
 // dropTOTPChallengesExpiresAtColumn removes totp_challenges.expires_at out
-// from under a live store through a second connection. UpsertTOTPChallenge's
-// INSERT names expires_at explicitly and so fails once it is gone, while
+// from under a live store through a second connection. The challenge
+// INSERT (CreateTOTPChallengeForVerifiedPassword) names expires_at explicitly and so fails once it is gone, while
 // DeleteTOTPChallengesForAccount's `DELETE ... WHERE account_id = ?` names
 // no other column and keeps working — isolating IssueChallenge's upsert step
 // from its own preceding delete-existing-challenges step, both of which
@@ -477,7 +477,7 @@ func dropColumn(t *testing.T, dbPath, table, column string) {
 }
 
 // TestIssueChallengeSurfacesStoreErrors exercises IssueChallenge's
-// DeleteTOTPChallengesForAccount and UpsertTOTPChallenge generic-error
+// DeleteTOTPChallengesForAccount and challenge-insert generic-error
 // branches separately, since one dropped table can only isolate one of the
 // two sequential store calls at a time.
 func TestIssueChallengeSurfacesStoreErrors(t *testing.T) {
@@ -579,7 +579,11 @@ func TestVerifyChallengeRejectsExpiredChallenge(t *testing.T) {
 		CreatedAt:       now.Add(-10 * time.Minute),
 		ExpiresAt:       now.Add(-5 * time.Minute),
 	}
-	if err := totp.store.UpsertTOTPChallenge(ctx, expiredChallenge); err != nil {
+	seedAccount, err := totp.store.FindAccountByID(ctx, accountID)
+	if err != nil {
+		t.Fatalf("find account: %v", err)
+	}
+	if err := totp.store.CreateTOTPChallengeForVerifiedPassword(ctx, expiredChallenge, seedAccount.PasswordHash); err != nil {
 		t.Fatalf("seed expired challenge: %v", err)
 	}
 

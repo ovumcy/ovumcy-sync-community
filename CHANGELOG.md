@@ -38,6 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Re-attaching a device returns its original `created_at`.** `POST /sync/devices` for a device the account already owns answered `created_at` as the time of the request, while the stored row kept the first attach time; it now answers the stored value.
+
 - **TOTP account-state refusals are 409, not 503.** `POST /auth/totp/disable` on an account without TOTP — including the loser of two concurrent disables — now answers `409 totp_not_enabled` (once the winning disable has committed, the loser's code spends no step-up TOTP attempt), and `POST /auth/totp/verify` with no pending secret answers `409 totp_enrollment_not_started`. Both used to answer `503 totp_not_configured`, which now means only a server without `FIELD_ENCRYPTION_KEY`. **Client change:** treat `totp_not_enabled` as "already off" and `totp_enrollment_not_started` as "restart enrollment".
 
 - **The lapsed-account sweep drains every eligible account per run.** A run erased at most one page (`LAPSED_ACCOUNT_SWEEP_LIMIT` or `purge-lapsed-accounts -limit`, default 500) of accounts past their grace period, so more lapses than that waited one interval per page. Each run now pages through every eligible account, in lapse order with a cursor that never lists a skipped account twice. **Operator change:** `LAPSED_ACCOUNT_SWEEP_LIMIT` and `-limit N` are now the page size, not a cap on how many accounts one run deletes, and `-dry-run` reports the full eligible count. Eligibility is unchanged: a signalled lapse older than the grace period, re-checked inside each delete.
@@ -61,7 +63,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Go 1.27.** The Go directive moves to 1.27.4 and the build image to `golang:1.27-bookworm`; CI's golangci-lint pin moves to v2.15.0 to analyse the 1.27 toolchain. A source build now needs Go 1.27.4 or later.
 
 - **`GET /readyz` is schema-aware.** Readiness now applies the same applied-migration name-set comparison that gates startup, so a still-running `serve` whose volume a newer image has migrated turns not-ready instead of continuing to look serviceable — the running-process half of the refusal that already stopped a downgraded binary from booting (see [docs/self-hosting.md](docs/self-hosting.md#upgrading-and-rolling-back)). Operator-visible consequence: a container can now go `unhealthy` for a reason other than the process being gone, and an orchestrator configured to act on health will act on it. The probe stays two small statements — a `sqlite_master` lookup and the `schema_migrations` name set — so polling it on the healthcheck interval costs nothing measurable.
-
 
 - **A non-ASCII managed-account id could name an ASCII account on the bridge.** Every bridge route lowercased the id before checking it against `^[a-z0-9][a-z0-9_-]{7,127}$`, and lowercasing folds U+212A KELVIN SIGN into `k`, so `Kelvin-acct` reached `kelvin-acct`; trimming Unicode spaces (U+00A0, U+3000) did the same for a padded id. The id, trimmed of ASCII whitespace only, is now checked against the ASCII pattern (either case) first and lowercased after; a non-ASCII id answers 400 `invalid_managed_account` on every bridge route. An upper-case ASCII id still names its lowercase account.
 

@@ -24,8 +24,8 @@ func TestDisableRacingAStateChange(t *testing.T) {
 	const password = "correct horse battery staple"
 	ctx := context.Background()
 	cases := []struct {
-		name string
-		race func(t *testing.T, store *db.Store, account models.Account)
+		name    string
+		race    func(t *testing.T, store *db.Store, account models.Account)
 		want    error
 		charged bool
 	}{
@@ -80,12 +80,16 @@ func TestDisableRacingAStateChange(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			auth, totp, now := fixedTOTPClock(t)
 			accountID, token, secret, _ := enrollTOTP(t, auth, totp, now)
-			if err := auth.store.UpsertTOTPChallenge(ctx, models.TOTPChallenge{
+			seedAccount, err := auth.store.FindAccountByID(ctx, accountID)
+			if err != nil {
+				t.Fatalf("find account: %v", err)
+			}
+			if err := auth.store.CreateTOTPChallengeForVerifiedPassword(ctx, models.TOTPChallenge{
 				ChallengeIDHash: "pending-challenge",
 				AccountID:       accountID,
 				CreatedAt:       now,
 				ExpiresAt:       now.Add(TOTPChallengeTTL),
-			}); err != nil {
+			}, seedAccount.PasswordHash); err != nil {
 				t.Fatalf("seed challenge: %v", err)
 			}
 
