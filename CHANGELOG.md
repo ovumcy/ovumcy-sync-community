@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **One live TOTP login challenge per account, and no password hashing for a dead reset token.** Issuing a login challenge now replaces the earlier ones in the same transaction as the insert, so concurrent logins cannot leave two live challenges. `POST /auth/reset-password` checks the reset token read-only first and answers `invalid_reset_token` for an unknown, used or expired one before hashing the new password and recovery code; the answer depends on the token only, never on a login.
 - **Early refusals are rate-limited.** TOTP enroll, verify and disable answered `503 totp_not_configured`, and the device, recovery-key and blob routes answered `403 sync_disabled`, before charging their per-account limiter; each now charges it first, so a session cannot loop on those answers unmetered.
 - **Re-attaching a device returns its original `created_at`.** `POST /sync/devices` for a device the account already owns answered `created_at` as the time of the request, while the stored row kept the first attach time; it now answers the stored value.
 

@@ -473,8 +473,19 @@ func (s *AuthService) ResetPassword(
 		return PasswordResetResult{}, ErrWeakNewPassword
 	}
 
-	// Hashed before the transaction so no write lock is held across bcrypt;
-	// the cost on an invalid token is the one login already pays.
+	// Read-only precheck: a token that is already unknown, consumed or
+	// expired costs no bcrypt. The input is the bearer token alone, never a
+	// login, so the early answer reveals nothing about which logins exist;
+	// the claim in ResetAccountCredentials still decides.
+	usable, err := s.store.ResetTokenUsable(ctx, security.HashToken(resetToken), s.now().UTC())
+	if err != nil {
+		return PasswordResetResult{}, err
+	}
+	if !usable {
+		return PasswordResetResult{}, ErrInvalidResetToken
+	}
+
+	// Hashed before the transaction so no write lock is held across bcrypt.
 	newPasswordHash, err := security.HashPassword(newPassword)
 	if err != nil {
 		return PasswordResetResult{}, err // codecov:ignore -- newPassword already passed ValidatePassword above, and HashPassword cannot fail on validated input (see its own codecov:ignore on the bcrypt error).

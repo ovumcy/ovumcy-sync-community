@@ -41,7 +41,7 @@ func TestSessionTokensAndRecoveryCodesPersistOnlyAsHashes(t *testing.T) {
 
 	raw := openRawReadConnection(t, dbPath)
 
-	rows, err := raw.Query(`SELECT id, account_id, token_hash, created_at, last_seen_at, expires_at FROM sessions`)
+	rows, err := raw.Query(`SELECT id, account_id, token_hash, device_id, created_at, last_seen_at, expires_at FROM sessions`)
 	if err != nil {
 		t.Fatalf("query sessions: %v", err)
 	}
@@ -52,10 +52,11 @@ func TestSessionTokensAndRecoveryCodesPersistOnlyAsHashes(t *testing.T) {
 	for rows.Next() {
 		sessionCount++
 		var id, accountID, tokenHash, createdAt, lastSeenAt, expiresAt string
-		if err := rows.Scan(&id, &accountID, &tokenHash, &createdAt, &lastSeenAt, &expiresAt); err != nil {
+		var deviceID sql.NullString
+		if err := rows.Scan(&id, &accountID, &tokenHash, &deviceID, &createdAt, &lastSeenAt, &expiresAt); err != nil {
 			t.Fatalf("scan session row: %v", err)
 		}
-		for _, value := range []string{id, accountID, tokenHash, createdAt, lastSeenAt, expiresAt} {
+		for _, value := range []string{id, accountID, tokenHash, deviceID.String, createdAt, lastSeenAt, expiresAt} {
 			if value == registered.SessionToken {
 				t.Fatal("raw session token found persisted in the sessions table")
 			}
@@ -226,6 +227,33 @@ func TestAuthEndpointJSONBodyCeilingIsEnforced(t *testing.T) {
 		"",
 		http.StatusUnauthorized,
 	)
+}
+
+// TestAuthEndpointJSONBodyCeilingIsExactlyFourKiB pins the boundary itself:
+// a login body of exactly 4096 bytes parses (and fails on credentials), one
+// of 4097 bytes is invalid_json.
+func TestAuthEndpointJSONBodyCeilingIsExactlyFourKiB(t *testing.T) {
+	handler := newTestServer(t)
+
+	bodyOfSize := func(size int) []byte {
+		const prefix = `{"login":"owner@example.com","password":"`
+		const suffix = `"}`
+		pad := size - len(prefix) - len(suffix)
+		body := []byte(prefix + strings.Repeat("a", pad) + suffix)
+		if len(body) != size {
+			t.Fatalf("fixture is %d bytes, want %d", len(body), size)
+		}
+		return body
+	}
+
+	performRawRequest(t, handler, http.MethodPost, "/auth/login", bodyOfSize(4096), "", http.StatusUnauthorized)
+
+	response := performRawRequest(t, handler, http.MethodPost, "/auth/login", bodyOfSize(4097), "", http.StatusBadRequest)
+	var payload map[string]string
+	decodeResponse(t, response.Body.Bytes(), &payload)
+	if payload["error"] != "invalid_json" {
+		t.Fatalf("expected invalid_json for 4097 bytes, got %#v", payload)
+	}
 }
 
 // TestPremiumActiveIsUntouchableThroughPublicEndpoints pins the bridge-only
