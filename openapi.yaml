@@ -621,7 +621,7 @@ paths:
             Retry-After:
               description: |
                 Seconds until the caller may retry: the seconds left in the spent
-                `AUTH_RATE_LIMIT_WINDOW` (at most 60 by default) on a request rate-limit
+                `AUTH_RATE_LIMIT_WINDOW` (at most 900 by default) on a request rate-limit
                 refusal, 1 to 900 (the end of the spent window) on a spent
                 enrollment budget. The lifetime-budget refusal also carries
                 `Retry-After: 1`, but no wait helps there.
@@ -1873,15 +1873,17 @@ components:
         Per-route auth rate limit exceeded (per-IP, per-account, and/or
         per-login-identifier depending on the route), or a TOTP attempt budget
         spent. The `Retry-After` value depends on the limiter: the seconds left in
-        the spent `AUTH_RATE_LIMIT_WINDOW` (at most 60 by default) on the
-        path-and-address / per-account request limiters, and 1 to 900 seconds
+        the spent request-limit window — `AUTH_RATE_LIMIT_WINDOW` (at most 900 by
+        default) on the credential routes, `SYNC_RATE_LIMIT_WINDOW` (at most 60 by
+        default) on the `/sync/devices`, `/sync/recovery-key`, `/sync/blob` and
+        read-state routes — and 1 to 900 seconds
         (the end of the spent budget's fixed 15-minute window) on a TOTP-budget
         refusal. On `POST /auth/totp/verify` a spent per-secret lifetime budget
         also carries `Retry-After: 1`, but no wait helps: the pending secret is
         discarded and enrollment must restart.
       headers:
         Retry-After:
-          description: Seconds until the caller may retry (the rest of the request-limit window, at most 60 by default, or 1 to 900 on a TOTP-budget refusal; see the response description).
+          description: Seconds until the caller may retry (the rest of the request-limit window: at most 900 by default on the credential routes, 60 on the sync and read-state routes; 1 to 900 on a TOTP-budget refusal; see the response description).
           schema:
             type: string
             example: "60"
