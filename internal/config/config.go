@@ -32,6 +32,8 @@ type Config struct {
 	MaxBlobBytes        int
 	AuthRateLimitCount  int
 	AuthRateLimitWindow time.Duration
+	SyncRateLimitCount  int
+	SyncRateLimitWindow time.Duration
 	ManagedBridgeToken  string
 	MetricsEnabled      bool
 	MetricsBearerToken  string
@@ -126,12 +128,22 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
-	authRateLimitCount, err := intFromEnv("AUTH_RATE_LIMIT_COUNT", 10)
+	authRateLimitCount, err := intFromEnv("AUTH_RATE_LIMIT_COUNT", 5)
 	if err != nil {
 		return Config{}, err
 	}
 
-	authRateLimitWindow, err := durationFromEnv("AUTH_RATE_LIMIT_WINDOW", time.Minute)
+	authRateLimitWindow, err := durationFromEnv("AUTH_RATE_LIMIT_WINDOW", 15*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+
+	syncRateLimitCount, err := intFromEnv("SYNC_RATE_LIMIT_COUNT", 10)
+	if err != nil {
+		return Config{}, err
+	}
+
+	syncRateLimitWindow, err := durationFromEnv("SYNC_RATE_LIMIT_WINDOW", time.Minute)
 	if err != nil {
 		return Config{}, err
 	}
@@ -200,7 +212,9 @@ func Load() (Config, error) {
 		MaxBlobBytes:               maxBlobBytes,
 		AuthRateLimitCount:         authRateLimitCount,
 		AuthRateLimitWindow:        authRateLimitWindow,
-		ManagedBridgeToken:         os.Getenv("MANAGED_BRIDGE_TOKEN"),
+		SyncRateLimitCount:         syncRateLimitCount,
+		SyncRateLimitWindow:        syncRateLimitWindow,
+		ManagedBridgeToken:        os.Getenv("MANAGED_BRIDGE_TOKEN"),
 		MetricsEnabled:             metricsEnabled,
 		MetricsBearerToken:         os.Getenv("METRICS_BEARER_TOKEN"),
 		AllowedOrigins:             csvListFromEnv("ALLOWED_ORIGINS"),
@@ -268,6 +282,12 @@ func (c Config) Validate() error {
 	}
 	if c.AuthRateLimitWindow <= 0 {
 		return fmt.Errorf("AUTH_RATE_LIMIT_WINDOW must be positive")
+	}
+	if c.SyncRateLimitCount <= 0 {
+		return fmt.Errorf("SYNC_RATE_LIMIT_COUNT must be positive")
+	}
+	if c.SyncRateLimitWindow <= 0 {
+		return fmt.Errorf("SYNC_RATE_LIMIT_WINDOW must be positive")
 	}
 	// The server trims the bridge token and treats empty as "bridge disabled",
 	// so the floor applies to the trimmed value only when it is set.

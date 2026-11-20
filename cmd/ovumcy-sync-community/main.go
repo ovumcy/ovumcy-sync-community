@@ -135,7 +135,9 @@ func runServe(cfg config.Config) error {
 				AllowedHosts:        cfg.AllowedHosts,
 				AuthRateLimitCount:  cfg.AuthRateLimitCount,
 				AuthRateLimitWindow: cfg.AuthRateLimitWindow,
-				MaxBlobBytes:        cfg.MaxBlobBytes,
+				SyncRateLimitCount:  cfg.SyncRateLimitCount,  // codecov:ignore -- process wiring reached only by a full serve, same seam as ReadTimeout below; the values are covered by the config tests.
+				SyncRateLimitWindow: cfg.SyncRateLimitWindow, // codecov:ignore -- same seam as SyncRateLimitCount above.
+				MaxBlobBytes:       cfg.MaxBlobBytes,
 				ReadinessCheck:      store.CheckReady,
 				TrustedProxyCIDRs:   cfg.TrustedProxyCIDRs,
 			},

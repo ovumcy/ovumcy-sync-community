@@ -32,6 +32,8 @@ func testConfigForDBPath(dbPath string) config.Config {
 		MaxBlobBytes:             16 << 20,
 		AuthRateLimitCount:       10,
 		AuthRateLimitWindow:      time.Minute,
+		SyncRateLimitCount:       10,
+		SyncRateLimitWindow:      time.Minute,
 		LapsedAccountGracePeriod: testLapsedAccountGracePeriod,
 	}
 }

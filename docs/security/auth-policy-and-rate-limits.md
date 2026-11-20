@@ -9,14 +9,15 @@ numbers at their defaults from `internal/config/config.go`. The claims are pinne
 
 | Setting | Default |
 | --- | --- |
-| `AUTH_RATE_LIMIT_COUNT` / `AUTH_RATE_LIMIT_WINDOW` | 10 per 1m (fixed window per key) |
-| Read-state budget | 30 x `AUTH_RATE_LIMIT_COUNT` = 300 per 1m (`sessionReadRateLimitMultiplier`) |
+| `AUTH_RATE_LIMIT_COUNT` / `AUTH_RATE_LIMIT_WINDOW` | 5 per 15m (fixed window per key), credential routes |
+| `SYNC_RATE_LIMIT_COUNT` / `SYNC_RATE_LIMIT_WINDOW` | 10 per 1m (fixed window per key), sync routes |
+| Read-state budget | 30 x `SYNC_RATE_LIMIT_COUNT` = 300 per 1m (`sessionReadRateLimitMultiplier`) |
 | `MAX_BLOB_BYTES` | 16 MiB (16777216) |
 | `SESSION_TTL` | 720h |
 
 A throttled request gets `429` with `{"error": "rate_limited"}` and `Retry-After` set to
-the seconds left in the spent window, rounded up (`allowUnderLimiter`; at most `AUTH_RATE_LIMIT_WINDOW`, so
-60 by default). Each limiter key is prefixed with the request path (or an explicit route key), so
+the seconds left in the spent window, rounded up (`allowUnderLimiter`; at most the limiter's window: 900 by default on the credential routes,
+60 on the sync and read-state routes). Each limiter key is prefixed with the request path (or an explicit route key), so
 every route has its own bucket. Limiter state is in memory, per process, and a restart clears it. The
 TOTP code budgets below are in memory too; the one stored count is the per-pending-enrollment lifetime
 count (`totp_failure_windows`, `ReserveTOTPAttempt`), which survives a restart. A TOTP budget's `429`
@@ -34,27 +35,27 @@ authenticated account id; **login** is the lowercased, trimmed login from the re
 | `GET /healthz` | none | none (deliberate) | unlimited | none |
 | `GET /readyz` | none | none (deliberate) | unlimited | none |
 | `GET /metrics` | bearer `METRICS_BEARER_TOKEN` (required when `METRICS_ENABLED`); 404 unless `METRICS_ENABLED` | none (deliberate) | unlimited | none |
-| `POST /auth/register` | none | auth, IP | 10/min | 4 KiB |
-| `POST /auth/login` | none | auth, IP, and a second auth bucket on login | 10/min each; both must pass | 4 KiB |
-| `POST /auth/forgot-password` | none | auth, IP | 10/min | 4 KiB |
-| `POST /auth/reset-password` | reset token in body | auth, IP | 10/min | 4 KiB |
-| `POST /auth/totp/challenge` | challenge id in body; 503 if no `FIELD_ENCRYPTION_KEY` | auth, IP | 10/min | 4 KiB |
-| `DELETE /auth/session` | the bearer token it revokes | auth, IP | 10/min | none read |
-| `POST /auth/change-password` | session | auth, account | 10/min | 4 KiB |
-| `POST /auth/recovery-code/regenerate` | session | auth, account | 10/min | 4 KiB |
-| `POST /auth/totp/enroll` | session | auth, account | 10/min | 4 KiB |
-| `POST /auth/totp/verify` | session | auth, account | 10/min | 4 KiB |
-| `POST /auth/totp/disable` | session | auth, account | 10/min | 4 KiB |
+| `POST /auth/register` | none | auth, IP | 5/15min | 4 KiB |
+| `POST /auth/login` | none | auth, IP, and a second auth bucket on login | 5/15min each; both must pass | 4 KiB |
+| `POST /auth/forgot-password` | none | auth, IP | 5/15min | 4 KiB |
+| `POST /auth/reset-password` | reset token in body | auth, IP | 5/15min | 4 KiB |
+| `POST /auth/totp/challenge` | challenge id in body; 503 if no `FIELD_ENCRYPTION_KEY` | auth, IP | 5/15min | 4 KiB |
+| `DELETE /auth/session` | the bearer token it revokes | auth, IP | 5/15min | none read |
+| `POST /auth/change-password` | session | auth, account | 5/15min | 4 KiB |
+| `POST /auth/recovery-code/regenerate` | session | auth, account | 5/15min | 4 KiB |
+| `POST /auth/totp/enroll` | session | auth, account | 5/15min | 4 KiB |
+| `POST /auth/totp/verify` | session | auth, account | 5/15min | 4 KiB |
+| `POST /auth/totp/disable` | session | auth, account | 5/15min | 4 KiB |
 | `GET /auth/session` | session | read, account | 300/min | none |
-| `DELETE /account` | session + current password (+ TOTP code if enrolled) | auth, account | 10/min | 4 KiB |
+| `DELETE /account` | session + current password (+ TOTP code if enrolled) | auth, account | 5/15min | 4 KiB |
 | `GET /sync/capabilities` | session | read, account | 300/min | none |
 | `GET /sync/devices` | session | read, account | 300/min | none |
-| `POST /sync/devices` | session | auth, account | 10/min | 4 KiB |
-| `DELETE /sync/devices/{device_id}` | session (+ current password and TOTP code if enrolled) | auth, account (stable key `sync_devices_remove:<account>`, not the path) | 10/min | 4 KiB, optional |
-| `GET /sync/recovery-key` | session | auth, account | 10/min | none |
-| `PUT /sync/recovery-key` | session + current password (+ TOTP code if enrolled); session alone when the package equals the stored one (no write, no step-up bucket); a managed session stores only a first package, with no password and no step-up bucket | auth, account | 10/min | 8 KiB |
-| `GET /sync/blob` | session | auth, account | 10/min | none |
-| `PUT /sync/blob` | session | auth, account | 10/min | base64 of `MAX_BLOB_BYTES` plus 8 KiB: 22377816 bytes at the default (`encodedBlobRequestLimit`) |
+| `POST /sync/devices` | session | sync, account | 10/min | 4 KiB |
+| `DELETE /sync/devices/{device_id}` | session (+ current password and TOTP code if enrolled) | sync, account (stable key `sync_devices_remove:<account>`, not the path) | 10/min | 4 KiB, optional |
+| `GET /sync/recovery-key` | session | sync, account | 10/min | none |
+| `PUT /sync/recovery-key` | session + current password (+ TOTP code if enrolled); session alone when the package equals the stored one (no write, no step-up bucket); a managed session stores only a first package, with no password and no step-up bucket | sync, account | 10/min | 8 KiB |
+| `GET /sync/blob` | session | sync, account | 10/min | none |
+| `PUT /sync/blob` | session | sync, account | 10/min | base64 of `MAX_BLOB_BYTES` plus 8 KiB: 22377816 bytes at the default (`encodedBlobRequestLimit`) |
 | `POST /managed/session` | `MANAGED_BRIDGE_TOKEN` bearer; 503 if unset | none (deliberate) | unlimited | 4 KiB |
 | `DELETE /managed/accounts/{account_id}` | `MANAGED_BRIDGE_TOKEN` bearer | none (deliberate) | unlimited | none |
 | `POST /managed/accounts/{account_id}/premium` | `MANAGED_BRIDGE_TOKEN` bearer | none (deliberate) | unlimited | 4 KiB |
@@ -67,7 +68,7 @@ Notes on the table:
   a limiter; per-account limiting only ever applies to a caller with a valid session.
 - The 30x read budget covers exactly three routes: `GET /auth/session`, `GET /sync/capabilities`,
   `GET /sync/devices`. `GET /sync/blob` and `GET /sync/recovery-key` are not in that set and use the
-  10/min per-account budget.
+  10/min per-account sync budget.
 - Login carries a second ceiling keyed on the normalized login (`login_identifier:<sha256 of login>` in
   the same limiter, so a key has a fixed size and the limiter holds no login in the clear), so a distributed attacker cannot multiply the budget across source IPs. A slot is reserved
   before the password check and refunded when the login issues a session, so only failures (and
@@ -83,7 +84,7 @@ Notes on the table:
   over its budget stops at the IP gate instead of paying for a session lookup on every retry.
 - The body is decoded strictly: unknown fields and trailing data are `400 invalid_json`, as is any body over
   the cap.
-- Raising `AUTH_RATE_LIMIT_COUNT` or `AUTH_RATE_LIMIT_WINDOW` moves every bucket; the read budget has no
+- Raising `AUTH_RATE_LIMIT_*` moves every credential bucket (the step-up bucket included); raising `SYNC_RATE_LIMIT_*` moves the sync buckets and the read budget, which has no
   separate setting.
 
 ### Deliberately unlimited

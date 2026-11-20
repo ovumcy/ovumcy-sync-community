@@ -35,6 +35,7 @@ type Server struct {
 	metrics             *Metrics
 	metricsBearerToken  string
 	authLimiter         *security.RateLimiter
+	syncLimiter         *security.RateLimiter
 	sessionReadLimiter  *security.RateLimiter
 	allowedOrigins      map[string]struct{}
 	allowedHosts        map[string]struct{}
@@ -52,6 +53,10 @@ type ServerOptions struct {
 	AllowedHosts        []string
 	AuthRateLimitCount  int
 	AuthRateLimitWindow time.Duration
+	// SyncRateLimitCount/Window meter the sync routes and, ×30, the read-state
+	// routes. Zero falls back to the auth values.
+	SyncRateLimitCount  int
+	SyncRateLimitWindow time.Duration
 	MaxBlobBytes        int
 	ReadinessCheck      func(context.Context) error
 	TrustedProxyCIDRs   []string
@@ -78,6 +83,14 @@ func NewServer(
 		metrics = NewMetrics()
 	}
 
+	syncCount, syncWindow := options.SyncRateLimitCount, options.SyncRateLimitWindow
+	if syncCount == 0 {
+		syncCount = options.AuthRateLimitCount
+	}
+	if syncWindow == 0 {
+		syncWindow = options.AuthRateLimitWindow
+	}
+
 	server := &Server{
 		auth:               auth,
 		sync:               sync,
@@ -87,10 +100,8 @@ func NewServer(
 		metrics:            metrics,
 		metricsBearerToken: strings.TrimSpace(options.MetricsBearerToken),
 		authLimiter:        security.NewRateLimiter(options.AuthRateLimitCount, options.AuthRateLimitWindow),
-		sessionReadLimiter: security.NewRateLimiter(
-			sessionReadRateLimitCount(options.AuthRateLimitCount),
-			options.AuthRateLimitWindow,
-		),
+		syncLimiter:        security.NewRateLimiter(syncCount, syncWindow),
+		sessionReadLimiter: security.NewRateLimiter(sessionReadRateLimitCount(syncCount), syncWindow),
 		allowedOrigins:      originSet,
 		allowedHosts:        parseAllowedHosts(options.AllowedHosts),
 		trustedProxyCIDRs:   parseTrustedProxyCIDRs(options.TrustedProxyCIDRs),
@@ -1135,7 +1146,7 @@ func (s *Server) handleAttachDevice(
 	// Per-account ceiling: even though MaxDevices caps the row count inside
 	// the UpsertDevice statement, unbounded attach attempts thrash that
 	// insert and its count sub-select under contention.
-	if !s.allowAuthRequestForAccount(writer, request, account.ID) {
+	if !s.allowSyncRequestForAccount(writer, request, account.ID) {
 		return
 	}
 
@@ -1195,7 +1206,7 @@ func (s *Server) handleRemoveDevice(
 ) {
 	// Mutating account op — rate-limit like attach, keyed on a stable
 	// route-scoped string (not the path, whose device_id segment varies).
-	if !s.allowAuthRequestWithKey(writer, "sync_devices_remove:"+account.ID) {
+	if !allowUnderLimiter(s.syncLimiter, writer, "sync_devices_remove:"+account.ID) {
 		return
 	}
 
@@ -1249,7 +1260,7 @@ func (s *Server) handlePutBlob(
 	// over up to MaxBlobBytes (16 MB default) plus two DB queries. Without
 	// a per-account limit, a captured session can flood CPU/IO regardless
 	// of the per-IP gate.
-	if !s.allowAuthRequestForAccount(writer, request, account.ID) {
+	if !s.allowSyncRequestForAccount(writer, request, account.ID) {
 		return
 	}
 
@@ -1294,7 +1305,7 @@ func (s *Server) handlePutRecoveryKey(
 ) {
 	// Per-account ceiling: single-row UPSERT per account, but unbounded
 	// calls thrash DB writers under contention.
-	if !s.allowAuthRequestForAccount(writer, request, account.ID) {
+	if !s.allowSyncRequestForAccount(writer, request, account.ID) {
 		return
 	}
 
@@ -1360,7 +1371,7 @@ func (s *Server) handleGetBlob(
 	// Same per-account limiter as the PUT side: without it a valid session
 	// can drive unmetered reads of up to MAX_BLOB_BYTES ciphertext (plus the
 	// base64 encoding cost) past the per-IP auth gate.
-	if !s.allowAuthRequestForAccount(writer, request, account.ID) {
+	if !s.allowSyncRequestForAccount(writer, request, account.ID) {
 		return
 	}
 
@@ -1384,7 +1395,7 @@ func (s *Server) handleGetRecoveryKey(
 	account models.Account,
 ) {
 	// Same per-account limiter as the PUT side — see handleGetBlob.
-	if !s.allowAuthRequestForAccount(writer, request, account.ID) {
+	if !s.allowSyncRequestForAccount(writer, request, account.ID) {
 		return
 	}
 
@@ -1548,24 +1559,32 @@ func (s *Server) allowAuthRequest(writer http.ResponseWriter, request *http.Requ
 	)
 }
 
+// allowAuthRequestForAccount meters an authenticated credential route (password,
+// recovery code, TOTP, account erase) per account under AUTH_RATE_LIMIT_*.
 func (s *Server) allowAuthRequestForAccount(
 	writer http.ResponseWriter,
 	request *http.Request,
 	accountID string,
 ) bool {
-	return s.allowAuthRequestWithKey(writer, request.URL.Path+":"+accountID)
+	return allowUnderLimiter(s.authLimiter, writer, request.URL.Path+":"+accountID)
 }
 
-// allowAuthRequestWithKey applies the per-account auth limiter under an explicit
-// key. Routes with a path parameter (e.g. DELETE /sync/devices/{device_id})
-// must not key on request.URL.Path — the varying segment would give each id its
-// own bucket and let a caller sidestep the per-account ceiling — so they pass a
-// stable route-scoped key instead.
-func (s *Server) allowAuthRequestWithKey(writer http.ResponseWriter, key string) bool {
-	return allowUnderLimiter(s.authLimiter, writer, key)
+// allowSyncRequestForAccount meters a sync route (devices, recovery key, blob)
+// per account under SYNC_RATE_LIMIT_*, apart from the credential routes: the
+// password-guess budget is tight, and a client syncing on every edit must not
+// spend it. A step-up on a sync route still draws on the auth limiter's
+// stepup:<account> bucket. Routes with a path parameter (DELETE
+// /sync/devices/{device_id}) key on a stable route string instead of the path,
+// whose varying segment would give each id its own bucket.
+func (s *Server) allowSyncRequestForAccount(
+	writer http.ResponseWriter,
+	request *http.Request,
+	accountID string,
+) bool {
+	return allowUnderLimiter(s.syncLimiter, writer, request.URL.Path+":"+accountID)
 }
 
-// sessionReadRateLimitMultiplier scales AUTH_RATE_LIMIT_COUNT into the budget
+// sessionReadRateLimitMultiplier scales SYNC_RATE_LIMIT_COUNT into the budget
 // for the authenticated read-only account-state routes (GET /auth/session,
 // GET /sync/capabilities, GET /sync/devices). Those routes return state the
 // caller's own session already entitles it to, so the limiter there is a
@@ -1574,9 +1593,9 @@ func (s *Server) allowAuthRequestWithKey(writer http.ResponseWriter, key string)
 // single-instance server, and it must sit far above any cadence a real client
 // produces.
 //
-// It is a multiple of the existing knob rather than a knob of its own, so an
-// operator who tightens AUTH_RATE_LIMIT_COUNT tightens these proportionally
-// and there is one rate-limit dial to reason about. At the 10-per-minute
+// It is a multiple of the sync knob rather than a knob of its own, so an
+// operator who tightens SYNC_RATE_LIMIT_COUNT tightens these proportionally.
+// It also gates withAuth's per-IP session lookup. At the 10-per-minute
 // default the budget is 300 per minute per account per route — five requests
 // a second, sustained — while the app issues these one per screen focus or
 // per explicit tap, with no polling timer behind them. A person flipping
@@ -1626,7 +1645,7 @@ func reserveUnderLimiter(limiter *security.RateLimiter, writer http.ResponseWrit
 	}
 
 	// The seconds left in the spent window (rounded up, at least 1), so a
-	// configured AUTH_RATE_LIMIT_WINDOW is reflected rather than a fixed 60.
+	// configured AUTH_ or SYNC_RATE_LIMIT_WINDOW is reflected, not a fixed 60.
 	seconds := max(int64(math.Ceil(limiter.RetryAfter(slot).Seconds())), 1)
 	writer.Header().Set("Retry-After", fmt.Sprint(seconds))
 	writeError(writer, http.StatusTooManyRequests, "rate_limited")

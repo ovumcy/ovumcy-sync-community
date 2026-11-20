@@ -109,8 +109,10 @@ go run ./cmd/ovumcy-sync-community serve
 | `SESSION_TTL` | `720h` | Session token lifetime |
 | `MAX_DEVICES` | `5` | Devices attachable per account |
 | `MAX_BLOB_BYTES` | `16777216` | Ciphertext size cap (16 MiB) |
-| `AUTH_RATE_LIMIT_COUNT` | `10` | Requests per window, per route: anonymous auth routes count per client IP, authenticated routes (including `GET /sync/blob` and `GET /sync/recovery-key`) per account, and `POST /auth/login` also per login identifier across all IPs. Only `GET /auth/session`, `GET /sync/capabilities`, and `GET /sync/devices` get 30× this, per account |
-| `AUTH_RATE_LIMIT_WINDOW` | `1m` | Auth rate-limit window |
+| `AUTH_RATE_LIMIT_COUNT` | `5` | Requests per window, per route, on the credential routes: anonymous auth routes count per client IP, authenticated credential routes (password change, recovery-code regeneration, TOTP, account deletion, and the shared step-up bucket) per account, and `POST /auth/login` also per login identifier across all IPs |
+| `AUTH_RATE_LIMIT_WINDOW` | `15m` | Credential rate-limit window |
+| `SYNC_RATE_LIMIT_COUNT` | `10` | Requests per window, per route and account, on `/sync/devices`, `/sync/recovery-key` and `/sync/blob`. `GET /auth/session`, `GET /sync/capabilities`, and `GET /sync/devices` get 30× this, per account |
+| `SYNC_RATE_LIMIT_WINDOW` | `1m` | Sync rate-limit window |
 | `METRICS_ENABLED` | `false` | Enables `GET /metrics` |
 | `METRICS_BEARER_TOKEN` | _(unset)_ | Bearer token for `/metrics` (at least 32 bytes); required when `METRICS_ENABLED=true`, rejected otherwise |
 | `MANAGED_BRIDGE_TOKEN` | _(unset)_ | Enables the managed-bridge endpoints (leave unset for community use) |
