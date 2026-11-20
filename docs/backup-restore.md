@@ -63,7 +63,7 @@ Note which image tag was running when the backup was taken. A backup and the bui
 ## Simple Restore Flow
 
 1. Stop the running service.
-2. Restore the SQLite file into `./data/ovumcy-sync-community.sqlite` or your chosen `/data` location.
+2. Restore the SQLite file into `./data/ovumcy-sync-community.sqlite` or your chosen `/data` location. Restore the `-wal` and `-shm` sidecars together with it, or delete any stale `ovumcy-sync-community.sqlite-wal` and `-shm` left in that directory: a leftover sidecar from the replaced database would be replayed against the restored file.
 3. Run the explicit migration step for the restored database:
 
 ```bash

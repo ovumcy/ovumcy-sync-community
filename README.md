@@ -47,7 +47,7 @@ The server **never** holds:
 
 ## FAQ
 
-**Can the server read my cycle data?** No. The app encrypts everything with a master key derived on your device from your recovery phrase. The server receives only ciphertext and cannot decrypt it.
+**Can the server read my cycle data?** No. The app encrypts everything with a random master key generated on your device. Your recovery phrase wraps that key so it can be restored; the key is not derived from the phrase. The server receives only ciphertext and cannot decrypt it.
 
 **Where is my data stored?** In a single SQLite file on the machine you run this on (persisted under `/data`). You own the disk and the backups.
 
@@ -167,6 +167,8 @@ docker compose -f docker-compose.yml -f docker-compose.caddy.yml up --build
 ```
 
 See [docs/self-hosting.md](docs/self-hosting.md) for the reverse-proxy, TLS, 2FA, and release-verification details, and [docs/backup-restore.md](docs/backup-restore.md) for an operator restore drill.
+
+> **Native installs.** Outside Docker, `BIND_ADDR` defaults to `:8080`, which listens on every interface. Set `BIND_ADDR=127.0.0.1:8080` and put a TLS reverse proxy in front, unless you mean to expose the port directly.
 
 > **Publishing on all interfaces.** The baseline binds loopback only. To expose the port directly (a reverse proxy is preferred), add a `docker-compose.override.yml` (auto-loaded) with `ports: !override` — the `!override` tag *replaces* the loopback mapping; a plain `ports:` list would append and double-bind port 8080, failing to start.
 

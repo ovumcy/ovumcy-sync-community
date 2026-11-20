@@ -51,7 +51,7 @@ the strength of the phrase and the client KDF, which are client concerns and out
 | TOTP secrets | `accounts.totp_secret_encrypted` | AES-256-GCM, key from `FIELD_ENCRYPTION_KEY` via HKDF-SHA256, AAD bound to the account id (`internal/security/field_crypto.go`, `internal/services/totp_service.go`) |
 | `FIELD_ENCRYPTION_KEY` | Process environment | Without it, TOTP enrollment is unavailable and an already-enrolled account fails closed at login (503 `totp_not_configured`), never falling back to password-only; loss makes stored TOTP secrets unreadable |
 | `MANAGED_BRIDGE_TOKEN` | Process environment | Authorizes the managed bridge routes; unset means the bridge answers 503 |
-| `METRICS_BEARER_TOKEN` | Process environment | Optional guard on the metrics endpoint |
+| `METRICS_BEARER_TOKEN` | Process environment | Required bearer token for the metrics endpoint whenever `METRICS_ENABLED=true` |
 
 ## Adversaries
 

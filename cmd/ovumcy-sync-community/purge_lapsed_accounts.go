@@ -70,7 +70,7 @@ func runPurgeLapsedAccounts(cfg config.Config, args []string, w io.Writer) error
 	// Flag parsing stops at the first non-flag, so a typo like `dry-run` would
 	// otherwise be ignored and the purge would run for real.
 	if flagSet.NArg() > 0 {
-		return fmt.Errorf("unexpected argument %q; flags are -dry-run and -limit N", flagSet.Arg(0))
+		return fmt.Errorf("unexpected argument %q; flags are -dry-run, -limit N and -max-deletes N", flagSet.Arg(0))
 	}
 
 	store, err := db.Open(cfg.DBPath)
