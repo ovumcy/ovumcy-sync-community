@@ -210,3 +210,22 @@ func TestLapsedAccountSweepServiceStoreWideFailureStreakStillAborts(t *testing.T
 		}
 	}
 }
+
+// TestLapsedAccountSweepServiceRowFaultsBetweenStoreFaultsStillAbort keeps the
+// brake when store faults alternate with row-specific ones: a skipped row
+// leaves the streak as it is instead of resetting it.
+func TestLapsedAccountSweepServiceRowFaultsBetweenStoreFaultsStillAbort(t *testing.T) {
+	store := newScriptedSweepStore(20)
+	for i, candidate := range store.candidates {
+		if i%2 == 0 {
+			store.outcomes[candidate.ID] = errors.New("database is locked (5) (SQLITE_BUSY)")
+		} else {
+			store.outcomes[candidate.ID] = errors.New("FOREIGN KEY constraint failed")
+		}
+	}
+	_, err := scriptedSweepService(store).Run(context.Background(), 4, false)
+	want := 2*maxConsecutiveLapsedDeleteFailures - 1
+	if !errors.Is(err, ErrLapsedSweepAborted) || len(store.deleteLog) != want {
+		t.Fatalf("expected an abort after %d attempts, got %d attempts, err %v", want, len(store.deleteLog), err)
+	}
+}
