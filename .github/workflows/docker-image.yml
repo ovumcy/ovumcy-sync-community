@@ -85,11 +85,23 @@ jobs:
         env:
           REF: ${{ github.ref }}
         run: |
-          if [[ "$REF" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          latest=false
+          minor=false
+          if [[ "$REF" =~ ^refs/tags/v([0-9]+)\.([0-9]+)\.[0-9]+$ ]]; then
             echo "is_release=true" >> "$GITHUB_OUTPUT"
+            tag="${REF#refs/tags/}"
+            all=$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true)
+            # A release tag on an older commit must not move floating tags
+            # backwards: latest follows the highest semver overall, X.Y the
+            # highest within its own minor line.
+            [ "$(printf '%s\n%s\n' "$all" "$tag" | sort -V | tail -n 1)" = "$tag" ] && latest=true
+            line=$(grep -E "^v${BASH_REMATCH[1]}\.${BASH_REMATCH[2]}\." <<< "$all" || true)
+            [ "$(printf '%s\n%s\n' "$line" "$tag" | sort -V | tail -n 1)" = "$tag" ] && minor=true
           else
             echo "is_release=false" >> "$GITHUB_OUTPUT"
           fi
+          echo "is_latest=$latest" >> "$GITHUB_OUTPUT"
+          echo "is_highest_minor=$minor" >> "$GITHUB_OUTPUT"
 
       - name: Extract Docker metadata
         id: meta
@@ -103,10 +115,10 @@ jobs:
           flavor: |
             latest=false
           tags: |
-            type=raw,value=latest,enable=${{ steps.release.outputs.is_release == 'true' }}
+            type=raw,value=latest,enable=${{ steps.release.outputs.is_latest == 'true' }}
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=ref,event=branch
+            type=semver,pattern={{major}}.{{minor}},enable=${{ steps.release.outputs.is_highest_minor == 'true' }}
+            type=ref,event=branch,enable=${{ github.ref == 'refs/heads/main' }}
             type=ref,event=tag
             type=sha
 
