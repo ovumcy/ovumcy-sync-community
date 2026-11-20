@@ -131,7 +131,11 @@ func (s *AuthService) Register(ctx context.Context, login string, password strin
 	}
 
 	now := s.now().UTC()
-	_, err = s.store.CreateAccount(ctx, models.Account{
+	session, result, err := s.newSession(accountID, now)
+	if err != nil {
+		return AuthResult{}, err // codecov:ignore -- newSession fails only on a crypto-primitive error that cannot occur in practice (see its own codecov:ignore annotations).
+	}
+	err = s.store.CreateAccountWithSession(ctx, models.Account{
 		ID:               accountID,
 		Login:            normalizedLogin,
 		PasswordHash:     passwordHash,
@@ -139,16 +143,11 @@ func (s *AuthService) Register(ctx context.Context, login string, password strin
 		Mode:             "self_hosted",
 		PremiumActive:    false,
 		CreatedAt:        now,
-	})
+	}, session)
 	if err != nil {
 		if errors.Is(err, db.ErrConflict) {
 			return AuthResult{}, ErrRegistrationFailed
 		}
-		return AuthResult{}, err
-	}
-
-	result, err := s.createSession(ctx, accountID, now)
-	if err != nil {
 		return AuthResult{}, err
 	}
 	result.RecoveryCode = recoveryCode
