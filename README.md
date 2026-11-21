@@ -120,7 +120,7 @@ go run ./cmd/ovumcy-sync-community serve
 | `ALLOWED_ORIGINS` | _(empty)_ | Explicit CORS allowlist for browser clients; each entry exactly `scheme://host[:port]` as a browser sends it, or startup stops |
 | `ALLOWED_HOSTS` | _(empty: any host)_ | Host names the server answers for; any other `Host` gets 403 (DNS-rebinding guard). IP literals and `localhost` always pass |
 | `TRUSTED_PROXY_CIDRS` | _(unset)_ | Reverse-proxy CIDRs whose forwarded client IP is trusted for rate limiting; a public range wider than an IPv4 /12 or an IPv6 /32 fails startup (private, loopback, CGNAT and link-local ranges may be as wide as the range itself) |
-| `FIELD_ENCRYPTION_KEY` | _(unset)_ | Hex key (≥32 bytes / 64 hex chars) that enables the optional TOTP surface |
+| `FIELD_ENCRYPTION_KEY` | _(unset)_ | Hex key (≥32 bytes / 64 hex chars, not all zero) that enables the optional TOTP surface |
 | `TOTP_ISSUER` | `ovumcy-sync-community` | Issuer label embedded in `otpauth://` provisioning URIs |
 | `LAPSED_ACCOUNT_GRACE_PERIOD` | `1440h` (60d) | Retention window for a managed account after the bridge signals an entitlement lapse, before it is erased; at least `24h` |
 | `LAPSED_ACCOUNT_SWEEP_INTERVAL` | `24h` | How often the server itself purges accounts past that window. `0` disables the in-process sweep and leaves `purge-lapsed-accounts` as the only trigger |
