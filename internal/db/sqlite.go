@@ -101,17 +101,18 @@ func isInMemoryPath(path string) bool {
 	return hasQuery && strings.Contains("&"+query+"&", "&mode=memory&")
 }
 
-// windowsURIPaths is whether SQLite drops the `/` before a drive letter in a
-// `file:` URI path (`file:///C:/data/sync.db` opens `C:/data/sync.db`): its
-// Windows VFS does, a POSIX one keeps `/C:/…` as an absolute path.
+// windowsURIPaths is whether SQLite drops the `/` before a drive letter
+// (`file:///C:/data/sync.db` and `/C:/data/sync.db` open `C:/data/sync.db`):
+// its Windows VFS does for any filename, a POSIX one keeps `/C:/…` as an
+// absolute path.
 var windowsURIPaths = runtime.GOOS == "windows"
 
 // plainDBFilename is the file SQLite opens for path: the path itself up to its
 // query, or for a `file:` URI the part after the scheme (and an authority),
 // percent-decoded as SQLite does.
 func plainDBFilename(path string) string {
-	name, isURI := plainDBURIPath(path)
-	if isURI && windowsURIPaths && len(name) >= 3 && name[0] == '/' && name[2] == ':' && isASCIILetter(name[1]) {
+	name := plainDBURIPath(path)
+	if windowsURIPaths && len(name) >= 3 && name[0] == '/' && name[2] == ':' && isASCIILetter(name[1]) {
 		return name[1:]
 	}
 	return name
@@ -121,11 +122,11 @@ func isASCIILetter(b byte) bool {
 	return ('a' <= b && b <= 'z') || ('A' <= b && b <= 'Z')
 }
 
-func plainDBURIPath(path string) (string, bool) {
+func plainDBURIPath(path string) string {
 	name, _, _ := strings.Cut(path, "?")
 	rest, isURI := strings.CutPrefix(name, "file:")
 	if !isURI {
-		return name, false
+		return name
 	}
 	if after, ok := strings.CutPrefix(rest, "//"); ok {
 		rest = after
@@ -136,7 +137,7 @@ func plainDBURIPath(path string) (string, bool) {
 	if decoded, err := url.PathUnescape(rest); err == nil {
 		rest = decoded
 	}
-	return rest, true
+	return rest
 }
 
 // createPlainDBFileOwnerOnly creates a missing database file as 0600 before

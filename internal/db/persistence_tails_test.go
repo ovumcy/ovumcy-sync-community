@@ -182,7 +182,8 @@ func TestPlainDBFilenameDropsTheSlashBeforeAWindowsDriveLetter(t *testing.T) {
 		{"file:///C%3A/data/sync.db", "C:/data/sync.db", "/C:/data/sync.db"},
 		{"file:///1:/data/sync.db", "/1:/data/sync.db", "/1:/data/sync.db"},
 		{"file:///C/data/sync.db", "/C/data/sync.db", "/C/data/sync.db"},
-		{"/C:/data/sync.db", "/C:/data/sync.db", "/C:/data/sync.db"},
+		{"/C:/data/sync.db", "C:/data/sync.db", "/C:/data/sync.db"},
+		{"C:/data/sync.db", "C:/data/sync.db", "C:/data/sync.db"},
 	}
 	for _, windows := range []bool{true, false} {
 		windowsURIPaths = windows
