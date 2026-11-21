@@ -71,6 +71,13 @@ func TestStepUpRoutesRequireTOTPCodeWhenEnrolled(t *testing.T) {
 		body   func(code string) map[string]any
 	}{
 		{"recovery key", http.MethodPut, "/sync/recovery-key", recoveryKey},
+		{"rekey", http.MethodPut, "/sync/rekey", func(code string) map[string]any {
+			stepUp := map[string]string{"current_password": totpTestPassword}
+			if code != "" {
+				stepUp["code"] = code
+			}
+			return rekeyBody(strings.Repeat("c", 16), time.Now().UTC().UnixMilli(), "k1", 0, stepUp)
+		}},
 		{"account delete", http.MethodDelete, "/account", passwordAndCode},
 		{"device remove", http.MethodDelete, "/sync/devices/device-totp1111", passwordAndCode},
 	} {

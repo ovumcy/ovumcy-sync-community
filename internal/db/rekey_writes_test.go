@@ -50,6 +50,12 @@ func TestReplaceRecoveryKeyAndBlobIsAllOrNothing(t *testing.T) {
 	stepUp := RekeyGuard{Mode: RekeyStepUp, SessionTokenHash: "caller", VerifiedHash: "hash"}
 	k1 := stepUpTestPackage("account-target")
 
+	// First setup whose blob is refused stores no package either.
+	if _, err := store.ReplaceRecoveryKeyAndBlobForSession(ctx, k1, rekeyBlob(10, "k1"), stepUp, noGenerationCeiling, 9); !errors.Is(err, ErrStaleGeneration) {
+		t.Fatalf("first setup with a positive expectation: expected ErrStaleGeneration, got %v", err)
+	}
+	assertRekeyRows(t, store, "", 0, "")
+
 	if _, err := store.ReplaceRecoveryKeyAndBlobForSession(ctx, k1, rekeyBlob(10, "k1"), stepUp, noGenerationCeiling, 0); err != nil {
 		t.Fatalf("first rekey: %v", err)
 	}
@@ -64,13 +70,19 @@ func TestReplaceRecoveryKeyAndBlobIsAllOrNothing(t *testing.T) {
 		assertRekeyRows(t, store, k1.PhraseFingerprintHex, 10, "k1")
 	}
 
-	for name, guard := range map[string]RekeyGuard{
-		"moved hash":   {Mode: RekeyStepUp, SessionTokenHash: "caller", VerifiedHash: "stale"},
-		"flipped totp": {Mode: RekeyStepUp, SessionTokenHash: "caller", VerifiedHash: "hash", VerifiedTOTPEnabled: true},
-		"revoked":      {Mode: RekeyStepUp, SessionTokenHash: "gone", VerifiedHash: "hash"},
+	for name, refusal := range map[string]struct {
+		guard RekeyGuard
+		pkg   models.RecoveryKeyPackage
+		want  error
+	}{
+		"moved hash":      {RekeyGuard{Mode: RekeyStepUp, SessionTokenHash: "caller", VerifiedHash: "stale"}, k2, ErrConflict},
+		"flipped totp":    {RekeyGuard{Mode: RekeyStepUp, SessionTokenHash: "caller", VerifiedHash: "hash", VerifiedTOTPEnabled: true}, k2, ErrTOTPStateChanged},
+		"revoked step-up": {RekeyGuard{Mode: RekeyStepUp, SessionTokenHash: "gone", VerifiedHash: "hash"}, k2, ErrSessionRevoked},
+		"revoked keep":    {RekeyGuard{Mode: RekeyKeepPackage, SessionTokenHash: "gone"}, k1, ErrSessionRevoked},
+		"revoked managed": {RekeyGuard{Mode: RekeyFirstManaged, SessionTokenHash: "gone"}, k1, ErrSessionRevoked},
 	} {
-		if _, err := store.ReplaceRecoveryKeyAndBlobForSession(ctx, k2, rekeyBlob(11, "k2"), guard, noGenerationCeiling, 10); err == nil {
-			t.Fatalf("%s: expected a refusal", name)
+		if _, err := store.ReplaceRecoveryKeyAndBlobForSession(ctx, refusal.pkg, rekeyBlob(11, "k2"), refusal.guard, noGenerationCeiling, 10); !errors.Is(err, refusal.want) {
+			t.Fatalf("%s: expected %v, got %v", name, refusal.want, err)
 		}
 		assertRekeyRows(t, store, k1.PhraseFingerprintHex, 10, "k1")
 	}

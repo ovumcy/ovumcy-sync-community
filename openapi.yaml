@@ -1886,7 +1886,7 @@ paths:
         The package follows `PUT /sync/recovery-key`: one equal to the stored
         package (after normalization) needs no step-up and draws on no
         step-up bucket; a differing one needs `current_password` (checked
-        before either body is validated) and, on a TOTP-enrolled account, a
+        before the package and blob contents are validated) and, on a TOTP-enrolled account, a
         current `code` (checked after both bodies are validated). A managed
         account may store a first package only. The blob follows
         `PUT /sync/blob`, except that `expected_generation` is required:
@@ -1928,7 +1928,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "409":
-          description: "`stale_generation`: `expected_generation` does not match the stored blob (or `0` while one is stored), or the generation does not advance. `recovery_key_conflict`: the package sent as unchanged was replaced before the write. Nothing is written."
+          description: "`stale_generation`: `expected_generation` does not match the stored blob (or `0` while one is stored), or the generation does not advance. On a TOTP-enrolled account this is answered before the code is checked, so the code stays usable. `recovery_key_conflict`: the package sent as unchanged was replaced before the write. Nothing is written."
           content:
             application/json:
               schema:
@@ -1939,6 +1939,12 @@ paths:
           $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          description: "`totp_not_configured`: the account has TOTP enrolled, the package differs, and the server has no `FIELD_ENCRYPTION_KEY` (fails closed)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
 components:
   securitySchemes:

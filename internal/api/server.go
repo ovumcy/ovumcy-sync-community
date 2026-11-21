@@ -1427,6 +1427,7 @@ func (s *Server) handlePutRekey(
 		writeError(writer, http.StatusInternalServerError, "internal_error")
 		return
 	}
+	input.KeepStoredPackage = isUnchanged
 	checksPassword := !isUnchanged && account.Mode != "managed"
 	var stepUpSlot security.Reservation
 	if checksPassword {
