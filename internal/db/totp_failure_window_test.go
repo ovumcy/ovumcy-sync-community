@@ -75,6 +75,49 @@ func TestReserveTOTPAttemptCapsAndRestartsTheWindow(t *testing.T) {
 	}
 }
 
+func TestPendingEnrollmentTOTPAttemptKeepsItsCountAcrossAClockStepBack(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	createWindowTestAccount(t, store, "lifetime-account")
+
+	start := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	for i := range 2 {
+		reserved, err := store.ReservePendingEnrollmentTOTPAttempt(ctx, "lifetime-account", start.Add(time.Duration(i)*time.Hour), 3)
+		if err != nil || !reserved {
+			t.Fatalf("attempt %d: reserved=%v err=%v", i+1, reserved, err)
+		}
+	}
+	stepBack := start.Add(-24 * time.Hour)
+	if reserved, err := store.ReservePendingEnrollmentTOTPAttempt(ctx, "lifetime-account", stepBack, 3); err != nil || !reserved {
+		t.Fatalf("third attempt after a clock step back: reserved=%v err=%v", reserved, err)
+	}
+	if reserved, err := store.ReservePendingEnrollmentTOTPAttempt(ctx, "lifetime-account", stepBack, 3); err != nil || reserved {
+		t.Fatalf("a clock step back must not restart the lifetime count: reserved=%v err=%v", reserved, err)
+	}
+
+	var startedUnix int64
+	var attempts int
+	if err := store.db.QueryRowContext(ctx,
+		`SELECT window_started_unix, failed_attempts FROM totp_failure_windows WHERE account_id = ?`,
+		"lifetime-account",
+	).Scan(&startedUnix, &attempts); err != nil {
+		t.Fatalf("read row: %v", err)
+	}
+	if startedUnix != stepBack.Unix() || attempts != 4 {
+		t.Fatalf("row = (start %d, attempts %d), want (start %d, attempts 4)", startedUnix, attempts, stepBack.Unix())
+	}
+	if reserved, err := store.ReservePendingEnrollmentTOTPAttempt(ctx, "lifetime-account", start.Add(100*365*24*time.Hour), 3); err != nil || reserved {
+		t.Fatalf("the lifetime count has no window to outlast: reserved=%v err=%v", reserved, err)
+	}
+
+	if err := store.ResetTOTPFailures(ctx, "lifetime-account"); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if reserved, err := store.ReservePendingEnrollmentTOTPAttempt(ctx, "lifetime-account", start, 3); err != nil || !reserved {
+		t.Fatalf("after reset: reserved=%v err=%v", reserved, err)
+	}
+}
+
 func TestConcurrentReserveTOTPAttemptNeverExceedsTheCap(t *testing.T) {
 	store, _ := newFileBackedTestStore(t)
 	ctx := context.Background()
@@ -113,6 +156,9 @@ func TestTOTPFailureWindowSurfacesStoreErrors(t *testing.T) {
 
 	if _, _, err := store.ReserveTOTPAttempt(ctx, "broken-account", time.Now().UTC(), 15*time.Minute, 10); err == nil {
 		t.Fatal("expected a reserve error once totp_failure_windows is dropped")
+	}
+	if _, err := store.ReservePendingEnrollmentTOTPAttempt(ctx, "broken-account", time.Now().UTC(), 10); err == nil {
+		t.Fatal("expected a pending enrollment reserve error once totp_failure_windows is dropped")
 	}
 	if err := store.ResetTOTPFailures(ctx, "broken-account"); err == nil {
 		t.Fatal("expected a reset error once totp_failure_windows is dropped")

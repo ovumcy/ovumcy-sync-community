@@ -1570,6 +1570,36 @@ RETURNING window_started_unix, failed_attempts`,
 	return false, time.Unix(startedUnix, 0).UTC().Add(window), nil
 }
 
+// ReservePendingEnrollmentTOTPAttempt takes one slot of the pending
+// enrollment secret's lifetime budget, in the same row and with the same
+// single-upsert reservation as ReserveTOTPAttempt, but nothing restarts the
+// count: a start in the future (a clock step back) is clamped to now and the
+// spent count is kept, so the step cannot grant more guesses. Only
+// ResetTOTPFailures clears it.
+func (s *Store) ReservePendingEnrollmentTOTPAttempt(
+	ctx context.Context,
+	accountID string,
+	now time.Time,
+	maxAttempts int,
+) (reserved bool, err error) {
+	var attempts int
+	if err := s.db.QueryRowContext(
+		ctx,
+		`INSERT INTO totp_failure_windows (account_id, window_started_unix, failed_attempts)
+VALUES (?1, ?2, 1)
+ON CONFLICT(account_id) DO UPDATE SET
+  window_started_unix = MIN(window_started_unix, ?2),
+  failed_attempts = CASE WHEN failed_attempts <= ?3 THEN failed_attempts + 1 ELSE failed_attempts END
+RETURNING failed_attempts`,
+		accountID,
+		now.UTC().Unix(),
+		maxAttempts,
+	).Scan(&attempts); err != nil {
+		return false, fmt.Errorf("reserve pending enrollment totp attempt: %w", err)
+	}
+	return attempts <= maxAttempts, nil
+}
+
 // ResetTOTPFailures clears the account's stored TOTP attempt count (the
 // pending enrollment secret's lifetime budget).
 func (s *Store) ResetTOTPFailures(ctx context.Context, accountID string) error {

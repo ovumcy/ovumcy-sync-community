@@ -36,14 +36,11 @@ func (e *TOTPLockedError) Error() string { return ErrTOTPLocked.Error() }
 
 func (e *TOTPLockedError) Unwrap() error { return ErrTOTPLocked }
 
-// pendingEnrollmentAttemptWindow and maxPendingEnrollmentAttempts give one
-// pending secret a lifetime of guesses on top of the rolling enrollment
-// budget: a rolling budget alone would let a stolen session pace its guesses
-// and never reach the burn. StartEnrollment and a completed enrollment clear it.
-const (
-	pendingEnrollmentAttemptWindow = 100 * 365 * 24 * time.Hour
-	maxPendingEnrollmentAttempts   = 10
-)
+// maxPendingEnrollmentAttempts gives one pending secret a lifetime of guesses
+// on top of the rolling enrollment budget: a rolling budget alone would let a
+// stolen session pace its guesses and never reach the burn. StartEnrollment
+// and a completed enrollment clear it.
+const maxPendingEnrollmentAttempts = 10
 
 // TOTPChallengeTTL is how long a login-second-factor challenge remains
 // usable. 5 minutes is long enough that an owner has time to open their
@@ -283,7 +280,7 @@ func (s *TOTPService) CompleteEnrollment(
 		s.observeEnrollmentCompletion("locked")
 		return "", err
 	}
-	reserved, _, err := s.store.ReserveTOTPAttempt(ctx, accountID, now, pendingEnrollmentAttemptWindow, maxPendingEnrollmentAttempts)
+	reserved, err := s.store.ReservePendingEnrollmentTOTPAttempt(ctx, accountID, now, maxPendingEnrollmentAttempts)
 	if err != nil {
 		// No code was checked: a store failure is not the caller's attempt.
 		budget.limiter.refund(reservation)
