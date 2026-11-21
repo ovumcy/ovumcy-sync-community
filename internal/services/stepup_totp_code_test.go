@@ -174,11 +174,14 @@ func TestRemoveDeviceOnTOTPAccountRequiresPasswordBeforeCode(t *testing.T) {
 	ctx := context.Background()
 	f.attachDevice(t, "device-totp1111")
 
-	for _, password := range []string{"", "not the password at all"} {
+	for password, want := range map[string]error{
+		"":                        ErrCurrentPasswordMissing,
+		"not the password at all": ErrInvalidCurrentPassword,
+	} {
 		stepUp := f.stepUp(f.code())
 		stepUp.CurrentPassword = password
-		if err := f.sync.RemoveDevice(ctx, f.accountID, stepUp, "device-totp1111"); !errors.Is(err, ErrInvalidCurrentPassword) {
-			t.Fatalf("password %q: expected ErrInvalidCurrentPassword, got %v", password, err)
+		if err := f.sync.RemoveDevice(ctx, f.accountID, stepUp, "device-totp1111"); !errors.Is(err, want) {
+			t.Fatalf("password %q: expected %v, got %v", password, want, err)
 		}
 	}
 	if err := f.sync.RemoveDevice(ctx, f.accountID, f.stepUp(f.code()), "device-totp1111"); err != nil {

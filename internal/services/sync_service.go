@@ -11,7 +11,6 @@ import (
 
 	"github.com/ovumcy/ovumcy-sync-community/internal/db"
 	"github.com/ovumcy/ovumcy-sync-community/internal/models"
-	"github.com/ovumcy/ovumcy-sync-community/internal/security"
 )
 
 var ErrInvalidDevice = errors.New("invalid_device")
@@ -235,7 +234,9 @@ func (s *SyncService) ListDevices(ctx context.Context, accountID string) ([]mode
 // Any credential change by another session revokes this one, which the
 // delete's session predicate catches; one by this same session (a TOTP
 // enrollment, a password change) landing during the checks makes the delete
-// refuse as a stale verification (ErrInvalidCurrentPassword).
+// refuse as a stale verification (ErrInvalidCurrentPassword). So does an
+// enrollment found by a caller that charged no step-up slot (stepUp.Unmetered),
+// before any password compare.
 func (s *SyncService) RemoveDevice(ctx context.Context, accountID string, stepUp StepUp, deviceID string) error {
 	deviceID = strings.TrimSpace(deviceID)
 	if deviceID == "" {
@@ -250,8 +251,11 @@ func (s *SyncService) RemoveDevice(ctx context.Context, accountID string, stepUp
 		return err
 	}
 	if account.TOTPEnabled {
-		if err := security.ComparePasswordHash(account.PasswordHash, stepUp.CurrentPassword); err != nil {
+		if stepUp.Unmetered {
 			return ErrInvalidCurrentPassword
+		}
+		if err := compareCurrentPassword(account.PasswordHash, stepUp.CurrentPassword); err != nil {
+			return err
 		}
 		if err := verifyStepUpCode(ctx, s.totpCodes, account, stepUp.TOTPCode); err != nil {
 			return err

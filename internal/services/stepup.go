@@ -17,6 +17,11 @@ type StepUp struct {
 	SessionTokenHash string
 	CurrentPassword  string
 	TOTPCode         string
+	// Unmetered: the caller charged no step-up slot, having authenticated an
+	// account without TOTP. A removal that finds TOTP enrolled since then
+	// refuses as a stale verification instead of comparing a password
+	// unmetered (RemoveDevice).
+	Unmetered bool
 }
 
 // TOTPCodeVerifier checks a current TOTP code for an enrolled account,
@@ -79,7 +84,22 @@ func checkStepUpPassword(account models.Account, currentPassword string) error {
 	if account.Mode == "managed" {
 		return ErrManagedStepUp
 	}
-	if err := security.ComparePasswordHash(account.PasswordHash, currentPassword); err != nil {
+	return compareCurrentPassword(account.PasswordHash, currentPassword)
+}
+
+// ErrCurrentPasswordMissing: a step-up sent no current password. The API
+// answers it as 401 invalid_current_password, but nothing was guessed, so the
+// step-up slot is given back.
+var ErrCurrentPasswordMissing = errors.New("current_password_missing")
+
+// compareCurrentPassword is every step-up's password check: an empty password
+// is refused before bcrypt (ErrCurrentPasswordMissing), a wrong one after a
+// full compare (ErrInvalidCurrentPassword).
+func compareCurrentPassword(passwordHash string, currentPassword string) error {
+	if currentPassword == "" {
+		return ErrCurrentPasswordMissing
+	}
+	if err := security.ComparePasswordHash(passwordHash, currentPassword); err != nil {
 		return ErrInvalidCurrentPassword
 	}
 	return nil

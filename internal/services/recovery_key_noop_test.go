@@ -79,8 +79,8 @@ func TestPutRecoveryKeyDifferingPackageStillNeedsStepUp(t *testing.T) {
 	for name, mutate := range cases {
 		input := validRecoveryKeyPackageInput()
 		mutate(&input)
-		if _, err := syncService.PutRecoveryKeyPackage(ctx, registered.AccountID, noPassword, input); !errors.Is(err, ErrInvalidCurrentPassword) {
-			t.Fatalf("%s: expected ErrInvalidCurrentPassword, got %v", name, err)
+		if _, err := syncService.PutRecoveryKeyPackage(ctx, registered.AccountID, noPassword, input); !errors.Is(err, ErrCurrentPasswordMissing) {
+			t.Fatalf("%s: expected ErrCurrentPasswordMissing, got %v", name, err)
 		}
 	}
 	loaded, err := syncService.GetRecoveryKeyPackage(ctx, registered.AccountID)
@@ -112,8 +112,8 @@ func TestPutRecoveryKeyIdenticalRePutOnTOTPAccountNeedsNoCode(t *testing.T) {
 	if _, err := f.sync.PutRecoveryKeyPackage(ctx, f.accountID, f.stepUp(""), differing); !errors.Is(err, ErrTOTPInvalidCode) {
 		t.Fatalf("a differing package without a code: expected ErrTOTPInvalidCode, got %v", err)
 	}
-	if _, err := f.sync.PutRecoveryKeyPackage(ctx, f.accountID, bare, differing); !errors.Is(err, ErrInvalidCurrentPassword) {
-		t.Fatalf("a differing package without a password: expected ErrInvalidCurrentPassword, got %v", err)
+	if _, err := f.sync.PutRecoveryKeyPackage(ctx, f.accountID, bare, differing); !errors.Is(err, ErrCurrentPasswordMissing) {
+		t.Fatalf("a differing package without a password: expected ErrCurrentPasswordMissing, got %v", err)
 	}
 }
 
