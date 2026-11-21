@@ -108,6 +108,7 @@ go run ./cmd/ovumcy-sync-community serve
 | `DB_PATH` | `./data/ovumcy-sync-community.sqlite` | SQLite database file |
 | `SESSION_TTL` | `720h` | Session token lifetime |
 | `MAX_DEVICES` | `5` | Devices attachable per account |
+| `REGISTRATION_ENABLED` | `true` | Whether `POST /auth/register` creates accounts; set `false` after creating your account, and registration answers `403 registration_disabled` |
 | `MAX_BLOB_BYTES` | `16777216` | Ciphertext size cap (16 MiB) |
 | `AUTH_RATE_LIMIT_COUNT` | `5` | Requests per window, per route, on the credential routes: anonymous auth routes count per client IP, authenticated credential routes (password change, recovery-code regeneration, TOTP, account deletion, and the shared step-up bucket) per account, and `POST /auth/login` also per login identifier across all IPs |
 | `AUTH_RATE_LIMIT_WINDOW` | `15m` | Credential rate-limit window |
