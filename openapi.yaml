@@ -1777,6 +1777,11 @@ paths:
         configured max-size ceiling; the server never decrypts it.
         `generation` must be strictly greater than the currently stored
         generation (a fresh account may write any positive generation).
+        Optional `expected_generation` adds a precondition: the write
+        commits only while the stored generation still equals it, so a
+        device writing from a stale baseline gets 409 instead of silently
+        replacing another device's newer write. Omitted (or null), the
+        write behaves as before.
       security:
         - sessionBearerAuth: []
       requestBody:
@@ -1794,7 +1799,7 @@ paths:
                 $ref: "#/components/schemas/BlobResponse"
         "400":
           description: |
-            `invalid_blob`: non-positive schema_version/generation, a generation more than 15 minutes ahead of server time, empty ciphertext, ciphertext over `MAX_BLOB_BYTES`, malformed checksum_sha256, or a checksum that does not match the ciphertext. `invalid_ciphertext`: ciphertext_base64 is not valid base64. `invalid_json`: the body is not acceptable JSON (see `InvalidJSON`); an oversize request body (over base64(`MAX_BLOB_BYTES`) plus 8 KiB) answers `invalid_json`, while a body inside that cap whose decoded ciphertext is over `MAX_BLOB_BYTES` answers `invalid_blob`.
+            `invalid_blob`: non-positive schema_version/generation/expected_generation, a generation more than 15 minutes ahead of server time, empty ciphertext, ciphertext over `MAX_BLOB_BYTES`, malformed checksum_sha256, or a checksum that does not match the ciphertext. `invalid_ciphertext`: ciphertext_base64 is not valid base64. `invalid_json`: the body is not acceptable JSON (see `InvalidJSON`); an oversize request body (over base64(`MAX_BLOB_BYTES`) plus 8 KiB) answers `invalid_json`, while a body inside that cap whose decoded ciphertext is over `MAX_BLOB_BYTES` answers `invalid_blob`.
           content:
             application/json:
               schema:
@@ -1811,7 +1816,7 @@ paths:
         "403":
           $ref: "#/components/responses/SyncDisabled"
         "409":
-          description: generation is not strictly greater than the currently stored generation (a concurrent writer already advanced it).
+          description: generation is not strictly greater than the currently stored generation (a concurrent writer already advanced it), or `expected_generation` was sent and does not equal the stored generation (or no blob is stored). Nothing is written.
           content:
             application/json:
               schema:
@@ -2334,6 +2339,10 @@ components:
           type: string
           format: byte
           description: Opaque base64-encoded ciphertext. Server never decrypts or inspects contents; only size and checksum are validated.
+        expected_generation:
+          type: [integer, "null"]
+          format: int64
+          description: Optional. The generation the client last read or wrote. When present it must be positive, and the write commits only while the stored generation equals it; otherwise 409 `stale_generation` and nothing is written. A server older than this field rejects the body as `400 invalid_json` (unknown field).
       required: [schema_version, generation, checksum_sha256, ciphertext_base64]
       additionalProperties: false
 

@@ -84,6 +84,9 @@ type PutBlobInput struct {
 	Generation     int64
 	ChecksumSHA256 string
 	Ciphertext     []byte
+	// ExpectedGeneration, when set, is the generation the client last saw
+	// stored; the write commits only while it is still the stored one.
+	ExpectedGeneration *int64
 }
 
 type PutRecoveryKeyPackageInput struct {
@@ -277,6 +280,9 @@ func (s *SyncService) PutBlob(
 	if input.SchemaVersion <= 0 || input.Generation <= 0 || len(input.Ciphertext) == 0 {
 		return models.EncryptedBlob{}, ErrInvalidBlob
 	}
+	if input.ExpectedGeneration != nil && *input.ExpectedGeneration <= 0 {
+		return models.EncryptedBlob{}, ErrInvalidBlob
+	}
 	if input.Generation > maxAcceptableBlobGeneration(s.now()) {
 		return models.EncryptedBlob{}, ErrInvalidBlob
 	}
@@ -303,8 +309,9 @@ func (s *SyncService) PutBlob(
 
 	// Atomic CAS in the repository: the WHERE excluded.generation >
 	// encrypted_blobs.generation guard rejects concurrent writers that
-	// passed the same baseline, so we don't read-then-write here.
-	stored, err := s.store.UpsertEncryptedBlob(ctx, sessionTokenHash, blob)
+	// passed the same baseline, so we don't read-then-write here; an
+	// expected generation joins the same statement's predicate.
+	stored, err := s.store.UpsertEncryptedBlobExpecting(ctx, sessionTokenHash, blob, input.ExpectedGeneration)
 	if err != nil {
 		switch {
 		case errors.Is(err, db.ErrStaleGeneration):
