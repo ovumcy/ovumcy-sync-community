@@ -451,7 +451,8 @@ func validateRecoveryKeyPackage(recoveryKeyPackage models.RecoveryKeyPackage) er
 		return ErrInvalidRecoveryPackage
 	}
 	// 32-byte master key + 16-byte Poly1305 tag. Rows stored under the older
-	// at-least-64 rule still read and re-put: the unchanged check runs first.
+	// at-least-64 rule still read, and PutRecoveryKeyPackage's unchanged check
+	// runs first, so their identical session re-put still succeeds.
 	wrappedMasterKeyHex := recoveryKeyPackage.WrappedMasterKeyHex
 	if len(wrappedMasterKeyHex) != 96 || !lowercaseHexPattern.MatchString(wrappedMasterKeyHex) {
 		return ErrInvalidRecoveryPackage
