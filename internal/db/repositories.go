@@ -84,17 +84,8 @@ func (s *Store) CreateAccountWithSession(ctx context.Context, account models.Acc
 	if err := insertAccount(ctx, tx, account); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(
-		ctx,
-		`INSERT INTO sessions (id, account_id, token_hash, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		session.ID,
-		session.AccountID,
-		session.TokenHash,
-		session.CreatedAt.UTC().Format(time.RFC3339Nano),
-		session.LastSeenAt.UTC().Format(time.RFC3339Nano),
-		session.ExpiresAt.UTC().Format(time.RFC3339Nano),
-	); err != nil {
-		return fmt.Errorf("insert session: %w", err)
+	if err := insertSession(ctx, tx, session); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit create account: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteManagedAccount's COMMIT branch.
@@ -510,15 +501,15 @@ func (s *Store) DeleteManagedAccount(ctx context.Context, accountID string) erro
 		return fmt.Errorf("commit delete account: %w", err) // codecov:ignore -- on this store's single-connection sqlite (WAL, busy_timeout) a COMMIT whose statements all succeeded has no deterministically injectable in-process failure; needs a fake driver, the same deviation documented for DeleteLapsedManagedAccount's commit branch below.
 	}
 
-	s.checkpointAfterErase(ctx)
+	s.CheckpointAfterErase(ctx)
 	return nil
 }
 
-// checkpointAfterErase folds the WAL into the main file and truncates it, so
+// CheckpointAfterErase folds the WAL into the main file and truncates it, so
 // the erased rows' pages do not stay readable in -wal until a passive
 // checkpoint gets to them. Best effort: the erase has committed, so a failed
 // or blocked checkpoint never fails it; only the error's type is logged.
-func (s *Store) checkpointAfterErase(ctx context.Context) {
+func (s *Store) CheckpointAfterErase(ctx context.Context) {
 	var busy, walPages, checkpointedPages int
 	err := s.db.QueryRowContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE);`).Scan(&busy, &walPages, &checkpointedPages)
 	if err != nil {
@@ -892,6 +883,9 @@ func (s *Store) ListLapsedManagedAccountIDs(ctx context.Context, cutoff time.Tim
 // longer qualifies (self-hosted, un-lapsed, or lapsed less than cutoff ago)
 // — deliberately indistinguishable, since the caller's response to either is
 // identical: skip it, it is not eligible for deletion right now.
+//
+// Unlike the other erases it does not checkpoint the WAL: the sweep erases
+// a page of accounts and calls CheckpointAfterErase once for the page.
 func (s *Store) DeleteLapsedManagedAccount(ctx context.Context, accountID string, cutoff time.Time) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -926,13 +920,18 @@ func (s *Store) DeleteLapsedManagedAccount(ctx context.Context, accountID string
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit delete lapsed account: %w", err) // codecov:ignore -- on this store's single-connection sqlite (WAL, busy_timeout) a COMMIT whose statements all succeeded has no deterministically injectable in-process failure; needs a fake driver.
 	}
-
-	s.checkpointAfterErase(ctx)
 	return nil
 }
 
 func (s *Store) CreateSession(ctx context.Context, session models.Session) (models.Session, error) {
-	_, err := s.db.ExecContext(
+	if err := insertSession(ctx, s.db, session); err != nil {
+		return models.Session{}, err
+	}
+	return session, nil
+}
+
+func insertSession(ctx context.Context, execer accountExecer, session models.Session) error {
+	if _, err := execer.ExecContext(
 		ctx,
 		`INSERT INTO sessions (id, account_id, token_hash, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)`,
 		session.ID,
@@ -941,12 +940,10 @@ func (s *Store) CreateSession(ctx context.Context, session models.Session) (mode
 		session.CreatedAt.UTC().Format(time.RFC3339Nano),
 		session.LastSeenAt.UTC().Format(time.RFC3339Nano),
 		session.ExpiresAt.UTC().Format(time.RFC3339Nano),
-	)
-	if err != nil {
-		return models.Session{}, fmt.Errorf("insert session: %w", err)
+	); err != nil {
+		return fmt.Errorf("insert session: %w", err)
 	}
-
-	return session, nil
+	return nil
 }
 
 // CreateSessionForUnlapsedManagedAccount inserts a managed-bridge session only
@@ -1616,21 +1613,6 @@ func (s *Store) ResetTOTPFailures(ctx context.Context, accountID string) error {
 		accountID,
 	); err != nil {
 		return fmt.Errorf("reset totp failures: %w", err)
-	}
-	return nil
-}
-
-func (s *Store) DeleteTOTPChallengesForAccount(
-	ctx context.Context,
-	accountID string,
-) error {
-	_, err := s.db.ExecContext(
-		ctx,
-		`DELETE FROM totp_challenges WHERE account_id = ?`,
-		accountID,
-	)
-	if err != nil {
-		return fmt.Errorf("delete totp challenges for account: %w", err)
 	}
 	return nil
 }

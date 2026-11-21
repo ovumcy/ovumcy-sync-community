@@ -310,10 +310,8 @@ func TestTOTPAccountFieldMethodsReturnErrorWhenAccountsTableIsDropped(t *testing
 }
 
 // TestTOTPChallengeAttemptAndDeleteMethods covers
-// IncrementTOTPChallengeFailedAttempts, DeleteTOTPChallengeByHash, and
-// DeleteTOTPChallengesForAccount, all previously at 0%. Multi-account
-// isolation is asserted for DeleteTOTPChallengesForAccount: clearing one
-// account's challenges must not touch another account's pending challenge.
+// IncrementTOTPChallengeFailedAttempts and DeleteTOTPChallengeByHash; deleting
+// one account's challenge must not touch another account's pending challenge.
 func TestTOTPChallengeAttemptAndDeleteMethods(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
@@ -375,39 +373,11 @@ func TestTOTPChallengeAttemptAndDeleteMethods(t *testing.T) {
 	if _, err := store.FindTOTPChallengeByHash(ctx, bystanderChallenge.ChallengeIDHash); err != nil {
 		t.Fatalf("expected bystander challenge to remain after target delete, got %v", err)
 	}
-
-	// Re-seed a second target challenge to exercise
-	// DeleteTOTPChallengesForAccount's bulk-clear-by-account semantics.
-	secondTargetChallenge := models.TOTPChallenge{
-		ChallengeIDHash: "target-challenge-hash-2",
-		AccountID:       target.ID,
-		CreatedAt:       now,
-		ExpiresAt:       now.Add(5 * time.Minute),
-	}
-	if err := store.UpsertTOTPChallenge(ctx, secondTargetChallenge); err != nil {
-		t.Fatalf("upsert second target challenge: %v", err)
-	}
-
-	if err := store.DeleteTOTPChallengesForAccount(ctx, target.ID); err != nil {
-		t.Fatalf("delete challenges for account: %v", err)
-	}
-	if _, err := store.FindTOTPChallengeByHash(ctx, secondTargetChallenge.ChallengeIDHash); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("expected all target challenges gone, got %v", err)
-	}
-	if _, err := store.FindTOTPChallengeByHash(ctx, bystanderChallenge.ChallengeIDHash); err != nil {
-		t.Fatalf("expected bystander challenge to survive account-scoped delete, got %v", err)
-	}
-
-	// Deleting challenges for an account with none is a no-op success.
-	if err := store.DeleteTOTPChallengesForAccount(ctx, target.ID); err != nil {
-		t.Fatalf("expected no-op success clearing an already-empty account, got %v", err)
-	}
 }
 
 // TestTOTPChallengeMethodsReturnErrorWhenChallengeTableIsDropped exercises
 // the generic ExecContext/QueryRowContext-error branches of
-// IncrementTOTPChallengeFailedAttempts, DeleteTOTPChallengeByHash, and
-// DeleteTOTPChallengesForAccount.
+// IncrementTOTPChallengeFailedAttempts and DeleteTOTPChallengeByHash.
 func TestTOTPChallengeMethodsReturnErrorWhenChallengeTableIsDropped(t *testing.T) {
 	store, dbPath := newFileBackedTestStore(t)
 	ctx := context.Background()
@@ -432,10 +402,6 @@ func TestTOTPChallengeMethodsReturnErrorWhenChallengeTableIsDropped(t *testing.T
 
 	if err := store.DeleteTOTPChallengeByHash(ctx, "target-challenge-hash"); err == nil {
 		t.Fatal("expected error deleting challenge by hash after totp_challenges table is dropped")
-	}
-
-	if err := store.DeleteTOTPChallengesForAccount(ctx, target.ID); err == nil {
-		t.Fatal("expected error deleting challenges for account after totp_challenges table is dropped")
 	}
 
 	if err := store.UpsertTOTPChallenge(ctx, models.TOTPChallenge{

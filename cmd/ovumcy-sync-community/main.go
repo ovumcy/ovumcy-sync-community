@@ -17,6 +17,22 @@ import (
 	"github.com/ovumcy/ovumcy-sync-community/internal/services"
 )
 
+// maxHeaderBytes caps a request's header block well below net/http's 1 MiB
+// default: the API's headers are a bearer token and a few short fields.
+const maxHeaderBytes = 64 << 10
+
+func newHTTPServer(cfg config.Config, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              cfg.BindAddr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       cfg.HTTPReadTimeout,
+		WriteTimeout:      cfg.HTTPWriteTimeout,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    maxHeaderBytes,
+	}
+}
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		log.Fatalf("%v", err)
@@ -124,34 +140,27 @@ func runServe(cfg config.Config) error {
 		syncService.AttachTOTPCodeVerifier(totpService) // codecov:ignore -- process wiring with FIELD_ENCRYPTION_KEY set, reached only by a full serve; the same wiring is exercised by newTestServerWithOptions(enableTOTP) in internal/api.
 	}
 
-	server := &http.Server{
-		Addr: cfg.BindAddr,
-		Handler: api.NewServer(
-			authService,
-			syncService,
-			managedBridgeService,
-			totpService,
-			api.ServerOptions{
-				ManagedBridgeToken:   cfg.ManagedBridgeToken,
-				MetricsEnabled:       cfg.MetricsEnabled,
-				MetricsBearerToken:   cfg.MetricsBearerToken,
-				AllowedOrigins:       cfg.AllowedOrigins,
-				AllowedHosts:         cfg.AllowedHosts,
-				AuthRateLimitCount:   cfg.AuthRateLimitCount,
-				AuthRateLimitWindow:  cfg.AuthRateLimitWindow,
-				SyncRateLimitCount:   cfg.SyncRateLimitCount,  // codecov:ignore -- process wiring reached only by a full serve, same seam as ReadTimeout below; the values are covered by the config tests.
-				SyncRateLimitWindow:  cfg.SyncRateLimitWindow, // codecov:ignore -- same seam as SyncRateLimitCount above.
-				MaxBlobBytes:         cfg.MaxBlobBytes,
-				ReadinessCheck:       store.CheckReady,
-				TrustedProxyCIDRs:    cfg.TrustedProxyCIDRs,
-				RegistrationDisabled: !cfg.RegistrationEnabled, // codecov:ignore -- same seam as SyncRateLimitCount above; the gate is covered in internal/api and the value in the config tests.
-			},
-		),
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       cfg.HTTPReadTimeout,  // codecov:ignore -- process wiring reached only once ListenAndServe is about to run, same as the annotated block below; the value itself is covered by TestLoadHTTPTimeouts.
-		WriteTimeout:      cfg.HTTPWriteTimeout, // codecov:ignore -- same seam as ReadTimeout above.
-		IdleTimeout:       60 * time.Second,
-	}
+	server := newHTTPServer(cfg, api.NewServer(
+		authService,
+		syncService,
+		managedBridgeService,
+		totpService,
+		api.ServerOptions{
+			ManagedBridgeToken:   cfg.ManagedBridgeToken,
+			MetricsEnabled:       cfg.MetricsEnabled,
+			MetricsBearerToken:   cfg.MetricsBearerToken,
+			AllowedOrigins:       cfg.AllowedOrigins,
+			AllowedHosts:         cfg.AllowedHosts,
+			AuthRateLimitCount:   cfg.AuthRateLimitCount,
+			AuthRateLimitWindow:  cfg.AuthRateLimitWindow,
+			SyncRateLimitCount:   cfg.SyncRateLimitCount,  // codecov:ignore -- process wiring reached only by a full serve, once ListenAndServe is about to run; the values are covered by the config tests.
+			SyncRateLimitWindow:  cfg.SyncRateLimitWindow, // codecov:ignore -- same seam as SyncRateLimitCount above.
+			MaxBlobBytes:         cfg.MaxBlobBytes,
+			ReadinessCheck:       store.CheckReady,
+			TrustedProxyCIDRs:    cfg.TrustedProxyCIDRs,
+			RegistrationDisabled: !cfg.RegistrationEnabled, // codecov:ignore -- same seam as SyncRateLimitCount above; the gate is covered in internal/api and the value in the config tests.
+		},
+	))
 
 	// codecov:ignore:start -- process wiring reached only once ListenAndServe is
 	// about to run. runServe's tested error paths (run_test.go) all return

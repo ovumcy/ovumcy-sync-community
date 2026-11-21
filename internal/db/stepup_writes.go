@@ -139,7 +139,7 @@ func (s *Store) DeleteAccountForSession(
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit delete account: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteManagedAccount's COMMIT branch in fault_injection_test.go.
 	}
-	s.checkpointAfterErase(ctx)
+	s.CheckpointAfterErase(ctx)
 	return nil
 }
 

@@ -415,7 +415,7 @@ func TestDisableSurfacesDecryptFieldError(t *testing.T) {
 // dropTOTPChallengesExpiresAtColumn removes totp_challenges.expires_at out
 // from under a live store through a second connection. The challenge
 // INSERT (CreateTOTPChallengeForVerifiedPassword) names expires_at explicitly and so fails once it is gone, while
-// DeleteTOTPChallengesForAccount's `DELETE ... WHERE account_id = ?` names
+// the supersede step's `DELETE ... WHERE account_id = ?` names
 // no other column and keeps working — isolating IssueChallenge's upsert step
 // from its own preceding delete-existing-challenges step, both of which
 // otherwise hit the same table. Mirrors internal/db's
@@ -477,7 +477,7 @@ func dropColumn(t *testing.T, dbPath, table, column string) {
 }
 
 // TestIssueChallengeSurfacesStoreErrors exercises IssueChallenge's
-// DeleteTOTPChallengesForAccount and challenge-insert generic-error
+// supersede-delete and challenge-insert generic-error
 // branches separately, since one dropped table can only isolate one of the
 // two sequential store calls at a time.
 func TestIssueChallengeSurfacesStoreErrors(t *testing.T) {

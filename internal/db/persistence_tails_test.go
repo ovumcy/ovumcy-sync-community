@@ -50,6 +50,30 @@ func TestErasingAnAccountTruncatesTheWAL(t *testing.T) {
 	}
 }
 
+// TestDeletingALapsedAccountLeavesTheCheckpointToTheSweep pins that the
+// per-account lapsed delete does not checkpoint: the sweep checkpoints once
+// per page instead.
+func TestDeletingALapsedAccountLeavesTheCheckpointToTheSweep(t *testing.T) {
+	store, dbPath := newFileBackedTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if _, err := store.CreateAccount(ctx, models.Account{
+		ID: "managed-1", Login: "managed:one", PasswordHash: "x", RecoveryCodeHash: "y",
+		Mode: "managed", CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("create account: %v", err)
+	}
+	if err := store.SetAccountLapsed(ctx, "managed-1", now.Add(-2*time.Hour)); err != nil {
+		t.Fatalf("lapse account: %v", err)
+	}
+	if err := store.DeleteLapsedManagedAccount(ctx, "managed-1", now.Add(-time.Hour)); err != nil {
+		t.Fatalf("delete lapsed account: %v", err)
+	}
+	if info, err := os.Stat(dbPath + "-wal"); err != nil || info.Size() == 0 {
+		t.Fatalf("expected the -wal untouched by the per-account delete, got %v / %v", info, err)
+	}
+}
+
 func TestCheckpointAfterEraseNeverFailsAndLogsOnlyTheErrorClass(t *testing.T) {
 	buf := captureLog(t)
 	store, err := Open(":memory:")
@@ -57,7 +81,7 @@ func TestCheckpointAfterEraseNeverFailsAndLogsOnlyTheErrorClass(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	_ = store.Close()
-	store.checkpointAfterErase(context.Background())
+	store.CheckpointAfterErase(context.Background())
 	got := buf.String()
 	if !strings.Contains(got, "wal checkpoint after erase failed: ") {
 		t.Fatalf("expected a failure log line, got %q", got)
@@ -99,7 +123,7 @@ func TestCheckpointAfterEraseReportsABlockedCheckpoint(t *testing.T) {
 	}
 
 	buf := captureLog(t)
-	store.checkpointAfterErase(ctx)
+	store.CheckpointAfterErase(ctx)
 	if !strings.Contains(buf.String(), "blocked by a concurrent connection") {
 		t.Fatalf("expected the blocked-checkpoint log line, got %q", buf.String())
 	}
@@ -142,6 +166,35 @@ func TestCreateAccountWithSessionFailsOnAClosedStore(t *testing.T) {
 	err := store.CreateAccountWithSession(context.Background(), models.Account{}, models.Session{})
 	if err == nil || !strings.Contains(err.Error(), "begin create account") {
 		t.Fatalf("closed store = %v, want a begin error", err)
+	}
+}
+
+func TestPlainDBFilenameDropsTheSlashBeforeAWindowsDriveLetter(t *testing.T) {
+	saved := windowsURIPaths
+	t.Cleanup(func() { windowsURIPaths = saved })
+
+	cases := []struct {
+		path, windows, posix string
+	}{
+		{"file:///C:/data/sync.db", "C:/data/sync.db", "/C:/data/sync.db"},
+		{"file:/d:/data/sync.db?mode=rwc", "d:/data/sync.db", "/d:/data/sync.db"},
+		{"file://localhost/C:/data/sync.db", "C:/data/sync.db", "/C:/data/sync.db"},
+		{"file:///C%3A/data/sync.db", "C:/data/sync.db", "/C:/data/sync.db"},
+		{"file:///1:/data/sync.db", "/1:/data/sync.db", "/1:/data/sync.db"},
+		{"file:///C/data/sync.db", "/C/data/sync.db", "/C/data/sync.db"},
+		{"/C:/data/sync.db", "/C:/data/sync.db", "/C:/data/sync.db"},
+	}
+	for _, windows := range []bool{true, false} {
+		windowsURIPaths = windows
+		for _, c := range cases {
+			want := c.posix
+			if windows {
+				want = c.windows
+			}
+			if got := plainDBFilename(c.path); got != want {
+				t.Errorf("windows=%v plainDBFilename(%q) = %q, want %q", windows, c.path, got, want)
+			}
+		}
 	}
 }
 
