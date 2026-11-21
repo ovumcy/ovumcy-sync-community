@@ -2386,8 +2386,8 @@ components:
           pattern: "^[a-f0-9]{48}$"
         wrapped_master_key_hex:
           type: string
-          description: Lowercase hex, at least 64 characters, even length.
-          pattern: "^[a-f0-9]+$"
+          description: Lowercase hex, exactly 96 characters (a 32-byte key plus its 16-byte tag). A package stored under the former at-least-64 rule is still returned by reads and by its identical re-put.
+          pattern: "^[a-f0-9]{96}$"
         phrase_fingerprint_hex:
           type: string
           description: Lowercase hex, exactly 16 characters.
@@ -2427,8 +2427,8 @@ components:
           pattern: "^[a-f0-9]{48}$"
         wrapped_master_key_hex:
           type: string
-          description: Lowercase hex, at least 64 characters, even length.
-          pattern: "^[a-f0-9]+$"
+          description: Lowercase hex, exactly 96 characters (a 32-byte key plus its 16-byte tag).
+          pattern: "^[a-f0-9]{96}$"
         phrase_fingerprint_hex:
           type: string
           description: Lowercase hex, exactly 16 characters.

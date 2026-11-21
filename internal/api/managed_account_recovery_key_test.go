@@ -109,6 +109,10 @@ func TestServerManagedRecoveryKeyValidatesLikeTheSessionRoute(t *testing.T) {
 		func(body map[string]any) { body["wrap_nonce_hex"] = strings.Repeat("a", 46) },
 		func(body map[string]any) { body["wrapped_master_key_hex"] = strings.Repeat("b", 62) },
 		func(body map[string]any) { body["wrapped_master_key_hex"] = strings.Repeat("b", 97) },
+		func(body map[string]any) { body["wrapped_master_key_hex"] = strings.Repeat("b", 95) },
+		func(body map[string]any) { body["wrapped_master_key_hex"] = strings.Repeat("b", 98) },
+		func(body map[string]any) { body["wrapped_master_key_hex"] = strings.Repeat("b", 64) },
+		func(body map[string]any) { body["wrapped_master_key_hex"] = strings.Repeat("g", 96) },
 	} {
 		body := recoveryKeyBody(strings.Repeat("d", 16), nil)
 		mutate(body)

@@ -400,7 +400,7 @@ func TestSyncServiceRejectsEachRecoveryKeyPackageFieldIndependently(t *testing.T
 		KDF:                  "bip39_seed_hkdf_sha256",
 		MnemonicWordCount:    12,
 		WrapNonceHex:         strings.Repeat("a", 48),
-		WrappedMasterKeyHex:  strings.Repeat("b", 64),
+		WrappedMasterKeyHex:  strings.Repeat("b", 96),
 		PhraseFingerprintHex: strings.Repeat("c", 16),
 	}
 
@@ -430,16 +430,37 @@ func TestSyncServiceRejectsEachRecoveryKeyPackageFieldIndependently(t *testing.T
 			},
 		},
 		{
-			name: "wrapped master key hex too short",
+			name: "wrapped master key hex 95 chars",
 			mutate: func(in PutRecoveryKeyPackageInput) PutRecoveryKeyPackageInput {
-				in.WrappedMasterKeyHex = strings.Repeat("b", 63)
+				in.WrappedMasterKeyHex = strings.Repeat("b", 95)
 				return in
 			},
 		},
 		{
-			name: "wrapped master key hex odd length",
+			name: "wrapped master key hex 97 chars",
 			mutate: func(in PutRecoveryKeyPackageInput) PutRecoveryKeyPackageInput {
-				in.WrappedMasterKeyHex = strings.Repeat("b", 65)
+				in.WrappedMasterKeyHex = strings.Repeat("b", 97)
+				return in
+			},
+		},
+		{
+			name: "wrapped master key hex 98 chars, even",
+			mutate: func(in PutRecoveryKeyPackageInput) PutRecoveryKeyPackageInput {
+				in.WrappedMasterKeyHex = strings.Repeat("b", 98)
+				return in
+			},
+		},
+		{
+			name: "wrapped master key hex 64 chars, the former minimum",
+			mutate: func(in PutRecoveryKeyPackageInput) PutRecoveryKeyPackageInput {
+				in.WrappedMasterKeyHex = strings.Repeat("b", 64)
+				return in
+			},
+		},
+		{
+			name: "wrapped master key hex 96 chars, not hex",
+			mutate: func(in PutRecoveryKeyPackageInput) PutRecoveryKeyPackageInput {
+				in.WrappedMasterKeyHex = strings.Repeat("g", 96)
 				return in
 			},
 		},
