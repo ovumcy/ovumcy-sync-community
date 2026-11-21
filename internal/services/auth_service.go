@@ -252,6 +252,18 @@ func (s *AuthService) login(ctx context.Context, login string, password string) 
 	return s.createSessionForVerifiedPassword(ctx, account.ID, verifiedHash)
 }
 
+// innermostError follows the %w chain so a log line can name the cause's type
+// instead of the fmt wrapper every store error carries.
+func innermostError(err error) error {
+	for {
+		next := errors.Unwrap(err)
+		if next == nil {
+			return err
+		}
+		err = next
+	}
+}
+
 func (s *AuthService) Authenticate(ctx context.Context, sessionToken string) (models.Account, error) {
 	if sessionToken == "" {
 		return models.Account{}, ErrUnauthorized
@@ -282,7 +294,7 @@ func (s *AuthService) Authenticate(ctx context.Context, sessionToken string) (mo
 			return models.Account{}, ErrUnauthorized
 		}
 		// codecov:ignore:end
-		log.Printf("session touch failed: %T", err)
+		log.Printf("session touch failed: %T", innermostError(err))
 	}
 
 	account, err := s.store.FindAccountByID(ctx, session.AccountID)
