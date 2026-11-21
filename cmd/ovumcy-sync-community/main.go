@@ -144,7 +144,8 @@ func runServe(cfg config.Config) error {
 				MaxBlobBytes:         cfg.MaxBlobBytes,
 				ReadinessCheck:       store.CheckReady,
 				TrustedProxyCIDRs:    cfg.TrustedProxyCIDRs,
-				RegistrationDisabled: !cfg.RegistrationEnabled, // codecov:ignore -- same seam as SyncRateLimitCount above; the gate is covered in internal/api and the value in the config tests.
+				RegistrationDisabled: !cfg.RegistrationEnabled,                                       // codecov:ignore -- same seam as SyncRateLimitCount above; the gate is covered in internal/api and the value in the config tests.
+				BlobSlotWait:         api.BlobSlotWaitFor(cfg.HTTPReadTimeout, cfg.HTTPWriteTimeout), // codecov:ignore -- same seam as SyncRateLimitCount above; the derivation is covered in internal/api.
 			},
 		),
 		ReadHeaderTimeout: 5 * time.Second,

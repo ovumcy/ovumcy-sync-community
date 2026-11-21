@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/subtle"
 	"encoding/base64"
@@ -43,6 +44,7 @@ type Server struct {
 	trustedProxyCIDRs   []netip.Prefix
 	maxBlobRequestBytes int64
 	blobSlots           chan struct{}
+	blobSlotWait        time.Duration
 	readinessCheck      func(context.Context) error
 	mux                 *http.ServeMux
 }
@@ -65,6 +67,9 @@ type ServerOptions struct {
 	// RegistrationDisabled is the inverse of REGISTRATION_ENABLED so the zero
 	// value keeps registration open, as the config default does.
 	RegistrationDisabled bool
+	// BlobSlotWait bounds a blob transfer's wait for a slot; zero means
+	// defaultBlobSlotWait. BlobSlotWaitFor derives it from the HTTP timeouts.
+	BlobSlotWait time.Duration
 }
 
 func NewServer(
@@ -113,6 +118,7 @@ func NewServer(
 		trustedProxyCIDRs:   parseTrustedProxyCIDRs(options.TrustedProxyCIDRs),
 		maxBlobRequestBytes: encodedBlobRequestLimit(options.MaxBlobBytes),
 		blobSlots:           make(chan struct{}, maxConcurrentBlobTransfers),
+		blobSlotWait:        cmp.Or(options.BlobSlotWait, defaultBlobSlotWait),
 		readinessCheck:      options.ReadinessCheck,
 		mux:                 http.NewServeMux(),
 	}
@@ -1279,7 +1285,7 @@ func (s *Server) handlePutBlob(
 	account models.Account,
 ) {
 
-	if !s.acquireBlobSlot(request.Context()) {
+	if !s.acquireBlobSlot(request.Context(), writer) {
 		return
 	}
 	defer s.releaseBlobSlot()
@@ -1384,7 +1390,7 @@ func (s *Server) handleGetBlob(
 	request *http.Request,
 	account models.Account,
 ) {
-	if !s.acquireBlobSlot(request.Context()) {
+	if !s.acquireBlobSlot(request.Context(), writer) {
 		return
 	}
 	defer s.releaseBlobSlot()
@@ -1515,15 +1521,41 @@ func (s *Server) requireSyncEnabled(
 // the 16 MiB default) whatever the number of sessions.
 const maxConcurrentBlobTransfers = 4
 
-// acquireBlobSlot waits for a blob transfer slot. It fails only when the
-// request context ends, which without a BaseContext means the client is gone,
-// so the caller writes nothing. The wait spends the connection's
-// HTTP_READ_TIMEOUT / HTTP_WRITE_TIMEOUT like a slow transfer would.
-func (s *Server) acquireBlobSlot(ctx context.Context) bool {
+// defaultBlobSlotWait caps the slot wait so a PUT that waits the full bound
+// still has most of the default 10 s HTTP_READ_TIMEOUT left for its body.
+const defaultBlobSlotWait = 2 * time.Second
+
+// blobTransferBusyRetryAfterSeconds is the Retry-After on 503
+// blob_transfer_busy: a slot frees when any transfer finishes.
+const blobTransferBusyRetryAfterSeconds = 2
+
+// BlobSlotWaitFor bounds the slot wait at a quarter of the shorter HTTP
+// timeout, at most defaultBlobSlotWait; a non-positive timeout is ignored.
+func BlobSlotWaitFor(readTimeout, writeTimeout time.Duration) time.Duration {
+	wait := defaultBlobSlotWait
+	for _, timeout := range []time.Duration{readTimeout, writeTimeout} {
+		if timeout > 0 {
+			wait = min(wait, timeout/4)
+		}
+	}
+	return wait
+}
+
+// acquireBlobSlot waits up to blobSlotWait for a blob transfer slot. Past the
+// bound it answers 503 blob_transfer_busy with Retry-After. When the request
+// context ends first, which without a BaseContext means the client is gone, it
+// writes nothing. Either failure takes no slot.
+func (s *Server) acquireBlobSlot(ctx context.Context, writer http.ResponseWriter) bool {
+	timer := time.NewTimer(s.blobSlotWait)
+	defer timer.Stop()
 	select {
 	case s.blobSlots <- struct{}{}:
 		return true
 	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		writer.Header().Set("Retry-After", fmt.Sprint(blobTransferBusyRetryAfterSeconds))
+		writeError(writer, http.StatusServiceUnavailable, "blob_transfer_busy")
 		return false
 	}
 }

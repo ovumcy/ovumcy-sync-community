@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -102,7 +103,7 @@ const blobSlotWait = 5 * time.Second
 const blobSlotSilence = 200 * time.Millisecond
 
 func TestConcurrentBlobTransfersNeverExceedTheCap(t *testing.T) {
-	handler := newTestServerWithOptions(t, serverTestOptions{syncRateLimitCount: 100})
+	handler := newTestServerWithOptions(t, serverTestOptions{syncRateLimitCount: 100, blobSlotWait: time.Minute})
 	tokens := []string{
 		registerForBlobTest(t, handler, "first@example.com"),
 		registerForBlobTest(t, handler, "second@example.com"),
@@ -187,7 +188,7 @@ func TestConcurrentBlobTransfersNeverExceedTheCap(t *testing.T) {
 }
 
 func TestBlobTransferWaitingForASlotEndsWithItsClient(t *testing.T) {
-	handler := newTestServerWithOptions(t, serverTestOptions{syncRateLimitCount: 100})
+	handler := newTestServerWithOptions(t, serverTestOptions{syncRateLimitCount: 100, blobSlotWait: time.Minute})
 	token := registerForBlobTest(t, handler, "owner@example.com")
 	payload := blobPutPayload(t)
 
@@ -240,5 +241,93 @@ func TestBlobTransferWaitingForASlotEndsWithItsClient(t *testing.T) {
 	for _, transfer := range held[1:] {
 		transfer.body.release()
 		<-transfer.done
+	}
+}
+
+func TestBlobTransferWaitingPastTheBoundGetsBusyNotInvalidJSON(t *testing.T) {
+	const bound = 300 * time.Millisecond
+	handler := newTestServerWithOptions(t, serverTestOptions{syncRateLimitCount: 100, blobSlotWait: bound})
+	token := registerForBlobTest(t, handler, "owner@example.com")
+	payload := blobPutPayload(t)
+
+	held := make([]*pendingTransfer, 0, maxConcurrentBlobTransfers)
+	for range maxConcurrentBlobTransfers {
+		transfer := startBlobTransfer(context.Background(), handler, http.MethodPut, token, newGatedBody(t, payload))
+		select {
+		case <-transfer.body.started:
+		case <-time.After(blobSlotWait):
+			t.Fatal("a PUT under the cap never reached its body")
+		}
+		held = append(held, transfer)
+	}
+
+	started := time.Now()
+	putWaiter := startBlobTransfer(context.Background(), handler, http.MethodPut, token, newGatedBody(t, payload))
+	getWaiter := startBlobTransfer(context.Background(), handler, http.MethodGet, token, nil)
+	for _, waiter := range []*pendingTransfer{putWaiter, getWaiter} {
+		select {
+		case <-waiter.done:
+		case <-time.After(blobSlotWait):
+			t.Fatal("a blob transfer waited past the bound without an answer")
+		}
+		if elapsed := time.Since(started); elapsed < bound {
+			t.Fatalf("answered after %v, before the %v bound", elapsed, bound)
+		}
+		if waiter.response.Code != http.StatusServiceUnavailable {
+			t.Fatalf("expected 503, got %d: %s", waiter.response.Code, waiter.response.Body.String())
+		}
+		var body map[string]string
+		decodeResponse(t, waiter.response.Body.Bytes(), &body)
+		if body["error"] != "blob_transfer_busy" {
+			t.Fatalf("error key = %q, want blob_transfer_busy", body["error"])
+		}
+		if got := waiter.response.Header().Get("Retry-After"); got != fmt.Sprint(blobTransferBusyRetryAfterSeconds) {
+			t.Fatalf("Retry-After = %q, want %d", got, blobTransferBusyRetryAfterSeconds)
+		}
+	}
+	select {
+	case <-putWaiter.body.started:
+		t.Fatal("a refused PUT read its body")
+	default:
+	}
+
+	// The refused waits took no slot: a freed slot still admits a new PUT.
+	held[0].body.release()
+	<-held[0].done
+	next := startBlobTransfer(context.Background(), handler, http.MethodPut, token, newGatedBody(t, payload))
+	select {
+	case <-next.body.started:
+	case <-time.After(blobSlotWait):
+		t.Fatal("a slot was lost to a refused wait")
+	}
+	next.body.release()
+	<-next.done
+	for _, transfer := range held[1:] {
+		transfer.body.release()
+		<-transfer.done
+	}
+}
+
+func TestBlobSlotWaitForStaysWellUnderTheHTTPTimeouts(t *testing.T) {
+	cases := []struct {
+		read, write, want time.Duration
+	}{
+		{10 * time.Second, 15 * time.Second, defaultBlobSlotWait},
+		{time.Minute, time.Minute, defaultBlobSlotWait},
+		{4 * time.Second, 15 * time.Second, time.Second},
+		{10 * time.Second, 2 * time.Second, 500 * time.Millisecond},
+		{0, 0, defaultBlobSlotWait},
+	}
+	for _, c := range cases {
+		if got := BlobSlotWaitFor(c.read, c.write); got != c.want {
+			t.Errorf("BlobSlotWaitFor(%v, %v) = %v, want %v", c.read, c.write, got, c.want)
+		}
+	}
+}
+
+func TestNewServerDefaultsTheBlobSlotWait(t *testing.T) {
+	handler := newTestServerWithOptions(t, serverTestOptions{})
+	if got := handler.(*Server).blobSlotWait; got != defaultBlobSlotWait {
+		t.Fatalf("blobSlotWait = %v, want %v", got, defaultBlobSlotWait)
 	}
 }
