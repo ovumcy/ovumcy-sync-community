@@ -148,6 +148,36 @@ func TestConcurrentReserveTOTPAttemptNeverExceedsTheCap(t *testing.T) {
 	}
 }
 
+func TestConcurrentPendingEnrollmentTOTPAttemptNeverExceedsTheCap(t *testing.T) {
+	store, _ := newFileBackedTestStore(t)
+	ctx := context.Background()
+	createWindowTestAccount(t, store, "lifetime-race-account")
+
+	const attempts, limit = 50, 10
+	now := time.Now().UTC()
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	reservedCount := 0
+	for range attempts {
+		wg.Go(func() {
+			reserved, err := store.ReservePendingEnrollmentTOTPAttempt(ctx, "lifetime-race-account", now, limit)
+			if err != nil {
+				t.Errorf("reserve: %v", err)
+				return
+			}
+			if reserved {
+				mu.Lock()
+				reservedCount++
+				mu.Unlock()
+			}
+		})
+	}
+	wg.Wait()
+	if reservedCount != limit {
+		t.Fatalf("reserved %d attempts, want exactly %d", reservedCount, limit)
+	}
+}
+
 func TestTOTPFailureWindowSurfacesStoreErrors(t *testing.T) {
 	store, dbPath := newFileBackedTestStore(t)
 	ctx := context.Background()

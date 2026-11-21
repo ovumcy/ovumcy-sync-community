@@ -28,7 +28,7 @@ decrypted payloads.
 | `recovery_key_packages` | `account_id`, `algorithm`, `kdf`, `mnemonic_word_count`, `wrap_nonce_hex`, `wrapped_master_key_hex`, `phrase_fingerprint_hex`, `updated_at` | Ciphertext, credential | Wrapped master key; the phrase is not stored |
 | `password_reset_tokens` | `account_id`, `token_hash`, `created_at`, `expires_at`, `consumed_at` | Credential (hash) | One row per account; token valid for 30 minutes and single-use |
 | `totp_challenges` | `challenge_id_hash`, `account_id`, `created_at`, `expires_at`, `failed_attempts` | Credential (hash) | Valid for 5 minutes, locked after 5 failed attempts |
-| `totp_failure_windows` | `account_id`, `window_started_unix`, `failed_attempts` | Metadata | One row per account; cleared by a successful TOTP verify |
+| `totp_failure_windows` | `account_id`, `window_started_unix`, `failed_attempts` | Metadata | One row per account (the pending enrollment secret's lifetime guess count); cleared by an enrollment start or a completed enrollment |
 
 ## Retention and deletion
 

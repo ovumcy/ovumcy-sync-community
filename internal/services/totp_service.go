@@ -288,7 +288,7 @@ func (s *TOTPService) CompleteEnrollment(
 	}
 	if !reserved {
 		if err := s.store.DiscardPendingTOTPSecret(ctx, accountID, account.TOTPSecretEncrypted); err != nil {
-			return "", err // codecov:ignore -- ReserveTOTPAttempt just succeeded within this call and the accounts table was read by FindAccountByID above, so failing only this write needs a fake driver (same same-table-multi-step limitation as the RowsAffected/COMMIT deviations in internal/db/fault_injection_test.go).
+			return "", err // codecov:ignore -- ReservePendingEnrollmentTOTPAttempt just succeeded within this call and the accounts table was read by FindAccountByID above, so failing only this write needs a fake driver (same same-table-multi-step limitation as the RowsAffected/COMMIT deviations in internal/db/fault_injection_test.go).
 		}
 		s.observeEnrollmentCompletion("locked")
 		// No wait makes this secret usable again; the client must restart.
