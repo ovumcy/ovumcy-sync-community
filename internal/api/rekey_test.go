@@ -88,6 +88,10 @@ func TestServerPutRekey(t *testing.T) {
 	unknown["recovery_key"].(map[string]any)["current_password"] = "correct horse battery staple"
 	performJSONRequest(t, handler, http.MethodPut, "/sync/rekey", unknown, token, http.StatusBadRequest)
 
+	bridgeOnly := rekeyBody(k1, 4, "k1c", 3, password)
+	bridgeOnly["recovery_key"].(map[string]any)["expected_phrase_fingerprint_hex"] = k2
+	performJSONRequest(t, handler, http.MethodPut, "/sync/rekey", bridgeOnly, token, http.StatusBadRequest)
+
 	capabilities := performJSONRequest(t, handler, http.MethodGet, "/sync/capabilities", nil, token, http.StatusOK)
 	var document struct {
 		AtomicRekey bool `json:"atomic_rekey"`

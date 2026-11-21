@@ -2463,6 +2463,40 @@ components:
       required: [schema_version, generation, checksum_sha256, ciphertext_base64]
       additionalProperties: false
 
+    RekeyRecoveryKeyPackage:
+      type: object
+      description: The package fields and checks of RecoveryKeyPackageRequest, without its step-up fields (they ride at the top of RekeyRequest). The bridge's `expected_phrase_fingerprint_hex` is not accepted here; like any unknown field it answers `400 invalid_json`.
+      properties:
+        algorithm:
+          type: string
+          description: 'Must be exactly "xchacha20poly1305" (case-insensitive, normalized to lowercase).'
+        kdf:
+          type: string
+          description: 'Must be exactly "bip39_seed_hkdf_sha256" (case-insensitive, normalized to lowercase).'
+        mnemonic_word_count:
+          type: integer
+          description: Must be exactly 12.
+        wrap_nonce_hex:
+          type: string
+          description: Lowercase hex, exactly 48 characters.
+          pattern: "^[a-f0-9]{48}$"
+        wrapped_master_key_hex:
+          type: string
+          description: Lowercase hex, exactly 96 characters (a 32-byte key plus its 16-byte tag).
+          pattern: "^[a-f0-9]{96}$"
+        phrase_fingerprint_hex:
+          type: string
+          description: Lowercase hex, exactly 16 characters.
+          pattern: "^[a-f0-9]{16}$"
+      required:
+        - algorithm
+        - kdf
+        - mnemonic_word_count
+        - wrap_nonce_hex
+        - wrapped_master_key_hex
+        - phrase_fingerprint_hex
+      additionalProperties: false
+
     RekeyBlob:
       type: object
       description: The blob part of `RekeyRequest`; fields and validation as in `BlobPutRequest`, without `expected_generation`.
@@ -2485,7 +2519,7 @@ components:
       type: object
       properties:
         recovery_key:
-          $ref: "#/components/schemas/ManagedRecoveryKeyPackageRequest"
+          $ref: "#/components/schemas/RekeyRecoveryKeyPackage"
         blob:
           $ref: "#/components/schemas/RekeyBlob"
         expected_generation:
