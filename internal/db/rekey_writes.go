@@ -111,6 +111,20 @@ func (s *Store) ReplaceRecoveryKeyAndBlobForSession(
 	return stored, nil
 }
 
+// EncryptedBlobGeneration reads the stored blob's generation without its
+// ciphertext; found is false when the account has no blob. Advisory only: the
+// write's own statement decides.
+func (s *Store) EncryptedBlobGeneration(ctx context.Context, accountID string) (generation int64, found bool, err error) {
+	err = s.db.QueryRowContext(ctx, `SELECT generation FROM encrypted_blobs WHERE account_id = ?`, accountID).Scan(&generation)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("blob generation lookup: %w", err)
+	}
+	return generation, true, nil
+}
+
 // requireStoredRecoveryKeyPackage returns the stored package when its content
 // equals want's (updated_at aside), else ErrRecoveryKeyChanged — no row
 // included.

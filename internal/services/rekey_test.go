@@ -177,6 +177,7 @@ func TestRekeyUnchangedPackageNeedsNoPassword(t *testing.T) {
 		RecoveryKey:        validRecoveryKeyPackageInput(),
 		Blob:               rekeyBlobInput("still-k1", base+1),
 		ExpectedGeneration: expectGeneration(base),
+		KeepStoredPackage:  true,
 	})
 	if err != nil {
 		t.Fatalf("unchanged package: %v", err)

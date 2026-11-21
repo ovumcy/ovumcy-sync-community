@@ -18,6 +18,11 @@ type RekeyInput struct {
 	RecoveryKey        PutRecoveryKeyPackageInput
 	Blob               PutBlobInput
 	ExpectedGeneration *int64
+	// KeepStoredPackage is the caller's UnchangedRecoveryKeyPackage verdict.
+	// Rekey does not re-read it: the transport charges the step-up bucket from
+	// that same verdict, so a second read could check a password unmetered.
+	// The store re-checks it inside the write (ErrRecoveryKeyChanged).
+	KeepStoredPackage bool
 }
 
 // Rekey stores a recovery-key package and the blob sealed under it in one
@@ -36,13 +41,8 @@ func (s *SyncService) Rekey(
 		return models.RecoveryKeyPackage{}, models.EncryptedBlob{}, ErrInvalidBlob
 	}
 	recoveryKeyPackage := normalizeRecoveryKeyPackage(accountID, input.RecoveryKey)
-	_, unchanged, err := s.matchStoredRecoveryKeyPackage(ctx, recoveryKeyPackage)
-	if err != nil {
-		return models.RecoveryKeyPackage{}, models.EncryptedBlob{}, err
-	}
-
 	guard := db.RekeyGuard{Mode: db.RekeyKeepPackage, SessionTokenHash: stepUp.SessionTokenHash}
-	if !unchanged {
+	if !input.KeepStoredPackage {
 		account, err := findStepUpAccount(ctx, s.store, accountID)
 		if err != nil {
 			return models.RecoveryKeyPackage{}, models.EncryptedBlob{}, err
@@ -63,8 +63,14 @@ func (s *SyncService) Rekey(
 		if err != nil {
 			return models.RecoveryKeyPackage{}, models.EncryptedBlob{}, err
 		}
-		// After both bodies are validated, so a rejected body does not spend
-		// the code's step.
+		// After both bodies are validated and a stale generation is ruled out,
+		// so a rejected request does not spend the code's step (the step stays
+		// claimed even when the write then refuses).
+		if account.TOTPEnabled {
+			if err := s.precheckRekeyGeneration(ctx, accountID, blob.Generation, ceiling, *input.ExpectedGeneration); err != nil {
+				return models.RecoveryKeyPackage{}, models.EncryptedBlob{}, err
+			}
+		}
 		if err := verifyStepUpCode(ctx, s.totpCodes, account, stepUp.TOTPCode); err != nil {
 			return models.RecoveryKeyPackage{}, models.EncryptedBlob{}, err
 		}
@@ -76,6 +82,24 @@ func (s *SyncService) Rekey(
 		return models.RecoveryKeyPackage{}, models.EncryptedBlob{}, err
 	}
 	return s.writeRekey(ctx, recoveryKeyPackage, blob, guard, ceiling, *input.ExpectedGeneration)
+}
+
+// precheckRekeyGeneration answers ErrStaleGeneration ahead of the TOTP code
+// when the stored generation already refuses writeEncryptedBlob's predicate.
+// It authorizes nothing; a write it lets through is still decided by the
+// transaction.
+func (s *SyncService) precheckRekeyGeneration(ctx context.Context, accountID string, generation, ceiling, expected int64) error {
+	stored, found, err := s.store.EncryptedBlobGeneration(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	switch {
+	case expected == 0 && found,
+		expected > 0 && (!found || stored != expected),
+		found && stored >= generation && stored <= ceiling:
+		return ErrStaleGeneration
+	}
+	return nil
 }
 
 func (s *SyncService) writeRekey(
