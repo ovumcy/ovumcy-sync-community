@@ -602,7 +602,14 @@ paths:
                 unauthorized:
                   value: { error: unauthorized }
         "409":
-          description: TOTP is already enabled on this account, or there is no pending secret to confirm (call `POST /auth/totp/enroll` first).
+          description: |
+            TOTP is already enabled on this account; there is no pending secret
+            to confirm (call `POST /auth/totp/enroll` first); or the pending
+            secret's lifetime budget is spent (10 attempts per pending secret,
+            no window restart) and this attempt discarded it
+            (`totp_enrollment_expired`: no wait makes it usable again, so
+            restart with `POST /auth/totp/enroll`, which needs the password; a
+            retry without restarting answers `totp_enrollment_not_started`).
           content:
             application/json:
               schema:
@@ -612,26 +619,23 @@ paths:
                   value: { error: totp_already_enabled }
                 enrollmentNotStarted:
                   value: { error: totp_enrollment_not_started }
+                enrollmentExpired:
+                  value: { error: totp_enrollment_expired }
         "415":
           $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           description: |
-            Request rate limit; the enrollment TOTP budget is spent (5 code
-            attempts per 15 minutes per client and per account; retry after
-            `Retry-After`); or the pending secret's lifetime budget is spent
-            (10 attempts per pending secret, no window restart). A spent
-            lifetime budget discards the pending secret: no wait makes it
-            usable again, so restart with `POST /auth/totp/enroll`, which
-            needs the password (a retry without restarting answers
-            409 `totp_enrollment_not_started`).
+            Request rate limit, or the enrollment TOTP budget is spent (5 code
+            attempts per 15 minutes per client and per account); retry after
+            `Retry-After`. A spent per-secret lifetime budget is 409
+            `totp_enrollment_expired`, not 429.
           headers:
             Retry-After:
               description: |
                 Seconds until the caller may retry: the seconds left in the spent
                 `AUTH_RATE_LIMIT_WINDOW` (at most 900 by default) on a request rate-limit
                 refusal, 1 to 900 (the end of the spent window) on a spent
-                enrollment budget. The lifetime-budget refusal also carries
-                `Retry-After: 1`, but no wait helps there.
+                enrollment budget.
               schema:
                 type: string
                 example: "60"
@@ -1890,9 +1894,8 @@ components:
         default) on the `/sync/devices`, `/sync/recovery-key`, `/sync/blob` and
         read-state routes — and 1 to 900 seconds
         (the end of the spent budget's fixed 15-minute window) on a TOTP-budget
-        refusal. On `POST /auth/totp/verify` a spent per-secret lifetime budget
-        also carries `Retry-After: 1`, but no wait helps: the pending secret is
-        discarded and enrollment must restart.
+        refusal. Browser clients on an allowed origin can read `Retry-After`:
+        it is listed in `Access-Control-Expose-Headers`.
       headers:
         Retry-After:
           description: Seconds until the caller may retry (the rest of the request-limit window: at most 900 by default on the credential routes, 60 on the sync and read-state routes; 1 to 900 on a TOTP-budget refusal; see the response description).

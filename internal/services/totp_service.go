@@ -17,7 +17,10 @@ var (
 	// distinct from ErrTOTPNotConfigured (no FIELD_ENCRYPTION_KEY).
 	ErrTOTPNotEnabled           = errors.New("totp_not_enabled")
 	ErrTOTPEnrollmentNotStarted = errors.New("totp_enrollment_not_started")
-	ErrTOTPAlreadyEnabled       = errors.New("totp_already_enabled")
+	// ErrTOTPEnrollmentExpired: the pending secret's lifetime verify budget
+	// is spent and the secret discarded; only a new enrollment start helps.
+	ErrTOTPEnrollmentExpired = errors.New("totp_enrollment_expired")
+	ErrTOTPAlreadyEnabled    = errors.New("totp_already_enabled")
 	ErrTOTPSecretEncrypt        = errors.New("totp_secret_encrypt")
 	ErrTOTPSecretDecrypt        = errors.New("totp_secret_decrypt")
 	ErrTOTPInvalidCode          = errors.New("totp_invalid_code")
@@ -291,8 +294,7 @@ func (s *TOTPService) CompleteEnrollment(
 			return "", err // codecov:ignore -- ReservePendingEnrollmentTOTPAttempt just succeeded within this call and the accounts table was read by FindAccountByID above, so failing only this write needs a fake driver (same same-table-multi-step limitation as the RowsAffected/COMMIT deviations in internal/db/fault_injection_test.go).
 		}
 		s.observeEnrollmentCompletion("locked")
-		// No wait makes this secret usable again; the client must restart.
-		return "", &TOTPLockedError{}
+		return "", ErrTOTPEnrollmentExpired
 	}
 
 	step, ok := security.VerifyTOTPCode([]byte(rawSecret), code, now.Unix())

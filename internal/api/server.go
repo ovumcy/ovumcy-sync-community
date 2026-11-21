@@ -215,6 +215,7 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Access-Control-Allow-Origin", origin)
 		writer.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 		writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		writer.Header().Set("Access-Control-Expose-Headers", "Retry-After")
 	} else if isCrossSiteFetch(request) && !isOperatorProbePath(request.URL.Path) {
 		// A cross-site no-cors GET (an <img> or <script> tag) carries no
 		// Origin; its fetch metadata still names it, and it must not spend the
@@ -835,6 +836,8 @@ func mapTOTPError(writer http.ResponseWriter, err error) {
 		writeError(writer, http.StatusConflict, "totp_not_enabled")
 	case errors.Is(err, services.ErrTOTPEnrollmentNotStarted):
 		writeError(writer, http.StatusConflict, "totp_enrollment_not_started")
+	case errors.Is(err, services.ErrTOTPEnrollmentExpired):
+		writeError(writer, http.StatusConflict, "totp_enrollment_expired")
 	case errors.Is(err, services.ErrInvalidCurrentPassword):
 		writeError(writer, http.StatusUnauthorized, "invalid_current_password")
 	case errors.Is(err, services.ErrTOTPInvalidCode):
