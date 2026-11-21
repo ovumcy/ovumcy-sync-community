@@ -55,6 +55,7 @@ type LapsedAccountSweepResult struct {
 type lapsedSweepStore interface {
 	ListLapsedManagedAccountIDs(ctx context.Context, cutoff time.Time, after db.LapsedCandidate, limit int) ([]db.LapsedCandidate, error)
 	DeleteLapsedManagedAccount(ctx context.Context, accountID string, cutoff time.Time) error
+	CheckpointAfterErase(ctx context.Context)
 }
 
 // maxConsecutiveLapsedDeleteFailures is how many delete failures in a row that
@@ -170,6 +171,18 @@ func (s *LapsedAccountSweepService) Run(ctx context.Context, limit int, dryRun b
 	var after db.LapsedCandidate
 	consecutiveFailures := 0
 
+	// One TRUNCATE checkpoint per page that erased anything, including a page
+	// cut short by a cap, an abort or a cancelled context: the erases have
+	// committed, so the checkpoint ignores the cancellation.
+	erasedSinceCheckpoint := false
+	checkpoint := func() {
+		if erasedSinceCheckpoint {
+			s.store.CheckpointAfterErase(context.WithoutCancel(ctx))
+			erasedSinceCheckpoint = false
+		}
+	}
+	defer checkpoint()
+
 	for {
 		if err := ctx.Err(); err != nil {
 			return result, errors.Join(append(deleteErrs, err)...)
@@ -212,9 +225,11 @@ func (s *LapsedAccountSweepService) Run(ctx context.Context, limit int, dryRun b
 				continue
 			}
 			consecutiveFailures = 0
+			erasedSinceCheckpoint = true
 			result.Deleted++
 			result.DeletedAccountIDs = append(result.DeletedAccountIDs, candidate.ID)
 		}
+		checkpoint()
 
 		if len(page) < limit {
 			return result, errors.Join(deleteErrs...)

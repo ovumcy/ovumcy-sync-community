@@ -52,7 +52,9 @@ backup, a `VACUUM INTO` snapshot, a volume snapshot or a copy held by a hosting 
 contains the deleted rows until that copy is destroyed. The same applies to the write-ahead log
 files next to the database until they are checkpointed. The server sets `secure_delete`, so freed
 pages in the main file are zeroed, but a deleted row can still sit in the `-wal` file until a
-checkpoint folds it back; the server truncates the WAL on a clean shutdown, not after each erasure.
+checkpoint folds it back. The server truncates the WAL after each account erasure (the
+lapsed-account sweep once per page of erased accounts) and on a clean shutdown; a checkpoint that a
+concurrent reader blocks leaves those pages until the next one.
 
 For operators:
 

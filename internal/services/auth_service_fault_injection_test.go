@@ -45,7 +45,7 @@ func TestRegisterSurfacesCreateSessionStoreError(t *testing.T) {
 }
 
 // TestLoginSurfacesTOTPChallengeIssueStoreError exercises IssueChallenge's
-// DeleteTOTPChallengesForAccount error AND Login's own wrapper around
+// supersede-delete error AND Login's own wrapper around
 // IssueChallenge's returned error in one shot.
 func TestLoginSurfacesTOTPChallengeIssueStoreError(t *testing.T) {
 	store, dbPath := openFileBackedTestStore(t)

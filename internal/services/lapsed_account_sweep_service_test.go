@@ -235,6 +235,10 @@ func (s *pageCountingSweepStore) ListLapsedManagedAccountIDs(ctx context.Context
 	return page, err
 }
 
+func (s *pageCountingSweepStore) CheckpointAfterErase(ctx context.Context) {
+	s.inner.CheckpointAfterErase(ctx)
+}
+
 func (s *pageCountingSweepStore) DeleteLapsedManagedAccount(ctx context.Context, accountID string, cutoff time.Time) error {
 	if s.cancel != nil {
 		s.cancel()
@@ -432,6 +436,10 @@ func (s *mintRacingSweepStore) ListLapsedManagedAccountIDs(ctx context.Context, 
 	return s.inner.ListLapsedManagedAccountIDs(ctx, cutoff, after, limit)
 }
 
+func (s *mintRacingSweepStore) CheckpointAfterErase(ctx context.Context) {
+	s.inner.CheckpointAfterErase(ctx)
+}
+
 func (s *mintRacingSweepStore) DeleteLapsedManagedAccount(ctx context.Context, accountID string, cutoff time.Time) error {
 	s.t.Helper()
 	if err := s.inner.ClearAccountLapse(ctx, accountID); err != nil {
@@ -497,6 +505,10 @@ func (s *secondListFailsSweepStore) ListLapsedManagedAccountIDs(ctx context.Cont
 		return nil, errors.New("injected listing failure")
 	}
 	return s.inner.ListLapsedManagedAccountIDs(ctx, cutoff, after, limit)
+}
+
+func (s *secondListFailsSweepStore) CheckpointAfterErase(ctx context.Context) {
+	s.inner.CheckpointAfterErase(ctx)
 }
 
 func (s *secondListFailsSweepStore) DeleteLapsedManagedAccount(ctx context.Context, accountID string, cutoff time.Time) error {

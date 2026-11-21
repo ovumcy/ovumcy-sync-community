@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Request headers are capped at 64 KiB** (formerly net/http's 1 MiB default); a larger header block answers `431 Request Header Fields Too Large`. The lapsed-account sweep now truncates the WAL once per page of erased accounts instead of after each one, and a `file:///C:/…` `DB_PATH` on Windows pre-creates the database at `C:/…`, the file SQLite opens.
 - **`POST /auth/totp/verify`: a pending secret discarded at its lifetime cap answers `409 totp_enrollment_discarded`** (formerly `429 rate_limited` with `Retry-After: 1`), so a client restarts enrollment instead of waiting; the route limiter and the rolling TOTP budget keep `429 rate_limited`. Allowed-origin responses now carry `Access-Control-Expose-Headers: Retry-After`, so a browser client can read the wait.
 - **The discarded-enrollment key is `totp_enrollment_discarded`, not `totp_enrollment_expired`.** The key named in the entry above was first merged as `totp_enrollment_expired` and never released; it now matches the key ovumcy-managed answers for the same state, so clients handle one name. No alias is kept.
 - **A failed `last_seen_at` update no longer fails the request.** When recording a session's last use fails (a busy or read-only database), an authenticated request now proceeds and only the error's type is logged, instead of answering 500 on every authenticated route. A session revoked between lookup and update still answers 401.

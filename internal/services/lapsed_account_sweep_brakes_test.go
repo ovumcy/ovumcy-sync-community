@@ -19,6 +19,12 @@ type scriptedSweepStore struct {
 	candidates []db.LapsedCandidate
 	outcomes   map[string]error
 	deleteLog  []string
+	// checkpoints holds len(deleteLog) at each CheckpointAfterErase call.
+	checkpoints []int
+}
+
+func (s *scriptedSweepStore) CheckpointAfterErase(context.Context) {
+	s.checkpoints = append(s.checkpoints, len(s.deleteLog))
 }
 
 func newScriptedSweepStore(n int) *scriptedSweepStore {
