@@ -163,6 +163,38 @@ func TestAuthenticateAccountLookupEdgeCases(t *testing.T) {
 	})
 }
 
+// TestAuthenticateProceedsWhenSessionTouchFails pins that a failed
+// last_seen_at write is non-fatal: a trigger aborts only the UPDATE, the
+// session lookup keeps succeeding, and the caller still gets the account.
+func TestAuthenticateProceedsWhenSessionTouchFails(t *testing.T) {
+	store, dbPath := openFileBackedTestStore(t)
+	service := NewAuthService(store, 24*time.Hour)
+	ctx := context.Background()
+
+	result, err := service.Register(ctx, "owner@example.com", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = raw.Close() })
+	if _, err := raw.Exec(`CREATE TRIGGER fail_session_touch BEFORE UPDATE ON sessions
+		BEGIN SELECT RAISE(ABORT, 'session touch refused'); END;`); err != nil {
+		t.Fatalf("install failing trigger: %v", err)
+	}
+
+	account, err := service.Authenticate(ctx, result.SessionToken)
+	if err != nil {
+		t.Fatalf("expected the request to proceed past a failed touch, got %v", err)
+	}
+	if account.ID != result.AccountID {
+		t.Fatalf("account = %q, want %q", account.ID, result.AccountID)
+	}
+}
+
 // TestChangePasswordStoreErrors exercises ChangePassword's store-error
 // branches: FindAccountByID's generic error (a closed store) and a failure in
 // each table the change transaction touches, which must leave the account
