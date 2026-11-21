@@ -64,6 +64,16 @@ root to work around it.
 characters) and restart; see "Optional Two-Factor Authentication" in
 [self-hosting.md](self-hosting.md). If nobody uses 2FA, the response is expected.
 
+## Startup fails: `FIELD_ENCRYPTION_KEY must not be all zero bytes`
+
+**Cause.** The key decodes to all zero bytes, typically a placeholder such as 64 `0` characters.
+It would encrypt TOTP secrets under a key anyone can guess, so every command refuses it.
+
+**Fix.** Generate a key with `openssl rand -hex 32`, set it, and restart. TOTP secrets enrolled
+under the zero key cannot be decrypted with the new one, so those owners sign in with a recovery
+code (`POST /auth/forgot-password`, which clears their TOTP) and re-enroll. To run without 2FA,
+leave the variable unset instead.
+
 ## An account with 2FA fails to log in after a key change
 
 **Cause.** Login for an account that has enrolled in 2FA returns `503 totp_not_configured`

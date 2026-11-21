@@ -73,21 +73,23 @@ func TestValidateRefusesSharedBridgeAndMetricsToken(t *testing.T) {
 	}
 }
 
-func TestWarningsFlagAnAllZeroFieldKey(t *testing.T) {
+func TestValidateRefusesAnAllZeroFieldKey(t *testing.T) {
 	cfg := validBase()
-	if w := cfg.Warnings(); len(w) != 0 {
-		t.Fatalf("no key must not warn, got %v", w)
-	}
-	cfg.FieldEncryptionKey = make([]byte, 32)
-	w := cfg.Warnings()
-	if len(w) != 1 || !strings.Contains(w[0], "FIELD_ENCRYPTION_KEY is all zero bytes") {
-		t.Fatalf("an all-zero key must warn once, got %v", w)
-	}
 	if err := cfg.Validate(); err != nil {
-		t.Fatalf("an all-zero key must still validate, got %v", err)
+		t.Fatalf("no key must validate (TOTP off), got %v", err)
 	}
-	cfg.FieldEncryptionKey[31] = 1
-	if w := cfg.Warnings(); len(w) != 0 {
-		t.Fatalf("a non-zero key must not warn, got %v", w)
+	for _, size := range []int{32, 48} {
+		cfg.FieldEncryptionKey = make([]byte, size)
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "FIELD_ENCRYPTION_KEY must not be all zero bytes") {
+			t.Fatalf("a %d-byte all-zero key must be refused, got %v", size, err)
+		}
+		if msg := err.Error(); strings.Contains(msg, "00") || strings.Contains(msg, "0 0") || strings.Contains(msg, "\x00") {
+			t.Fatal("the error must not quote the key")
+		}
+		cfg.FieldEncryptionKey[size-1] = 1
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("a %d-byte key with one non-zero byte must validate, got %v", size, err)
+		}
 	}
 }

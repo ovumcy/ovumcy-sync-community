@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,26 +64,22 @@ func TestRunServeFailsWhenDatabaseCannotBeOpened(t *testing.T) {
 	}
 }
 
-func TestRunLogsConfigWarningsOnlyOnServe(t *testing.T) {
-	var sink bytes.Buffer
-	log.SetOutput(&sink)
-	defer log.SetOutput(os.Stderr)
-	t.Setenv("FIELD_ENCRYPTION_KEY", strings.Repeat("0", 64))
+func TestRunRefusesAnAllZeroFieldKeyBeforeAnyCommand(t *testing.T) {
+	zeroKey := strings.Repeat("0", 64)
+	t.Setenv("FIELD_ENCRYPTION_KEY", zeroKey)
+	// If the refusal regresses, serve must fail fast instead of opening a
+	// real database and binding a port.
 	t.Setenv("DB_PATH", blockedDBPath(t))
 	t.Setenv("BIND_ADDR", "127.0.0.1:1")
 
-	if err := run([]string{"healthcheck"}); err == nil {
-		t.Fatal("expected healthcheck against an unreachable port to fail")
-	}
-	if strings.Contains(sink.String(), "config warning") {
-		t.Fatalf("healthcheck logged a config warning: %q", sink.String())
-	}
-
-	if err := run([]string{"serve"}); err == nil || !strings.Contains(err.Error(), "open database") {
-		t.Fatalf("expected open database error, got %v", err)
-	}
-	if !strings.Contains(sink.String(), "config warning: FIELD_ENCRYPTION_KEY is all zero bytes") {
-		t.Fatalf("serve did not log the zero-key warning: %q", sink.String())
+	for _, args := range [][]string{{"serve"}, {"migrate"}, {"healthcheck"}} {
+		err := run(args)
+		if err == nil || !strings.Contains(err.Error(), "load config") || !strings.Contains(err.Error(), "FIELD_ENCRYPTION_KEY") {
+			t.Fatalf("%v: expected a load config error naming FIELD_ENCRYPTION_KEY, got %v", args, err)
+		}
+		if strings.Contains(err.Error(), zeroKey) {
+			t.Fatalf("%v: the error must not echo the key", args)
+		}
 	}
 }
 

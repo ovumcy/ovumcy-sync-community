@@ -53,7 +53,7 @@ type Config struct {
 	// 32-byte key from it, so any length >= 32 bytes is accepted. The server
 	// REQUIRES it to be set when any account has TOTP enabled. The env var
 	// FIELD_ENCRYPTION_KEY must carry a hex string of at least 32 bytes
-	// (>= 64 hex chars).
+	// (>= 64 hex chars); a key of all zero bytes stops startup.
 	FieldEncryptionKey []byte
 	// TOTPIssuer is the issuer label embedded in TOTP otpauth:// provisioning
 	// URIs. It controls how authenticator apps label the account in the user's
@@ -350,6 +350,11 @@ func (c Config) Validate() error {
 	if c.LapsedAccountGracePeriod < MinLapsedAccountGracePeriod {
 		return fmt.Errorf("LAPSED_ACCOUNT_GRACE_PERIOD must be at least %s", MinLapsedAccountGracePeriod)
 	}
+	// A placeholder key leaves every stored TOTP secret readable by anyone
+	// holding the database.
+	if len(c.FieldEncryptionKey) > 0 && allZeroBytes(c.FieldEncryptionKey) {
+		return fmt.Errorf("FIELD_ENCRYPTION_KEY must not be all zero bytes; generate one with `openssl rand -hex 32`")
+	}
 
 	return nil
 }
@@ -387,16 +392,6 @@ func validateAllowedOrigin(value string) error {
 }
 
 var errOriginShape = errors.New("must be exactly scheme://host[:port] as a browser sends it: http or https, lower-case host, no default port")
-
-// Warnings lists startup conditions that are accepted but unsafe, one
-// sentence each, never quoting a secret.
-func (c Config) Warnings() []string {
-	var warnings []string
-	if len(c.FieldEncryptionKey) > 0 && allZeroBytes(c.FieldEncryptionKey) {
-		warnings = append(warnings, "FIELD_ENCRYPTION_KEY is all zero bytes; generate a real key with `openssl rand -hex 32` and replace it before any account enrolls TOTP")
-	}
-	return warnings
-}
 
 func allZeroBytes(b []byte) bool {
 	for _, v := range b {

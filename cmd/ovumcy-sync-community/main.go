@@ -58,10 +58,6 @@ func run(args []string) error {
 
 	switch command {
 	case "serve":
-		// Only at server start: the healthcheck subcommand runs every interval.
-		for _, warning := range cfg.Warnings() {
-			log.Printf("config warning: %s", warning)
-		}
 		return runServe(cfg)
 	case "migrate":
 		return runMigrate(cfg)
