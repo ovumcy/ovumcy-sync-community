@@ -1378,8 +1378,9 @@ paths:
         rotation cannot bring a retired phrase back. A body equal to the
         stored package is still the no-op 200 whatever the expectation, so a
         retry of a re-key that committed succeeds. Without the field (or with
-        null) the replace stays unconditional. The account check runs first,
-        so an unknown id still answers 404.
+        null) the replace stays unconditional. The account check runs before
+        the fingerprint comparison, so an unknown id with a valid body still
+        answers 404, never 409.
       security:
         - managedBridgeAuth: []
       parameters:
