@@ -338,8 +338,8 @@ func (s *AuthService) ChangePassword(
 		return "", err
 	}
 
-	if err := security.ComparePasswordHash(account.PasswordHash, currentPassword); err != nil {
-		return "", ErrInvalidCurrentPassword
+	if err := compareCurrentPassword(account.PasswordHash, currentPassword); err != nil {
+		return "", err
 	}
 
 	if currentPassword == newPassword {
@@ -550,8 +550,8 @@ func (s *AuthService) RegenerateRecoveryCode(
 		return "", err
 	}
 
-	if err := security.ComparePasswordHash(account.PasswordHash, stepUp.CurrentPassword); err != nil {
-		return "", ErrInvalidCurrentPassword
+	if err := compareCurrentPassword(account.PasswordHash, stepUp.CurrentPassword); err != nil {
+		return "", err
 	}
 
 	if account.TOTPEnabled {

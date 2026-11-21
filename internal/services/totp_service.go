@@ -160,8 +160,8 @@ func (s *TOTPService) StartEnrollment(
 		return TOTPEnrollmentStart{}, ErrTOTPAlreadyEnabled
 	}
 
-	if err := security.ComparePasswordHash(account.PasswordHash, stepUp.CurrentPassword); err != nil {
-		return TOTPEnrollmentStart{}, ErrInvalidCurrentPassword
+	if err := compareCurrentPassword(account.PasswordHash, stepUp.CurrentPassword); err != nil {
+		return TOTPEnrollmentStart{}, err
 	}
 
 	secret, err := s.newSecret()
@@ -383,8 +383,8 @@ func (s *TOTPService) Disable(
 		return ErrTOTPNotEnabled
 	}
 
-	if err := security.ComparePasswordHash(account.PasswordHash, currentPassword); err != nil {
-		return ErrInvalidCurrentPassword
+	if err := compareCurrentPassword(account.PasswordHash, currentPassword); err != nil {
+		return err
 	}
 
 	if reservation, err := s.verifyAccountCodeReserved(ctx, account, code); err != nil {

@@ -849,7 +849,8 @@ func mapTOTPError(writer http.ResponseWriter, err error) {
 		writeError(writer, http.StatusConflict, "totp_enrollment_not_started")
 	case errors.Is(err, services.ErrTOTPEnrollmentExpired):
 		writeError(writer, http.StatusConflict, "totp_enrollment_expired")
-	case errors.Is(err, services.ErrInvalidCurrentPassword):
+	case errors.Is(err, services.ErrInvalidCurrentPassword),
+		errors.Is(err, services.ErrCurrentPasswordMissing):
 		writeError(writer, http.StatusUnauthorized, "invalid_current_password")
 	case errors.Is(err, services.ErrTOTPInvalidCode):
 		writeError(writer, http.StatusUnauthorized, "totp_invalid_code")
@@ -966,8 +967,9 @@ func stepUpFailureKey(accountID string) string {
 // allowStepUpAttempt charges the account's step-up bucket before the
 // current-password check; settleStepUpAttempt keeps the charge only on
 // ErrInvalidCurrentPassword — a wrong password, or the rare verification gone
-// stale under a change by the caller's own session — so correct passwords and
-// unrelated refusals never exhaust it.
+// stale under a change by the caller's own session — so correct passwords,
+// an empty one (ErrCurrentPasswordMissing) and unrelated refusals never
+// exhaust it.
 func (s *Server) allowStepUpAttempt(writer http.ResponseWriter, accountID string) (security.Reservation, bool) {
 	return reserveUnderLimiter(s.authLimiter, writer, stepUpFailureKey(accountID))
 }
@@ -1234,7 +1236,9 @@ func (s *Server) handleRemoveDevice(
 
 	// Only an enrolled account's removal checks a password, so only it draws
 	// on the shared step-up bucket; a session-only removal must neither be
-	// blocked by that bucket nor earn refunds from it.
+	// blocked by that bucket nor earn refunds from it. account is the withAuth
+	// snapshot: an enrollment committing after it makes the service refuse
+	// (stepUp.Unmetered) rather than compare a password this bucket never saw.
 	checksPassword := account.TOTPEnabled
 	var stepUpSlot security.Reservation
 	if checksPassword {
@@ -1245,6 +1249,7 @@ func (s *Server) handleRemoveDevice(
 	}
 	stepUp := stepUpFromRequest(request, payload.CurrentPassword)
 	stepUp.TOTPCode = payload.Code
+	stepUp.Unmetered = !checksPassword
 	// device_id comes from the path; the delete is scoped to the authenticated
 	// account in the query, so a caller can only remove its own devices.
 	err := s.sync.RemoveDevice(request.Context(), account.ID, stepUp, request.PathValue("device_id"))

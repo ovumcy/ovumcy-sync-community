@@ -50,10 +50,11 @@ func TestVerifyStepUp(t *testing.T) {
 	if account.ID != registered.AccountID || account.PasswordHash == "" {
 		t.Fatalf("expected the verified account returned, got %#v", account)
 	}
-	for _, wrong := range []string{"wrong password here", ""} {
-		if _, err := verifyStepUp(ctx, store, registered.AccountID, wrong); err != ErrInvalidCurrentPassword {
-			t.Fatalf("expected ErrInvalidCurrentPassword for %q, got %v", wrong, err)
-		}
+	if _, err := verifyStepUp(ctx, store, registered.AccountID, "wrong password here"); err != ErrInvalidCurrentPassword {
+		t.Fatalf("expected ErrInvalidCurrentPassword for a wrong password, got %v", err)
+	}
+	if _, err := verifyStepUp(ctx, store, registered.AccountID, ""); err != ErrCurrentPasswordMissing {
+		t.Fatalf("expected ErrCurrentPasswordMissing for an empty password, got %v", err)
 	}
 	if _, err := verifyStepUp(ctx, store, "missing-account", "any"); err != ErrUnauthorized {
 		t.Fatalf("expected ErrUnauthorized for an unknown account, got %v", err)
