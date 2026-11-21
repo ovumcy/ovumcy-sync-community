@@ -48,6 +48,7 @@ This service itself does not terminate TLS. Production deployments should not ex
 - `DB_PATH=/data/ovumcy-sync-community.sqlite`
 - `SESSION_TTL=720h`
 - `MAX_DEVICES=5`
+- `REGISTRATION_ENABLED=true` whether `POST /auth/register` creates accounts; set it to `false` after creating your account (step 10 of the setup flow below), and every later registration answers `403 registration_disabled` without hashing a password. Sign-in, sync and the managed bridge are unaffected; a value Go's `strconv.ParseBool` rejects (anything but `true`/`false`/`1`/`0` and their `t`/`f` spellings) stops startup
 - `MAX_BLOB_BYTES=16777216` largest ciphertext blob accepted. At most 4 blob uploads or downloads are processed at once, server-wide; any further transfer waits for a free slot, and that wait counts against `HTTP_READ_TIMEOUT` / `HTTP_WRITE_TIMEOUT`. A max-size upload holds about 7× `MAX_BLOB_BYTES` of memory while it is processed (a download about 4×), so plan for roughly 28× `MAX_BLOB_BYTES` of blob work, about 450 MiB at the default, on top of the process baseline; lower `MAX_BLOB_BYTES` on a small host
 - `AUTH_RATE_LIMIT_COUNT=5` requests per window on the credential routes, keyed on the client IP for the public auth surface and on the account for authenticated credential routes (password change, recovery code, TOTP, account deletion, step-up)
 - `AUTH_RATE_LIMIT_WINDOW=15m`
@@ -78,6 +79,7 @@ Adjust limits only when you understand the tradeoff between usability and abuse 
 7. Prepare the device and save the recovery phrase somewhere safe.
 8. Create an account on your own server or sign in to an existing one.
 9. Run encrypted sync from the app.
+10. Set `REGISTRATION_ENABLED=false` and restart the server, so nobody else who finds the URL can create an account on it. Set it back to `true` only for as long as you need to add another account.
 
 ## Optional Caddy Compose Example
 

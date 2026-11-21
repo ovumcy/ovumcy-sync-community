@@ -105,7 +105,12 @@ snapshot.
   ([internal/api/server_test.go](internal/api/server_test.go)) and
   `TestAuthServiceDuplicateRegistrationIsGeneric`
   ([internal/services/auth_service_test.go](internal/services/auth_service_test.go)),
-  whose "generic" means the error carries no detail beyond the refusal.
+  whose "generic" means the error carries no detail beyond the refusal. An
+  operator closes the route with `REGISTRATION_ENABLED=false`: it then answers
+  `403 registration_disabled` to every request, before the body or the rate
+  limiter, so it reveals nothing about any login. Pinned by
+  `TestServerRegisterRefusedWhenRegistrationDisabled`
+  ([internal/api/registration_enabled_test.go](internal/api/registration_enabled_test.go)).
 - **A managed session alone removes the account's devices.** `DELETE
   /sync/devices/{device_id}` asks for a password and code only on a
   TOTP-enrolled account; a managed account has no password, so it cannot
@@ -286,6 +291,7 @@ on the account's next successful login.
 | Map size stays bounded by the current window's keys plus one sweep interval across many unique keys over multiple windows | `TestRateLimiterBoundsMapAcrossManyWindows` in [internal/security/security_test.go](internal/security/security_test.go) |
 | The sweep never evicts an in-window entry, so a throttled key cannot be flushed to reset its counter | `TestRateLimiterSweepPreservesInWindowEntries` in [internal/security/security_test.go](internal/security/security_test.go) |
 | Anonymous auth endpoints are rate-limited per route and client IP; excess requests receive `rate_limited` | `TestServerRateLimitsAuthEndpoints`, `TestServerRegisterRateLimitedPerClientIP` in [internal/api/server_test.go](internal/api/server_test.go) |
+| `REGISTRATION_ENABLED=false` refuses registration with `403 registration_disabled` before the body or the limiter; an unparsable value stops startup | `TestServerRegisterRefusedWhenRegistrationDisabled` in [internal/api/registration_enabled_test.go](internal/api/registration_enabled_test.go); `TestLoadSurfacesEveryValidationAndParseError` in [internal/config/load_test.go](internal/config/load_test.go) |
 | Authenticated mutating routes and the ciphertext reads (`GET /sync/blob`, `GET /sync/recovery-key`) are rate-limited per account: the credential routes at the `AUTH_RATE_LIMIT_COUNT` budget, the `/sync/devices`, `/sync/recovery-key` and `/sync/blob` routes at the separate `SYNC_RATE_LIMIT_COUNT` budget, neither on the 30× read-state budget; device removal uses a stable route key, so the path id cannot open fresh buckets | `TestServerAttachDeviceRateLimitedPerAccount`, `TestServerPutRecoveryKeyRateLimitedPerAccount` in [internal/api/server_test.go](internal/api/server_test.go), `TestSyncReadEndpointsAreRateLimitedPerAccount` in [internal/api/read_rate_limit_test.go](internal/api/read_rate_limit_test.go), `TestRemoveDeviceRateLimitedPerAccount` in [internal/api/device_management_test.go](internal/api/device_management_test.go), `TestSyncRoutesUseTheirOwnLimiter` in [internal/api/sync_rate_limit_test.go](internal/api/sync_rate_limit_test.go) |
 | `X-Forwarded-For` is honored only from a trusted-proxy CIDR | `TestServerAuthRateLimitUsesForwardedClientFromTrustedProxy` in [internal/api/server_test.go](internal/api/server_test.go) |
 | The forwarded client IP is the rightmost address not in `TRUSTED_PROXY_CIDRS`, so a client cannot spoof its rate-limit bucket by prepending `X-Forwarded-For` entries | `TestServerAuthRateLimitResistsForwardedSpoofingBehindTrustedProxy` in [internal/api/server_test.go](internal/api/server_test.go) |

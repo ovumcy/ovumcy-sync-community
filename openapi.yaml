@@ -174,6 +174,11 @@ paths:
         Creates an account and an initial session in one call. The plaintext
         account-level recovery code is returned only in this response — it is
         never retrievable again, only rotated.
+
+        An operator closes registration with `REGISTRATION_ENABLED=false`
+        (recommended once the server's own account exists); the route then
+        answers `403 registration_disabled` before reading the body, without
+        hashing a password or spending a rate-limit slot.
       security: []
       requestBody:
         required: true
@@ -201,6 +206,15 @@ paths:
                   value: { error: invalid_registration_input }
                 registrationFailed:
                   value: { error: registration_failed }
+        "403":
+          description: Registration is closed on this server (`REGISTRATION_ENABLED=false`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                registrationDisabled:
+                  value: { error: registration_disabled }
         "415":
           $ref: "#/components/responses/UnsupportedMediaType"
         "429":

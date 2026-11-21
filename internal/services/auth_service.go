@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"log"
 	"strings"
 	"time"
 
@@ -251,6 +252,18 @@ func (s *AuthService) login(ctx context.Context, login string, password string) 
 	return s.createSessionForVerifiedPassword(ctx, account.ID, verifiedHash)
 }
 
+// innermostError follows the %w chain so a log line can name the cause's type
+// instead of the fmt wrapper every store error carries.
+func innermostError(err error) error {
+	for {
+		next := errors.Unwrap(err)
+		if next == nil {
+			return err
+		}
+		err = next
+	}
+}
+
 func (s *AuthService) Authenticate(ctx context.Context, sessionToken string) (models.Account, error) {
 	if sessionToken == "" {
 		return models.Account{}, ErrUnauthorized
@@ -269,23 +282,20 @@ func (s *AuthService) Authenticate(ctx context.Context, sessionToken string) (mo
 		return models.Account{}, ErrUnauthorized
 	}
 
-	// codecov:ignore:start -- both branches below need "sessions" or this
-	// specific row to fail for THIS write, after FindSessionByTokenHash above
-	// has already succeeded against the same table within this one
-	// synchronous call: the ErrNotFound case is a genuine TOCTOU (a
-	// concurrent revoke between lookup and touch, same class as the
-	// managed_bridge_service.go precedents) and the generic case needs a
-	// fake driver (same same-table-multi-step limitation as the
-	// RowsAffected/COMMIT deviations in internal/db/fault_injection_test.go).
+	// last_seen_at is bookkeeping, not an authorization input: a failed write
+	// (a busy or read-only database) must not turn a valid session into a 500
+	// on every authenticated route. Only the error's type is logged.
 	if err := s.store.TouchSession(ctx, session.ID, now); err != nil {
+		// codecov:ignore:start -- a genuine TOCTOU: a concurrent revoke
+		// between lookup and touch, same class as the
+		// managed_bridge_service.go precedents.
 		if errors.Is(err, db.ErrNotFound) {
-			// The session was revoked between lookup and touch; do not hand
-			// out an account for a session that no longer exists.
+			// Do not hand out an account for a session that no longer exists.
 			return models.Account{}, ErrUnauthorized
 		}
-		return models.Account{}, err
+		// codecov:ignore:end
+		log.Printf("session touch failed: %T", innermostError(err))
 	}
-	// codecov:ignore:end
 
 	account, err := s.store.FindAccountByID(ctx, session.AccountID)
 	if err != nil {

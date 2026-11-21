@@ -42,6 +42,12 @@ type Config struct {
 	AllowedOrigins      []string
 	AllowedHosts        []string
 	TrustedProxyCIDRs   []string
+	// RegistrationEnabled, from REGISTRATION_ENABLED (default true), gates
+	// POST /auth/register. A single-user self-hosted server sets it false once
+	// its own account exists, so a public URL does not hand accounts to anyone
+	// who finds it. A value strconv.ParseBool rejects fails startup rather
+	// than falling back to open registration.
+	RegistrationEnabled bool
 	// FieldEncryptionKey holds the master key used to encrypt privacy-sensitive
 	// account-row fields (currently the TOTP secret); HKDF derives the per-field
 	// 32-byte key from it, so any length >= 32 bytes is accepted. The server
@@ -155,6 +161,11 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	registrationEnabled, err := boolFromEnv("REGISTRATION_ENABLED", true)
+	if err != nil {
+		return Config{}, err
+	}
+
 	fieldKey, err := fieldEncryptionKeyFromEnv("FIELD_ENCRYPTION_KEY")
 	if err != nil {
 		return Config{}, err
@@ -216,12 +227,13 @@ func Load() (Config, error) {
 		AuthRateLimitWindow:        authRateLimitWindow,
 		SyncRateLimitCount:         syncRateLimitCount,
 		SyncRateLimitWindow:        syncRateLimitWindow,
-		ManagedBridgeToken:        os.Getenv("MANAGED_BRIDGE_TOKEN"),
+		ManagedBridgeToken:         os.Getenv("MANAGED_BRIDGE_TOKEN"),
 		MetricsEnabled:             metricsEnabled,
 		MetricsBearerToken:         os.Getenv("METRICS_BEARER_TOKEN"),
 		AllowedOrigins:             csvListFromEnv("ALLOWED_ORIGINS"),
 		AllowedHosts:               csvListFromEnv("ALLOWED_HOSTS"),
 		TrustedProxyCIDRs:          csvListFromEnv("TRUSTED_PROXY_CIDRS"),
+		RegistrationEnabled:        registrationEnabled,
 		FieldEncryptionKey:         fieldKey,
 		TOTPIssuer:                 stringFromEnv("TOTP_ISSUER", "ovumcy-sync-community"),
 		LapsedAccountGracePeriod:   lapsedAccountGracePeriod,

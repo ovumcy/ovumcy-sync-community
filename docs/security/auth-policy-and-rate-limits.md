@@ -151,7 +151,8 @@ cannot outlive the rotation.
 - Login never returns a session token and a TOTP challenge in the same response, and an enrolled account
   fails closed (503 `totp_not_configured`) when the server has no field encryption key.
 - Registration is the one place existence shows: a taken login answers `400 registration_failed`, distinct
-  from `invalid_registration_input`. Registration is limited per IP as the mitigation.
+  from `invalid_registration_input`. Registration is limited per IP as the mitigation, and
+  `REGISTRATION_ENABLED=false` closes it outright (`403 registration_disabled` before the body or the limiter).
 
 Tests backing each claim are indexed in the Test Enforcement Matrix of [SECURITY.md](../../SECURITY.md)
 (Passwords, Password Change, Recovery Codes and Password Reset, Timing Parity, Sessions, Two-Factor

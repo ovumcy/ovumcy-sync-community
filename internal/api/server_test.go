@@ -1691,6 +1691,7 @@ type serverTestOptions struct {
 	metricsBearerToken  string
 	disableManaged      bool
 	enableTOTP          bool
+	disableRegistration bool
 	// store, when non-nil, is used instead of opening a private in-memory
 	// database. The caller owns its lifecycle (open, migrations, close). This
 	// lets a test share one database between two server instances or keep the
@@ -1818,18 +1819,19 @@ func newTestServerWithOptions(t *testing.T, options serverTestOptions) http.Hand
 		managedBridgeService,
 		totpService,
 		ServerOptions{
-			ManagedBridgeToken:  managedBridgeToken,
-			MetricsEnabled:      options.enableMetrics,
-			MetricsBearerToken:  options.metricsBearerToken,
-			AllowedOrigins:      options.allowedOrigins,
-			AllowedHosts:        options.allowedHosts,
-			AuthRateLimitCount:  authRateLimitCount,
-			AuthRateLimitWindow: authRateLimitWindow,
-			SyncRateLimitCount:  options.syncRateLimitCount,
-			SyncRateLimitWindow: options.syncRateLimitWindow,
-			MaxBlobBytes:        maxBlobBytes,
-			ReadinessCheck:      options.readinessCheck,
-			TrustedProxyCIDRs:   options.trustedProxyCIDRs,
+			ManagedBridgeToken:   managedBridgeToken,
+			MetricsEnabled:       options.enableMetrics,
+			MetricsBearerToken:   options.metricsBearerToken,
+			AllowedOrigins:       options.allowedOrigins,
+			AllowedHosts:         options.allowedHosts,
+			AuthRateLimitCount:   authRateLimitCount,
+			AuthRateLimitWindow:  authRateLimitWindow,
+			SyncRateLimitCount:   options.syncRateLimitCount,
+			SyncRateLimitWindow:  options.syncRateLimitWindow,
+			MaxBlobBytes:         maxBlobBytes,
+			ReadinessCheck:       options.readinessCheck,
+			TrustedProxyCIDRs:    options.trustedProxyCIDRs,
+			RegistrationDisabled: options.disableRegistration,
 		},
 	)
 }
