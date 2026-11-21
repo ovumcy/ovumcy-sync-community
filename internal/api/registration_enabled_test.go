@@ -28,7 +28,7 @@ func TestServerRegisterRefusedWhenRegistrationDisabled(t *testing.T) {
 	performJSONRequest(t, open, http.MethodPost, "/auth/register", credentials, "", http.StatusCreated)
 
 	// Past the one-request auth budget: a charged limiter would answer 429.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		response := performJSONRequest(t, closed, http.MethodPost, "/auth/register", map[string]string{
 			"login":    "intruder@example.com",
 			"password": "another secure password!",
