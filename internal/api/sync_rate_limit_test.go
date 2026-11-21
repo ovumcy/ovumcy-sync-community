@@ -107,6 +107,7 @@ func TestEveryRouteIsOnItsIntendedLimiter(t *testing.T) {
 		{http.MethodPut, "/sync/recovery-key"},
 		{http.MethodGet, "/sync/blob"},
 		{http.MethodPut, "/sync/blob"},
+		{http.MethodPut, "/sync/rekey"},
 	}
 	for _, route := range sync {
 		for range 3 {

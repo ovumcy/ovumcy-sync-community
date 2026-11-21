@@ -2212,6 +2212,27 @@ func (s *Store) UpsertEncryptedBlobExpecting(
 	if err := requireLiveSession(ctx, tx, blob.AccountID, sessionTokenHash); err != nil {
 		return models.EncryptedBlob{}, err
 	}
+	if err := writeEncryptedBlob(ctx, tx, generationCeiling, blob, expectedGeneration); err != nil {
+		return models.EncryptedBlob{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return models.EncryptedBlob{}, fmt.Errorf("commit upsert blob: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteManagedAccount's COMMIT branch in fault_injection_test.go.
+	}
+	return blob, nil
+}
+
+// writeEncryptedBlob is the blob write of UpsertEncryptedBlobExpecting inside
+// tx. A zero expectedGeneration (only the re-key route sends one) means "no
+// row stored yet": it inserts and never replaces. Zero rows written is
+// ErrStaleGeneration.
+func writeEncryptedBlob(
+	ctx context.Context,
+	tx *sql.Tx,
+	generationCeiling int64,
+	blob models.EncryptedBlob,
+	expectedGeneration *int64,
+) error {
 	updatedAt := blob.UpdatedAt.UTC().Format(time.RFC3339Nano)
 	query := upsertEncryptedBlobSQL
 	args := []any{
@@ -2225,7 +2246,11 @@ func (s *Store) UpsertEncryptedBlobExpecting(
 		updatedAt,
 		generationCeiling,
 	}
-	if expectedGeneration != nil {
+	switch {
+	case expectedGeneration != nil && *expectedGeneration == 0:
+		query = insertEncryptedBlobIfAbsentSQL
+		args = args[:8]
+	case expectedGeneration != nil:
 		query = replaceEncryptedBlobAtGenerationSQL
 		args = []any{
 			blob.SchemaVersion,
@@ -2241,22 +2266,24 @@ func (s *Store) UpsertEncryptedBlobExpecting(
 	}
 	result, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
-		return models.EncryptedBlob{}, fmt.Errorf("upsert blob: %w", err)
+		return fmt.Errorf("upsert blob: %w", err)
 	}
 
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return models.EncryptedBlob{}, fmt.Errorf("upsert blob rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); not reachable via the table-drop technique (ExecContext itself fails first, before RowsAffected is ever called) — see TestBlobAndRecoveryUpsertsReturnErrorWhenTablesAreDropped in fault_injection_test.go. Needs a fake driver.
+		return fmt.Errorf("upsert blob rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); not reachable via the table-drop technique (ExecContext itself fails first, before RowsAffected is ever called) — see TestBlobAndRecoveryUpsertsReturnErrorWhenTablesAreDropped in fault_injection_test.go. Needs a fake driver.
 	}
 	if affected == 0 {
-		return models.EncryptedBlob{}, ErrStaleGeneration
+		return ErrStaleGeneration
 	}
-
-	if err := tx.Commit(); err != nil {
-		return models.EncryptedBlob{}, fmt.Errorf("commit upsert blob: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteManagedAccount's COMMIT branch in fault_injection_test.go.
-	}
-	return blob, nil
+	return nil
 }
+
+const insertEncryptedBlobIfAbsentSQL = `
+INSERT INTO encrypted_blobs (account_id, schema_version, generation, checksum_sha256, ciphertext, ciphertext_size, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(account_id) DO NOTHING
+`
 
 const upsertEncryptedBlobSQL = `
 INSERT INTO encrypted_blobs (account_id, schema_version, generation, checksum_sha256, ciphertext, ciphertext_size, created_at, updated_at)

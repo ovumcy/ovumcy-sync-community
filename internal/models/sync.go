@@ -77,4 +77,7 @@ type CapabilityDocument struct {
 	AdvancedInsights  bool   `json:"advanced_cloud_insights"`
 	MaxDevices        int    `json:"max_devices"`
 	MaxBlobBytes      int64  `json:"max_blob_bytes"`
+	// AtomicRekey reports PUT /sync/rekey; clients fall back to the
+	// recovery-key PUT then the blob PUT when it is absent.
+	AtomicRekey bool `json:"atomic_rekey"`
 }

@@ -1870,6 +1870,76 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /sync/rekey:
+    put:
+      tags: [sync]
+      operationId: rekeySync
+      summary: Store a recovery-key package and the blob sealed under it, atomically
+      description: |
+        Writes the wrapped recovery-key package and the ciphertext blob in one
+        transaction: both land or neither does, so a refused blob write never
+        leaves a package the stored blob is not sealed under. Used for first
+        setup and for a re-key; servers that offer it report
+        `atomic_rekey: true` in `GET /sync/capabilities`, and clients fall
+        back to `PUT /sync/recovery-key` then `PUT /sync/blob` without it.
+
+        The package follows `PUT /sync/recovery-key`: one equal to the stored
+        package (after normalization) needs no step-up and draws on no
+        step-up bucket; a differing one needs `current_password` (checked
+        before either body is validated) and, on a TOTP-enrolled account, a
+        current `code` (checked after both bodies are validated). A managed
+        account may store a first package only. The blob follows
+        `PUT /sync/blob`, except that `expected_generation` is required:
+        `0` means no blob is stored yet, a positive value must equal the
+        stored generation.
+      security:
+        - sessionBearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RekeyRequest"
+      responses:
+        "200":
+          description: Package and blob stored.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RekeyResponse"
+        "400":
+          description: |
+            `invalid_recovery_package`: the package fails `PUT /sync/recovery-key`'s validation. `invalid_blob`: the blob fails `PUT /sync/blob`'s validation, or `expected_generation` is absent or negative. `invalid_ciphertext`: ciphertext_base64 is not valid base64. `invalid_json`: the body is not acceptable JSON or is over base64(`MAX_BLOB_BYTES`) plus 16 KiB.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: |
+            `invalid_current_password` (wrong or missing password for a differing package, or a password/TOTP change during the check), `totp_invalid_code` / `totp_replayed` (enrolled account), or `unauthorized` (no live session). Nothing is written.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: "`managed_recovery_key_overwrite`: a managed account's session tried to replace its stored package. `sync_disabled`: see `SyncDisabled`."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: "`stale_generation`: `expected_generation` does not match the stored blob (or `0` while one is stored), or the generation does not advance. `recovery_key_conflict`: the package sent as unchanged was replaced before the write. Nothing is written."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
 components:
   securitySchemes:
     sessionBearerAuth:
@@ -2307,6 +2377,9 @@ components:
         max_blob_bytes:
           type: integer
           format: int64
+        atomic_rekey:
+          type: boolean
+          description: True when `PUT /sync/rekey` is offered. Absent on older servers; clients then use `PUT /sync/recovery-key` followed by `PUT /sync/blob`.
       required:
         - mode
         - sync_enabled
@@ -2382,6 +2455,55 @@ components:
           format: int64
           description: Optional. The generation the client last read or wrote. When present it must be positive, and the write commits only while the stored generation equals it; otherwise 409 `stale_generation` and nothing is written. A server older than this field rejects the body as `400 invalid_json` (unknown field).
       required: [schema_version, generation, checksum_sha256, ciphertext_base64]
+      additionalProperties: false
+
+    RekeyBlob:
+      type: object
+      description: The blob part of `RekeyRequest`; fields and validation as in `BlobPutRequest`, without `expected_generation`.
+      properties:
+        schema_version:
+          type: integer
+        generation:
+          type: integer
+          format: int64
+        checksum_sha256:
+          type: string
+          pattern: "^[a-f0-9]{64}$"
+        ciphertext_base64:
+          type: string
+          format: byte
+      required: [schema_version, generation, checksum_sha256, ciphertext_base64]
+      additionalProperties: false
+
+    RekeyRequest:
+      type: object
+      properties:
+        recovery_key:
+          $ref: "#/components/schemas/ManagedRecoveryKeyPackageRequest"
+        blob:
+          $ref: "#/components/schemas/RekeyBlob"
+        expected_generation:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Required. `0` = no blob is stored yet; a positive value must equal the stored generation.
+        current_password:
+          type: string
+          description: Required when the package differs from the stored one on an account with a password.
+        code:
+          type: string
+          description: Current TOTP code; required when the package differs on a TOTP-enrolled account.
+      required: [recovery_key, blob, expected_generation]
+      additionalProperties: false
+
+    RekeyResponse:
+      type: object
+      properties:
+        recovery_key:
+          $ref: "#/components/schemas/RecoveryKeyPackageResponse"
+        blob:
+          $ref: "#/components/schemas/BlobResponse"
+      required: [recovery_key, blob]
       additionalProperties: false
 
     BlobResponse:
