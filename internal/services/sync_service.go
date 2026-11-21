@@ -457,8 +457,10 @@ func validateRecoveryKeyPackage(recoveryKeyPackage models.RecoveryKeyPackage) er
 	if len(wrapNonceHex) != 48 || !lowercaseHexPattern.MatchString(wrapNonceHex) {
 		return ErrInvalidRecoveryPackage
 	}
+	// 32-byte master key + 16-byte Poly1305 tag. Rows stored under the older
+	// at-least-64 rule still read and re-put: the unchanged check runs first.
 	wrappedMasterKeyHex := recoveryKeyPackage.WrappedMasterKeyHex
-	if len(wrappedMasterKeyHex) < 64 || len(wrappedMasterKeyHex)%2 != 0 || !lowercaseHexPattern.MatchString(wrappedMasterKeyHex) {
+	if len(wrappedMasterKeyHex) != 96 || !lowercaseHexPattern.MatchString(wrappedMasterKeyHex) {
 		return ErrInvalidRecoveryPackage
 	}
 	phraseFingerprintHex := recoveryKeyPackage.PhraseFingerprintHex
