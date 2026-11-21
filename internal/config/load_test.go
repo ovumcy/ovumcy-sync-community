@@ -29,6 +29,7 @@ var loadEnvVars = []string{
 	"FIELD_ENCRYPTION_KEY",
 	"TOTP_ISSUER",
 	"LAPSED_ACCOUNT_GRACE_PERIOD",
+	"REGISTRATION_ENABLED",
 }
 
 // bridgeTokenFixture is exactly MinManagedBridgeTokenBytes long.
@@ -127,6 +128,9 @@ func TestLoadReturnsDefaultsWhenEnvironmentIsEmpty(t *testing.T) {
 	if cfg.LapsedAccountGracePeriod != want.LapsedAccountGracePeriod {
 		t.Errorf("LapsedAccountGracePeriod = %s, want %s", cfg.LapsedAccountGracePeriod, want.LapsedAccountGracePeriod)
 	}
+	if !cfg.RegistrationEnabled {
+		t.Error("RegistrationEnabled = false, want true by default")
+	}
 }
 
 func TestLoadAppliesEveryEnvOverride(t *testing.T) {
@@ -154,6 +158,7 @@ func TestLoadAppliesEveryEnvOverride(t *testing.T) {
 	t.Setenv("FIELD_ENCRYPTION_KEY", fakeHexKey)
 	t.Setenv("TOTP_ISSUER", "custom-issuer")
 	t.Setenv("LAPSED_ACCOUNT_GRACE_PERIOD", "720h")
+	t.Setenv("REGISTRATION_ENABLED", "false")
 
 	cfg, err := Load()
 	if err != nil {
@@ -208,6 +213,9 @@ func TestLoadAppliesEveryEnvOverride(t *testing.T) {
 	if cfg.LapsedAccountGracePeriod != 720*time.Hour {
 		t.Errorf("LapsedAccountGracePeriod = %s, want %s", cfg.LapsedAccountGracePeriod, 720*time.Hour)
 	}
+	if cfg.RegistrationEnabled {
+		t.Error("RegistrationEnabled = true, want false")
+	}
 }
 
 // TestLoadSurfacesEveryValidationAndParseError exercises every error return
@@ -226,6 +234,13 @@ func TestLoadSurfacesEveryValidationAndParseError(t *testing.T) {
 			envName: "SESSION_TTL",
 			envValu: "not-a-duration",
 			wantErr: "SESSION_TTL",
+		},
+		{
+			// A typo must stop startup, never fall back to open registration.
+			name:    "malformed registration enabled bool",
+			envName: "REGISTRATION_ENABLED",
+			envValu: "flase",
+			wantErr: "REGISTRATION_ENABLED",
 		},
 		{
 			name:    "malformed max devices int",

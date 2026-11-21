@@ -39,6 +39,7 @@ type Server struct {
 	sessionReadLimiter  *security.RateLimiter
 	allowedOrigins      map[string]struct{}
 	allowedHosts        map[string]struct{}
+	registrationOff     bool
 	trustedProxyCIDRs   []netip.Prefix
 	maxBlobRequestBytes int64
 	blobSlots           chan struct{}
@@ -61,6 +62,9 @@ type ServerOptions struct {
 	MaxBlobBytes        int
 	ReadinessCheck      func(context.Context) error
 	TrustedProxyCIDRs   []string
+	// RegistrationDisabled is the inverse of REGISTRATION_ENABLED so the zero
+	// value keeps registration open, as the config default does.
+	RegistrationDisabled bool
 }
 
 func NewServer(
@@ -105,6 +109,7 @@ func NewServer(
 		sessionReadLimiter:  security.NewRateLimiter(sessionReadRateLimitCount(syncCount), syncWindow),
 		allowedOrigins:      originSet,
 		allowedHosts:        parseAllowedHosts(options.AllowedHosts),
+		registrationOff:     options.RegistrationDisabled,
 		trustedProxyCIDRs:   parseTrustedProxyCIDRs(options.TrustedProxyCIDRs),
 		maxBlobRequestBytes: encodedBlobRequestLimit(options.MaxBlobBytes),
 		blobSlots:           make(chan struct{}, maxConcurrentBlobTransfers),
@@ -473,6 +478,12 @@ func (s *Server) handleMetrics(writer http.ResponseWriter, request *http.Request
 }
 
 func (s *Server) handleRegister(writer http.ResponseWriter, request *http.Request) {
+	// Refused before the limiter and the body: a closed server spends no
+	// bcrypt and no rate-limit slot on the request.
+	if s.registrationOff {
+		writeError(writer, http.StatusForbidden, "registration_disabled")
+		return
+	}
 	if !s.allowAuthRequest(writer, request) {
 		return
 	}
