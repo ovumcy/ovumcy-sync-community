@@ -55,7 +55,8 @@ const blobGenerationSkew = 15 * time.Minute
 // moves with the clock on purpose.
 //
 // A CONSTANT ceiling cannot work here, however high it is placed:
-// UpsertEncryptedBlob's CAS accepts only a strictly greater generation, so
+// UpsertEncryptedBlob's CAS accepts only a strictly greater generation
+// (bar a stored row already above this bound), so
 // whatever the highest accepted value is, one write at that value leaves the
 // blob unreplaceable forever — every later write is either rejected by the
 // ceiling or refused as stale. That is the owner's entire backup bricked by a
