@@ -950,9 +950,10 @@ func stepUpFailureKey(accountID string) string {
 }
 
 // allowStepUpAttempt charges the account's step-up bucket before the
-// current-password check; settleStepUpAttempt keeps the charge only when the
-// password was wrong, so correct passwords and unrelated refusals never
-// exhaust it.
+// current-password check; settleStepUpAttempt keeps the charge only on
+// ErrInvalidCurrentPassword — a wrong password, or the rare verification gone
+// stale under a change by the caller's own session — so correct passwords and
+// unrelated refusals never exhaust it.
 func (s *Server) allowStepUpAttempt(writer http.ResponseWriter, accountID string) (security.Reservation, bool) {
 	return reserveUnderLimiter(s.authLimiter, writer, stepUpFailureKey(accountID))
 }
