@@ -140,8 +140,8 @@ func TestCompleteEnrollmentGuessesAreCappedAndBurnThePendingSecret(t *testing.T)
 	}
 	paced := now.Add(time.Duration(maxPendingEnrollmentAttempts/maxTOTPAttempts) * (TOTPAttemptWindow + time.Minute))
 	totp.now = func() time.Time { return paced }
-	if _, err := totp.CompleteEnrollment(ctx, accountID, sessionHash, security.GenerateTOTPCode(secret, paced.Unix()/security.TOTPStepSeconds)); !errors.Is(err, ErrTOTPEnrollmentExpired) || errors.Is(err, ErrTOTPLocked) {
-		t.Fatalf("expected the lifetime cap to expire the pending secret even for a correct code after a pause, got %v", err)
+	if _, err := totp.CompleteEnrollment(ctx, accountID, sessionHash, security.GenerateTOTPCode(secret, paced.Unix()/security.TOTPStepSeconds)); !errors.Is(err, ErrTOTPEnrollmentDiscarded) || errors.Is(err, ErrTOTPLocked) {
+		t.Fatalf("expected the lifetime cap to discard the pending secret even for a correct code after a pause, got %v", err)
 	}
 	totp.now = func() time.Time { return now }
 
@@ -190,7 +190,7 @@ func TestPendingEnrollmentLifetimeCapSurvivesAClockStepBack(t *testing.T) {
 
 	stepBack := now.Add(-time.Hour)
 	totp.now = func() time.Time { return stepBack }
-	if _, err := totp.CompleteEnrollment(ctx, accountID, sessionHash, security.GenerateTOTPCode(secret, stepBack.Unix()/security.TOTPStepSeconds)); !errors.Is(err, ErrTOTPEnrollmentExpired) {
+	if _, err := totp.CompleteEnrollment(ctx, accountID, sessionHash, security.GenerateTOTPCode(secret, stepBack.Unix()/security.TOTPStepSeconds)); !errors.Is(err, ErrTOTPEnrollmentDiscarded) {
 		t.Fatalf("expected the attempt past the lifetime cap to burn the secret after a clock step back, got %v", err)
 	}
 	account, err := totp.store.FindAccountByID(ctx, accountID)

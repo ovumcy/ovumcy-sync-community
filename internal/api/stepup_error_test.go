@@ -27,7 +27,7 @@ func TestMapTOTPErrorStepUpRefusals(t *testing.T) {
 		{services.ErrTOTPNotConfigured, http.StatusServiceUnavailable, "totp_not_configured"},
 		{services.ErrTOTPNotEnabled, http.StatusConflict, "totp_not_enabled"},
 		{services.ErrTOTPEnrollmentNotStarted, http.StatusConflict, "totp_enrollment_not_started"},
-		{services.ErrTOTPEnrollmentExpired, http.StatusConflict, "totp_enrollment_expired"},
+		{services.ErrTOTPEnrollmentDiscarded, http.StatusConflict, "totp_enrollment_discarded"},
 		{errors.New("boom"), http.StatusInternalServerError, "internal_error"},
 	} {
 		recorder := httptest.NewRecorder()
@@ -45,11 +45,11 @@ func TestMapTOTPErrorStepUpRefusals(t *testing.T) {
 
 // Only a spent rolling budget answers 429 with Retry-After; a pending secret
 // discarded at its lifetime cap is an account state no wait changes.
-func TestMapTOTPErrorSeparatesExpiredEnrollmentFromRateLimit(t *testing.T) {
-	expired := httptest.NewRecorder()
-	mapTOTPError(expired, services.ErrTOTPEnrollmentExpired)
-	if expired.Code != http.StatusConflict || expired.Header().Get("Retry-After") != "" {
-		t.Fatalf("expired enrollment: got %d with Retry-After %q", expired.Code, expired.Header().Get("Retry-After"))
+func TestMapTOTPErrorSeparatesDiscardedEnrollmentFromRateLimit(t *testing.T) {
+	discarded := httptest.NewRecorder()
+	mapTOTPError(discarded, services.ErrTOTPEnrollmentDiscarded)
+	if discarded.Code != http.StatusConflict || discarded.Header().Get("Retry-After") != "" {
+		t.Fatalf("discarded enrollment: got %d with Retry-After %q", discarded.Code, discarded.Header().Get("Retry-After"))
 	}
 
 	locked := httptest.NewRecorder()
