@@ -283,7 +283,8 @@ func (s *SyncService) PutBlob(
 	if input.ExpectedGeneration != nil && *input.ExpectedGeneration <= 0 {
 		return models.EncryptedBlob{}, ErrInvalidBlob
 	}
-	if input.Generation > maxAcceptableBlobGeneration(s.now()) {
+	ceiling := maxAcceptableBlobGeneration(s.now())
+	if input.Generation > ceiling {
 		return models.EncryptedBlob{}, ErrInvalidBlob
 	}
 	if !checksumPattern.MatchString(strings.ToLower(strings.TrimSpace(input.ChecksumSHA256))) {
@@ -310,8 +311,9 @@ func (s *SyncService) PutBlob(
 	// Atomic CAS in the repository: the WHERE excluded.generation >
 	// encrypted_blobs.generation guard rejects concurrent writers that
 	// passed the same baseline, so we don't read-then-write here; an
-	// expected generation joins the same statement's predicate.
-	stored, err := s.store.UpsertEncryptedBlobExpecting(ctx, sessionTokenHash, blob, input.ExpectedGeneration)
+	// expected generation joins the same statement's predicate. A stored
+	// generation above ceiling (pre-upgrade) is replaced by any valid write.
+	stored, err := s.store.UpsertEncryptedBlobExpecting(ctx, sessionTokenHash, ceiling, blob, input.ExpectedGeneration)
 	if err != nil {
 		switch {
 		case errors.Is(err, db.ErrStaleGeneration):

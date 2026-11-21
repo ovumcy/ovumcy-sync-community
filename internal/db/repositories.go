@@ -2103,27 +2103,37 @@ func (s *Store) GetEncryptedBlob(ctx context.Context, accountID string) (models.
 // window between read and write reopens the race the CAS prevents.
 //
 // Returns ErrStaleGeneration when an existing row already has
-// generation >= blob.Generation (RowsAffected == 0 on the conflict-update
-// branch); the caller should map this to its public stale-generation error.
-// The caller's session must still exist (requireLiveSession;
-// ErrSessionRevoked, or ErrNotFound when the account is gone).
+// generation >= blob.Generation and <= generationCeiling (RowsAffected == 0
+// on the conflict-update branch); the caller should map this to its public
+// stale-generation error. The caller's session must still exist
+// (requireLiveSession; ErrSessionRevoked, or ErrNotFound when the account is
+// gone).
+//
+// A stored generation above generationCeiling (the caller's current write
+// bound) is replaceable by any write: such a row predates the bound (v0.3.0
+// accepted up to MaxInt64-2^32), and strict-greater alone would leave it
+// unwritable until the clock passed it. The row is only ever replaced whole,
+// never rewritten in place: clients seal the generation into the
+// ciphertext's AAD, so editing it would make the stored blob undecryptable.
 func (s *Store) UpsertEncryptedBlob(
 	ctx context.Context,
 	sessionTokenHash string,
+	generationCeiling int64,
 	blob models.EncryptedBlob,
 ) (models.EncryptedBlob, error) {
-	return s.UpsertEncryptedBlobExpecting(ctx, sessionTokenHash, blob, nil)
+	return s.UpsertEncryptedBlobExpecting(ctx, sessionTokenHash, generationCeiling, blob, nil)
 }
 
 // UpsertEncryptedBlobExpecting is UpsertEncryptedBlob with an optional
 // precondition: a non-nil expectedGeneration lets the write commit only when
 // a stored row's generation equals it and the incoming generation still
-// exceeds it, checked by the same UPDATE statement that writes. No stored
-// row, a different stored generation, or no advance all return
-// ErrStaleGeneration and change nothing.
+// exceeds it (or the stored one is above generationCeiling), checked by the
+// same UPDATE statement that writes. No stored row, a different stored
+// generation, or no advance all return ErrStaleGeneration and change nothing.
 func (s *Store) UpsertEncryptedBlobExpecting(
 	ctx context.Context,
 	sessionTokenHash string,
+	generationCeiling int64,
 	blob models.EncryptedBlob,
 	expectedGeneration *int64,
 ) (models.EncryptedBlob, error) {
@@ -2149,6 +2159,7 @@ func (s *Store) UpsertEncryptedBlobExpecting(
 		blob.CiphertextSize,
 		updatedAt,
 		updatedAt,
+		generationCeiling,
 	}
 	if expectedGeneration != nil {
 		query = replaceEncryptedBlobAtGenerationSQL
@@ -2161,6 +2172,7 @@ func (s *Store) UpsertEncryptedBlobExpecting(
 			updatedAt,
 			blob.AccountID,
 			*expectedGeneration,
+			generationCeiling,
 		}
 	}
 	result, err := tx.ExecContext(ctx, query, args...)
@@ -2193,10 +2205,13 @@ ON CONFLICT(account_id) DO UPDATE SET
   ciphertext_size = excluded.ciphertext_size,
   updated_at = excluded.updated_at
 WHERE excluded.generation > encrypted_blobs.generation
+   OR encrypted_blobs.generation > ?
 `
 
 // replaceEncryptedBlobAtGenerationSQL's "generation < ?2" (the new
-// generation) keeps the strictly-greater rule alongside the expected match.
+// generation) keeps the strictly-greater rule alongside the expected match;
+// "generation > ?9" (the ceiling) waives only the advance for a stored row
+// above the bound, never the expected match.
 const replaceEncryptedBlobAtGenerationSQL = `
 UPDATE encrypted_blobs SET
   schema_version = ?1,
@@ -2205,7 +2220,7 @@ UPDATE encrypted_blobs SET
   ciphertext = ?4,
   ciphertext_size = ?5,
   updated_at = ?6
-WHERE account_id = ?7 AND generation = ?8 AND generation < ?2
+WHERE account_id = ?7 AND generation = ?8 AND (generation < ?2 OR generation > ?9)
 `
 
 func (s *Store) GetRecoveryKeyPackage(

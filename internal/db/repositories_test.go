@@ -208,7 +208,7 @@ func assertAccountEraseErasesEveryChildRow(t *testing.T, tc accountErase) {
 			t.Fatalf("create device for %s: %v", accountID, err)
 		}
 
-		if _, err := store.UpsertEncryptedBlob(ctx, accountID+"-token-hash", models.EncryptedBlob{
+		if _, err := store.UpsertEncryptedBlob(ctx, accountID+"-token-hash", noGenerationCeiling, models.EncryptedBlob{
 			AccountID:      accountID,
 			SchemaVersion:  1,
 			Generation:     1,

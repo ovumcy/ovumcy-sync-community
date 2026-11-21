@@ -47,7 +47,7 @@ func TestMigrationsBootstrapAndRepositories(t *testing.T) {
 		t.Fatalf("upsert device: %v", err)
 	}
 
-	if _, err := store.UpsertEncryptedBlob(context.Background(), "token-hash", models.EncryptedBlob{
+	if _, err := store.UpsertEncryptedBlob(context.Background(), "token-hash", noGenerationCeiling, models.EncryptedBlob{
 		AccountID:      account.ID,
 		SchemaVersion:  1,
 		Generation:     1,

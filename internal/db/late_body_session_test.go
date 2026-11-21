@@ -36,7 +36,7 @@ func lateBodyWrites(store *Store, accountID string) map[string]func(ctx context.
 			return store.DeleteDevice(ctx, accountID, tokenHash, "device-a")
 		},
 		"blob upsert": func(ctx context.Context, tokenHash string) error {
-			_, err := store.UpsertEncryptedBlob(ctx, tokenHash, lateBodyBlob(accountID))
+			_, err := store.UpsertEncryptedBlob(ctx, tokenHash, noGenerationCeiling, lateBodyBlob(accountID))
 			return err
 		},
 	}
@@ -130,7 +130,7 @@ func TestLateBodyWritesSurfaceStoreFailures(t *testing.T) {
 		if err := store.StorePendingTOTPSecret(ctx, "account", "hash", "token", "secret"); err == nil || !strings.Contains(err.Error(), "begin store pending totp secret") {
 			t.Fatalf("expected the begin error, got %v", err)
 		}
-		if _, err := store.UpsertEncryptedBlob(ctx, "token", lateBodyBlob("account")); err == nil || !strings.Contains(err.Error(), "begin upsert blob") {
+		if _, err := store.UpsertEncryptedBlob(ctx, "token", noGenerationCeiling, lateBodyBlob("account")); err == nil || !strings.Contains(err.Error(), "begin upsert blob") {
 			t.Fatalf("expected the begin error, got %v", err)
 		}
 	})

@@ -808,7 +808,7 @@ func TestUpsertEncryptedBlobRejectsStaleGeneration(t *testing.T) {
 	seedBindingSession(t, store, target.ID, "target-session")
 	now := time.Now().UTC()
 
-	if _, err := store.UpsertEncryptedBlob(ctx, "target-session", models.EncryptedBlob{
+	if _, err := store.UpsertEncryptedBlob(ctx, "target-session", noGenerationCeiling, models.EncryptedBlob{
 		AccountID:      target.ID,
 		SchemaVersion:  1,
 		Generation:     5,
@@ -821,7 +821,7 @@ func TestUpsertEncryptedBlobRejectsStaleGeneration(t *testing.T) {
 	}
 
 	// Equal generation is rejected (not strictly greater).
-	if _, err := store.UpsertEncryptedBlob(ctx, "target-session", models.EncryptedBlob{
+	if _, err := store.UpsertEncryptedBlob(ctx, "target-session", noGenerationCeiling, models.EncryptedBlob{
 		AccountID:      target.ID,
 		SchemaVersion:  1,
 		Generation:     5,
@@ -834,7 +834,7 @@ func TestUpsertEncryptedBlobRejectsStaleGeneration(t *testing.T) {
 	}
 
 	// Lower generation (a concurrent loser) is rejected too.
-	if _, err := store.UpsertEncryptedBlob(ctx, "target-session", models.EncryptedBlob{
+	if _, err := store.UpsertEncryptedBlob(ctx, "target-session", noGenerationCeiling, models.EncryptedBlob{
 		AccountID:      target.ID,
 		SchemaVersion:  1,
 		Generation:     3,
@@ -857,7 +857,7 @@ func TestUpsertEncryptedBlobRejectsStaleGeneration(t *testing.T) {
 	}
 
 	// A strictly greater generation succeeds and replaces the row.
-	if _, err := store.UpsertEncryptedBlob(ctx, "target-session", models.EncryptedBlob{
+	if _, err := store.UpsertEncryptedBlob(ctx, "target-session", noGenerationCeiling, models.EncryptedBlob{
 		AccountID:      target.ID,
 		SchemaVersion:  1,
 		Generation:     6,
@@ -892,7 +892,7 @@ func TestBlobAndRecoveryUpsertsReturnErrorWhenTablesAreDropped(t *testing.T) {
 
 	dropTable(t, dbPath, "encrypted_blobs")
 
-	if _, err := store.UpsertEncryptedBlob(ctx, "target-session", models.EncryptedBlob{
+	if _, err := store.UpsertEncryptedBlob(ctx, "target-session", noGenerationCeiling, models.EncryptedBlob{
 		AccountID:      target.ID,
 		SchemaVersion:  1,
 		Generation:     1,

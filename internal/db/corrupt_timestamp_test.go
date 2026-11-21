@@ -71,7 +71,7 @@ func newCorruptTimestampFixture(t *testing.T) corruptTimestampFixture {
 	}, 5); err != nil {
 		t.Fatalf("upsert device: %v", err)
 	}
-	if _, err := store.UpsertEncryptedBlob(ctx, "hash-corrupt-session", models.EncryptedBlob{
+	if _, err := store.UpsertEncryptedBlob(ctx, "hash-corrupt-session", noGenerationCeiling, models.EncryptedBlob{
 		AccountID:      "corrupt-acct",
 		SchemaVersion:  1,
 		Generation:     1,

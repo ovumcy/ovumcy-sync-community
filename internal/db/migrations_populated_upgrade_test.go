@@ -161,7 +161,7 @@ func TestMigratingAPopulatedFirstReleaseDatabaseKeepsEveryRow(t *testing.T) {
 	}
 
 	next := []byte("after-upgrade")
-	if _, err := store.UpsertEncryptedBlob(ctx, "v1-token-hash", models.EncryptedBlob{
+	if _, err := store.UpsertEncryptedBlob(ctx, "v1-token-hash", noGenerationCeiling, models.EncryptedBlob{
 		AccountID:      "v1-account",
 		SchemaVersion:  1,
 		Generation:     4,
