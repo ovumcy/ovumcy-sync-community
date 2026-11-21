@@ -1068,7 +1068,7 @@ func (s *Server) handleManagedAccountRecoveryKey(writer http.ResponseWriter, req
 		WrapNonceHex:         payload.WrapNonceHex,
 		WrappedMasterKeyHex:  payload.WrappedMasterKeyHex,
 		PhraseFingerprintHex: payload.PhraseFingerprintHex,
-	})
+	}, payload.ExpectedPhraseFingerprintHex)
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrInvalidManagedAccount):
@@ -1077,6 +1077,8 @@ func (s *Server) handleManagedAccountRecoveryKey(writer http.ResponseWriter, req
 			writeError(writer, http.StatusBadRequest, "invalid_recovery_package")
 		case errors.Is(err, services.ErrManagedAccountNotFound):
 			writeError(writer, http.StatusNotFound, "managed_account_not_found")
+		case errors.Is(err, services.ErrRecoveryKeyConflict):
+			writeError(writer, http.StatusConflict, "recovery_key_conflict")
 		default:
 			writeError(writer, http.StatusInternalServerError, "internal_error")
 		}
@@ -1957,14 +1959,16 @@ type blobResponse struct {
 
 // managedRecoveryKeyPackageRequest is the bridge re-key body: the package
 // fields of recoveryKeyPackageRequest without the step-up ones, which the
-// bridge does not take (an unknown field is refused).
+// bridge does not take (an unknown field is refused), plus the optional
+// expected fingerprint of the package being replaced.
 type managedRecoveryKeyPackageRequest struct {
-	Algorithm            string `json:"algorithm"`
-	KDF                  string `json:"kdf"`
-	MnemonicWordCount    int    `json:"mnemonic_word_count"`
-	WrapNonceHex         string `json:"wrap_nonce_hex"`
-	WrappedMasterKeyHex  string `json:"wrapped_master_key_hex"`
-	PhraseFingerprintHex string `json:"phrase_fingerprint_hex"`
+	Algorithm                    string  `json:"algorithm"`
+	KDF                          string  `json:"kdf"`
+	MnemonicWordCount            int     `json:"mnemonic_word_count"`
+	WrapNonceHex                 string  `json:"wrap_nonce_hex"`
+	WrappedMasterKeyHex          string  `json:"wrapped_master_key_hex"`
+	PhraseFingerprintHex         string  `json:"phrase_fingerprint_hex"`
+	ExpectedPhraseFingerprintHex *string `json:"expected_phrase_fingerprint_hex"`
 }
 
 type recoveryKeyPackageRequest struct {

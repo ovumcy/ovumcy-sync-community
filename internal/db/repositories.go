@@ -24,6 +24,12 @@ var ErrConflict = errors.New("conflict")
 // (TOCTOU).
 var ErrStaleGeneration = errors.New("stale_generation")
 
+// ErrRecoveryKeyConflict is returned by ReplaceManagedRecoveryKeyPackageExpecting
+// when the stored package's fingerprint is not the expected one (or no package
+// is stored). The check lives in the writing UPDATE; never pre-check via
+// GetRecoveryKeyPackage (TOCTOU).
+var ErrRecoveryKeyConflict = errors.New("recovery_key_conflict")
+
 // ErrDeviceLimitReached is returned by UpsertDevice when the account is already
 // at its device ceiling and the incoming device is not one it already owns. The
 // ceiling is enforced inside the SQL statement; service code must surface this
@@ -1831,6 +1837,22 @@ func (s *Store) DeleteManagedAccountSessions(ctx context.Context, accountID stri
 // account. An absent account and a self-hosted one both answer ErrNotFound and
 // write nothing.
 func (s *Store) ReplaceManagedRecoveryKeyPackage(ctx context.Context, recoveryKeyPackage models.RecoveryKeyPackage) error {
+	return s.ReplaceManagedRecoveryKeyPackageExpecting(ctx, recoveryKeyPackage, nil)
+}
+
+// ReplaceManagedRecoveryKeyPackageExpecting is ReplaceManagedRecoveryKeyPackage
+// with an optional precondition: a non-nil expectedFingerprint lets the write
+// commit only when the stored package's phrase_fingerprint_hex equals it,
+// checked by the writing UPDATE's own WHERE. No stored package, or another
+// fingerprint, answers ErrRecoveryKeyConflict and writes nothing — except when
+// the stored package already equals recoveryKeyPackage (the retry of a re-key
+// that committed), which answers nil and writes nothing, as the unconditional
+// repeat does.
+func (s *Store) ReplaceManagedRecoveryKeyPackageExpecting(
+	ctx context.Context,
+	recoveryKeyPackage models.RecoveryKeyPackage,
+	expectedFingerprint *string,
+) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin replace managed recovery key package: %w", err)
@@ -1849,6 +1871,15 @@ func (s *Store) ReplaceManagedRecoveryKeyPackage(ctx context.Context, recoveryKe
 	}
 	if err != nil {
 		return fmt.Errorf("find managed account for recovery key: %w", err)
+	}
+	if expectedFingerprint != nil {
+		if err := replaceRecoveryKeyPackageAtFingerprint(ctx, tx, recoveryKeyPackage, *expectedFingerprint); err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit replace managed recovery key package: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteManagedAccount's COMMIT branch in fault_injection_test.go.
+		}
+		return nil
 	}
 	// A repeat of the stored content writes nothing, so updated_at keeps
 	// meaning "the package changed", as on the session route's no-op re-put.
@@ -2317,6 +2348,59 @@ const upsertRecoveryKeyPackageSQL = `ON CONFLICT(account_id) DO UPDATE SET
   phrase_fingerprint_hex = excluded.phrase_fingerprint_hex,
   updated_at = excluded.updated_at
 `
+
+// replaceRecoveryKeyPackageAtFingerprintSQL takes recoveryKeyPackageArgs and
+// the expected fingerprint as ?9.
+const replaceRecoveryKeyPackageAtFingerprintSQL = `
+UPDATE recovery_key_packages SET
+  algorithm = ?2,
+  kdf = ?3,
+  mnemonic_word_count = ?4,
+  wrap_nonce_hex = ?5,
+  wrapped_master_key_hex = ?6,
+  phrase_fingerprint_hex = ?7,
+  updated_at = ?8
+WHERE account_id = ?1 AND phrase_fingerprint_hex = ?9
+`
+
+// replaceRecoveryKeyPackageAtFingerprint is the expected-fingerprint branch of
+// ReplaceManagedRecoveryKeyPackageExpecting, run inside its transaction. The
+// identical-package read only spares a committed re-key's retry the conflict;
+// whether a differing package replaces the stored one is decided by the
+// UPDATE's WHERE alone.
+func replaceRecoveryKeyPackageAtFingerprint(
+	ctx context.Context,
+	tx *sql.Tx,
+	recoveryKeyPackage models.RecoveryKeyPackage,
+	expectedFingerprint string,
+) error {
+	args := recoveryKeyPackageArgs(recoveryKeyPackage)
+	var identical int
+	err := tx.QueryRowContext(ctx,
+		`SELECT 1 FROM recovery_key_packages WHERE account_id = ?1
+  AND (algorithm, kdf, mnemonic_word_count, wrap_nonce_hex, wrapped_master_key_hex, phrase_fingerprint_hex) = (?2, ?3, ?4, ?5, ?6, ?7)`,
+		args[:7]...,
+	).Scan(&identical)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("find identical managed recovery key package: %w", err)
+	}
+
+	result, err := tx.ExecContext(ctx, replaceRecoveryKeyPackageAtFingerprintSQL, append(args, expectedFingerprint)...)
+	if err != nil {
+		return fmt.Errorf("replace managed recovery key package at fingerprint: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("replace managed recovery key package rows: %w", err) // codecov:ignore -- modernc sqlite's Result.RowsAffected cannot fail once Exec succeeded (value captured at exec time); needs a fake driver, the same deviation documented for UpsertEncryptedBlob's RowsAffected branch in fault_injection_test.go.
+	}
+	if affected == 0 {
+		return ErrRecoveryKeyConflict
+	}
+	return nil
+}
 
 func recoveryKeyPackageArgs(recoveryKeyPackage models.RecoveryKeyPackage) []any {
 	return []any{
