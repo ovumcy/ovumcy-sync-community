@@ -47,10 +47,11 @@ info:
 
     `PUT /sync/blob` and `GET /sync/blob` share a server-wide limit of 4
     transfers in progress. A further transfer waits for a free slot before its
-    body is read or its blob loaded; the wait has no status code of its own and
-    counts against the server's HTTP read/write timeouts, so on a busy server a
-    blob request can take longer, and a `PUT` whose wait outlasts the read
-    timeout answers `400 invalid_json` because its body can no longer be read.
+    body is read or its blob loaded, for at most a quarter of the shorter of the
+    server's HTTP read/write timeouts and never over 2 seconds; a transfer still
+    waiting then answers `503 blob_transfer_busy` with `Retry-After` (the
+    `BlobTransferBusy` response) and may be retried. A refused wait reads no
+    body and takes no slot.
 
     Outside the JSON error envelope: an unknown path or a method the path does
     not take gets the standard library's plain-text `404` / `405` (the latter
@@ -1805,6 +1806,8 @@ paths:
           $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/BlobTransferBusy"
     put:
       tags: [sync]
       operationId: putBlob
@@ -1869,6 +1872,8 @@ paths:
           $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/BlobTransferBusy"
 
   /sync/rekey:
     put:
@@ -1995,6 +2000,26 @@ components:
           examples:
             syncDisabled:
               value: { error: sync_disabled }
+    BlobTransferBusy:
+      description: |
+        Every blob transfer slot stayed busy for the whole bounded wait (at most a
+        quarter of the shorter HTTP read/write timeout, never over 2 seconds).
+        Nothing was read or written; retry after `Retry-After` seconds. Browser
+        clients on an allowed origin can read `Retry-After`: it is listed in
+        `Access-Control-Expose-Headers`.
+      headers:
+        Retry-After:
+          description: Seconds until the caller may retry (always 2).
+          schema:
+            type: string
+            example: "2"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            blobTransferBusy:
+              value: { error: blob_transfer_busy }
     RateLimited:
       description: |
         Per-route auth rate limit exceeded (per-IP, per-account, and/or

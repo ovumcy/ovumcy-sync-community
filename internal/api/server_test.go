@@ -1700,6 +1700,8 @@ type serverTestOptions struct {
 	// totpKey overrides the default TOTP field-encryption key when enableTOTP
 	// is set, so two servers over a shared store can disagree on the key.
 	totpKey []byte
+	// blobSlotWait overrides the blob-slot wait bound; zero keeps the default.
+	blobSlotWait time.Duration
 }
 
 // newTestStore opens a migrated store and registers its cleanup. Tests pass
@@ -1832,6 +1834,7 @@ func newTestServerWithOptions(t *testing.T, options serverTestOptions) http.Hand
 			ReadinessCheck:       options.readinessCheck,
 			TrustedProxyCIDRs:    options.trustedProxyCIDRs,
 			RegistrationDisabled: options.disableRegistration,
+			BlobSlotWait:         options.blobSlotWait,
 		},
 	)
 }
