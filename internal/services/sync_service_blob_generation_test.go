@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ovumcy/ovumcy-sync-community/internal/models"
 	"github.com/ovumcy/ovumcy-sync-community/internal/security"
 )
 
@@ -137,5 +138,45 @@ func TestPutBlobStillRejectsStaleGenerationWithinTheBound(t *testing.T) {
 	input.Generation--
 	if _, err := sync.PutBlob(context.Background(), accountID, sessionHash, input); !errors.Is(err, ErrStaleGeneration) {
 		t.Fatalf("expected ErrStaleGeneration for a regressing write, got %v", err)
+	}
+}
+
+// An upgrade from v0.3.0 can carry a stored generation up to MaxInt64-2^32,
+// which no write under the moving bound could beat. The owner's next valid
+// write must replace it, and the CAS must govern the replaced row again.
+func TestPutBlobReplacesAGenerationStoredAboveTheBound(t *testing.T) {
+	sync, accountID, sessionHash, input := newBlobGenerationFixture(t)
+
+	base := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
+	sync.now = func() time.Time { return base }
+
+	outlier := models.EncryptedBlob{
+		AccountID:      accountID,
+		SchemaVersion:  1,
+		Generation:     math.MaxInt64 - (1 << 32),
+		ChecksumSHA256: input.ChecksumSHA256,
+		Ciphertext:     input.Ciphertext,
+		CiphertextSize: len(input.Ciphertext),
+		UpdatedAt:      base,
+	}
+	if _, err := sync.store.UpsertEncryptedBlob(context.Background(), sessionHash, math.MaxInt64, outlier); err != nil {
+		t.Fatalf("seed v0.3.0 outlier: %v", err)
+	}
+
+	input.Generation = base.UnixMilli()
+	if _, err := sync.PutBlob(context.Background(), accountID, sessionHash, input); err != nil {
+		t.Fatalf("write over a stored outlier must succeed, got %v", err)
+	}
+	got, err := sync.GetBlob(context.Background(), accountID)
+	if err != nil {
+		t.Fatalf("get blob: %v", err)
+	}
+	if got.Generation != input.Generation {
+		t.Fatalf("stored generation = %d, want %d", got.Generation, input.Generation)
+	}
+
+	input.Generation--
+	if _, err := sync.PutBlob(context.Background(), accountID, sessionHash, input); !errors.Is(err, ErrStaleGeneration) {
+		t.Fatalf("regressing write after replacement: want ErrStaleGeneration, got %v", err)
 	}
 }

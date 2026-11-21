@@ -109,7 +109,7 @@ func TestUpsertEncryptedBlobStoresCreatedAtInTheWriteFormat(t *testing.T) {
 	createSessionExpiringAt(t, store, account.ID, "blob-session", time.Now().UTC().Add(time.Hour))
 
 	updatedAt := time.Date(2026, 11, 17, 10, 0, 0, 123456789, time.UTC)
-	if _, err := store.UpsertEncryptedBlob(ctx, "hash-blob-session", models.EncryptedBlob{
+	if _, err := store.UpsertEncryptedBlob(ctx, "hash-blob-session", noGenerationCeiling, models.EncryptedBlob{
 		AccountID:      account.ID,
 		SchemaVersion:  1,
 		Generation:     1,

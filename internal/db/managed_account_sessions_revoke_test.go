@@ -57,7 +57,7 @@ func seedSessionRevokeAccount(t *testing.T, store *Store, accountID string, mode
 	}, 5); err != nil {
 		t.Fatalf("create device for %s: %v", accountID, err)
 	}
-	if _, err := store.UpsertEncryptedBlob(ctx, accountID+"-token-hash-a", models.EncryptedBlob{
+	if _, err := store.UpsertEncryptedBlob(ctx, accountID+"-token-hash-a", noGenerationCeiling, models.EncryptedBlob{
 		AccountID:      accountID,
 		SchemaVersion:  1,
 		Generation:     1,

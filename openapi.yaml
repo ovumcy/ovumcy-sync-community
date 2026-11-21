@@ -1816,7 +1816,7 @@ paths:
         "403":
           $ref: "#/components/responses/SyncDisabled"
         "409":
-          description: generation is not strictly greater than the currently stored generation (a concurrent writer already advanced it), or `expected_generation` was sent and does not equal the stored generation (or no blob is stored). Nothing is written.
+          description: generation is not strictly greater than the currently stored generation (a concurrent writer already advanced it), or `expected_generation` was sent and does not equal the stored generation (or no blob is stored). Nothing is written. A stored generation more than 15 minutes ahead of server time never counts as newer; only an `expected_generation` mismatch can still refuse a write over it.
           content:
             application/json:
               schema:
@@ -2330,7 +2330,7 @@ components:
         generation:
           type: integer
           format: int64
-          description: Must be positive, strictly greater than the currently stored generation, and at most 15 minutes (in milliseconds) ahead of server time.
+          description: Must be positive, strictly greater than the currently stored generation, and at most 15 minutes (in milliseconds) ahead of server time. A stored generation above that bound (left by an earlier release) does not count; any valid write replaces it.
         checksum_sha256:
           type: string
           description: Lowercase hex SHA-256 of the decoded ciphertext; 64 hex characters.
