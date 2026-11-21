@@ -20,7 +20,8 @@ the seconds left in the spent window, rounded up (`allowUnderLimiter`; at most t
 60 on the sync and read-state routes). Each limiter key is prefixed with the request path (or an explicit route key), so
 every route has its own bucket. Limiter state is in memory, per process, and a restart clears it. The
 TOTP code budgets below are in memory too; the one stored count is the per-pending-enrollment lifetime
-count (`totp_failure_windows`, `ReserveTOTPAttempt`), which survives a restart. A TOTP budget's `429`
+count (`totp_failure_windows`, `ReservePendingEnrollmentTOTPAttempt`), which survives a restart and a
+clock step back. A TOTP budget's `429`
 carries a `Retry-After` of the seconds left in its window (1–900).
 
 Limiter keys: **IP** is the client IP resolved by `clientIPForRateLimit` (the socket peer, or the

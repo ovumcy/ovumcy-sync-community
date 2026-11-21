@@ -166,6 +166,43 @@ func TestCompleteEnrollmentGuessesAreCappedAndBurnThePendingSecret(t *testing.T)
 	}
 }
 
+// The pending secret's lifetime count survives a clock stepped back behind
+// its first guess: the attempt past the cap burns the secret even with a
+// correct code. The guesses are paced so the last rolling window holds one,
+// leaving the rolling budget open at the stepped-back time.
+func TestPendingEnrollmentLifetimeCapSurvivesAClockStepBack(t *testing.T) {
+	auth, totp, now := fixedTOTPClock(t)
+	ctx := context.Background()
+	accountID, sessionToken, secret := startPendingEnrollment(t, auth, totp)
+	sessionHash := security.HashToken(sessionToken)
+
+	perWindow := []int{maxTOTPAttempts, maxPendingEnrollmentAttempts - maxTOTPAttempts - 1, 1}
+	for window, guesses := range perWindow {
+		at := now.Add(time.Duration(window) * (TOTPAttemptWindow + time.Minute))
+		totp.now = func() time.Time { return at }
+		wrong := wrongTOTPCode(t, secret, at)
+		for range guesses {
+			if _, err := totp.CompleteEnrollment(ctx, accountID, sessionHash, wrong); !errors.Is(err, ErrTOTPInvalidCode) {
+				t.Fatalf("window %d: expected ErrTOTPInvalidCode, got %v", window, err)
+			}
+		}
+	}
+
+	stepBack := now.Add(-time.Hour)
+	totp.now = func() time.Time { return stepBack }
+	var locked *TOTPLockedError
+	if _, err := totp.CompleteEnrollment(ctx, accountID, sessionHash, security.GenerateTOTPCode(secret, stepBack.Unix()/security.TOTPStepSeconds)); !errors.As(err, &locked) || locked.RetryAfter != 0 {
+		t.Fatalf("expected the attempt past the lifetime cap to burn the secret after a clock step back, got %v", err)
+	}
+	account, err := totp.store.FindAccountByID(ctx, accountID)
+	if err != nil {
+		t.Fatalf("find account: %v", err)
+	}
+	if account.TOTPEnabled || account.TOTPSecretEncrypted != "" {
+		t.Fatalf("expected the pending secret burnt and TOTP off, got enabled=%v secret-set=%v", account.TOTPEnabled, account.TOTPSecretEncrypted != "")
+	}
+}
+
 // A failed reservation stops the verify before the code is looked at, and
 // changes nothing.
 func TestCompleteEnrollmentSurfacesReservationStoreError(t *testing.T) {
