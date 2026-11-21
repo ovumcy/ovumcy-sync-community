@@ -112,7 +112,7 @@ The example is intentionally conservative:
    openssl rand -hex 32
    ```
 
-2. Set `FIELD_ENCRYPTION_KEY` to that hex string. Optionally override `TOTP_ISSUER` (default `ovumcy-sync-community`); the issuer label is what authenticator apps display next to the account.
+2. Set `FIELD_ENCRYPTION_KEY` to that hex string. A key whose bytes are all zero (for example 64 `0` characters copied from a template) stops the server at startup with an error naming the variable; replace it with a generated key. Optionally override `TOTP_ISSUER` (default `ovumcy-sync-community`); the issuer label is what authenticator apps display next to the account.
 
 3. Restart the server. The TOTP endpoints (`/auth/totp/{enroll,verify,disable,challenge}`) become live; password-only login still works for accounts that have not opted in.
 
