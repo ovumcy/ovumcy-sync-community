@@ -1278,6 +1278,8 @@ func (s *Server) handlePutBlob(
 		Generation:     payload.Generation,
 		ChecksumSHA256: payload.ChecksumSHA256,
 		Ciphertext:     ciphertext,
+
+		ExpectedGeneration: payload.ExpectedGeneration,
 	})
 	if err != nil {
 		switch {
@@ -1925,6 +1927,8 @@ type blobPutRequest struct {
 	Generation       int64  `json:"generation"`
 	ChecksumSHA256   string `json:"checksum_sha256"`
 	CiphertextBase64 string `json:"ciphertext_base64"`
+
+	ExpectedGeneration *int64 `json:"expected_generation"`
 }
 
 type blobResponse struct {

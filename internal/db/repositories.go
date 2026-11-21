@@ -2112,6 +2112,21 @@ func (s *Store) UpsertEncryptedBlob(
 	sessionTokenHash string,
 	blob models.EncryptedBlob,
 ) (models.EncryptedBlob, error) {
+	return s.UpsertEncryptedBlobExpecting(ctx, sessionTokenHash, blob, nil)
+}
+
+// UpsertEncryptedBlobExpecting is UpsertEncryptedBlob with an optional
+// precondition: a non-nil expectedGeneration lets the write commit only when
+// a stored row's generation equals it and the incoming generation still
+// exceeds it, checked by the same UPDATE statement that writes. No stored
+// row, a different stored generation, or no advance all return
+// ErrStaleGeneration and change nothing.
+func (s *Store) UpsertEncryptedBlobExpecting(
+	ctx context.Context,
+	sessionTokenHash string,
+	blob models.EncryptedBlob,
+	expectedGeneration *int64,
+) (models.EncryptedBlob, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return models.EncryptedBlob{}, fmt.Errorf("begin upsert blob: %w", err)
@@ -2123,29 +2138,32 @@ func (s *Store) UpsertEncryptedBlob(
 	if err := requireLiveSession(ctx, tx, blob.AccountID, sessionTokenHash); err != nil {
 		return models.EncryptedBlob{}, err
 	}
-	result, err := tx.ExecContext(
-		ctx,
-		`
-INSERT INTO encrypted_blobs (account_id, schema_version, generation, checksum_sha256, ciphertext, ciphertext_size, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(account_id) DO UPDATE SET
-  schema_version = excluded.schema_version,
-  generation = excluded.generation,
-  checksum_sha256 = excluded.checksum_sha256,
-  ciphertext = excluded.ciphertext,
-  ciphertext_size = excluded.ciphertext_size,
-  updated_at = excluded.updated_at
-WHERE excluded.generation > encrypted_blobs.generation
-`,
+	updatedAt := blob.UpdatedAt.UTC().Format(time.RFC3339Nano)
+	query := upsertEncryptedBlobSQL
+	args := []any{
 		blob.AccountID,
 		blob.SchemaVersion,
 		blob.Generation,
 		blob.ChecksumSHA256,
 		blob.Ciphertext,
 		blob.CiphertextSize,
-		blob.UpdatedAt.UTC().Format(time.RFC3339Nano),
-		blob.UpdatedAt.UTC().Format(time.RFC3339Nano),
-	)
+		updatedAt,
+		updatedAt,
+	}
+	if expectedGeneration != nil {
+		query = replaceEncryptedBlobAtGenerationSQL
+		args = []any{
+			blob.SchemaVersion,
+			blob.Generation,
+			blob.ChecksumSHA256,
+			blob.Ciphertext,
+			blob.CiphertextSize,
+			updatedAt,
+			blob.AccountID,
+			*expectedGeneration,
+		}
+	}
+	result, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
 		return models.EncryptedBlob{}, fmt.Errorf("upsert blob: %w", err)
 	}
@@ -2163,6 +2181,32 @@ WHERE excluded.generation > encrypted_blobs.generation
 	}
 	return blob, nil
 }
+
+const upsertEncryptedBlobSQL = `
+INSERT INTO encrypted_blobs (account_id, schema_version, generation, checksum_sha256, ciphertext, ciphertext_size, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(account_id) DO UPDATE SET
+  schema_version = excluded.schema_version,
+  generation = excluded.generation,
+  checksum_sha256 = excluded.checksum_sha256,
+  ciphertext = excluded.ciphertext,
+  ciphertext_size = excluded.ciphertext_size,
+  updated_at = excluded.updated_at
+WHERE excluded.generation > encrypted_blobs.generation
+`
+
+// replaceEncryptedBlobAtGenerationSQL's "generation < ?2" (the new
+// generation) keeps the strictly-greater rule alongside the expected match.
+const replaceEncryptedBlobAtGenerationSQL = `
+UPDATE encrypted_blobs SET
+  schema_version = ?1,
+  generation = ?2,
+  checksum_sha256 = ?3,
+  ciphertext = ?4,
+  ciphertext_size = ?5,
+  updated_at = ?6
+WHERE account_id = ?7 AND generation = ?8 AND generation < ?2
+`
 
 func (s *Store) GetRecoveryKeyPackage(
 	ctx context.Context,
