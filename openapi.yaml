@@ -1565,7 +1565,7 @@ paths:
                 invalidJSON:
                   value: { error: invalid_json }
         "401":
-          description: Missing/invalid session, wrong current password, or a missing/wrong/replayed TOTP code on an enrolled account.
+          description: Missing/invalid session, wrong current password, or a missing/wrong/replayed TOTP code on an enrolled account. `invalid_current_password` also answers a removal whose checks went stale while it was processed (the caller's own session enrolled TOTP or changed the password meanwhile), even when no password was sent; a retry asks for the step-up the account now needs.
           content:
             application/json:
               schema:

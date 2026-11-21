@@ -266,15 +266,10 @@ func (s *SyncService) RemoveDevice(ctx context.Context, accountID string, stepUp
 		account.TOTPEnabled,
 		account.PasswordHash,
 	); err != nil {
-		switch {
-		case errors.Is(err, db.ErrSessionRevoked):
-			return ErrUnauthorized
-		case errors.Is(err, db.ErrConflict), errors.Is(err, db.ErrTOTPStateChanged):
-			return ErrInvalidCurrentPassword
-		case errors.Is(err, db.ErrNotFound):
+		if errors.Is(err, db.ErrNotFound) {
 			return ErrDeviceNotFound
 		}
-		return err
+		return stepUpWriteError(err)
 	}
 
 	return nil

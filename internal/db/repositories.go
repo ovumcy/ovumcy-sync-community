@@ -1280,7 +1280,7 @@ func (s *Store) StorePendingTOTPSecret(
 		accountID,
 	)
 	if err != nil {
-		return fmt.Errorf("store pending totp secret: %w", err) // codecov:ignore -- requireLiveSession just read "accounts" in this transaction, so failing only this UPDATE needs a fake driver (same same-table-multi-step limitation as the RowsAffected/COMMIT deviations in fault_injection_test.go).
+		return fmt.Errorf("store pending totp secret: %w", err) // codecov:ignore -- readStepUpState just read "accounts" in this transaction, so failing only this UPDATE needs a fake driver (same same-table-multi-step limitation as the RowsAffected/COMMIT deviations in fault_injection_test.go).
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {
