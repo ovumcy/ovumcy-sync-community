@@ -499,9 +499,10 @@ func (s *Server) handleRegister(writer http.ResponseWriter, request *http.Reques
 }
 
 func (s *Server) handleLogin(writer http.ResponseWriter, request *http.Request) {
-	// The per-IP slot is refunded like the identifier slot below: at the
-	// credential budget, successful sign-ins behind one address must not
-	// lock each other out; only failures stay charged.
+	// The per-IP slot is refunded on every password success, a TOTP
+	// challenge included: at the credential budget, sign-ins behind one
+	// address must not lock each other out; only failures stay charged.
+	// Challenge minting stays metered by the identifier slot below.
 	ipSlot, ok := reserveUnderLimiter(s.authLimiter, writer, request.URL.Path+":"+s.clientIPForRateLimit(request))
 	if !ok {
 		return
@@ -530,9 +531,11 @@ func (s *Server) handleLogin(writer http.ResponseWriter, request *http.Request) 
 	}
 
 	result, err := s.auth.Login(request.Context(), payload.Login, payload.Password)
-	if err == nil && result.TOTPChallenge == nil {
-		s.authLimiter.Refund(identifierSlot)
+	if err == nil {
 		s.authLimiter.Refund(ipSlot)
+		if result.TOTPChallenge == nil {
+			s.authLimiter.Refund(identifierSlot)
+		}
 	}
 	if err != nil {
 		switch {
@@ -788,8 +791,11 @@ func (s *Server) handleTOTPDisable(
 
 func (s *Server) handleTOTPChallenge(writer http.ResponseWriter, request *http.Request) {
 	// Limiter first: an anonymous caller must not be able to probe whether
-	// TOTP is configured at an unmetered rate.
-	if !s.allowAuthRequest(writer, request) {
+	// TOTP is configured at an unmetered rate. A completed challenge refunds
+	// the per-IP slot, so MFA sign-ins behind one address do not lock each
+	// other out; code guesses stay metered by the sign-in TOTP budget.
+	ipSlot, ok := reserveUnderLimiter(s.authLimiter, writer, request.URL.Path+":"+s.clientIPForRateLimit(request))
+	if !ok {
 		return
 	}
 	if s.totp == nil {
@@ -807,6 +813,7 @@ func (s *Server) handleTOTPChallenge(writer http.ResponseWriter, request *http.R
 		mapTOTPError(writer, err)
 		return
 	}
+	s.authLimiter.Refund(ipSlot)
 
 	writeJSON(writer, http.StatusOK, result)
 }
