@@ -2077,11 +2077,22 @@ type recoveryKeyPackageRequest struct {
 // rekeyRequest is PUT /sync/rekey's body. ExpectedGeneration is required
 // (0 = no blob stored yet).
 type rekeyRequest struct {
-	RecoveryKey        managedRecoveryKeyPackageRequest `json:"recovery_key"`
-	Blob               rekeyBlobRequest                 `json:"blob"`
-	ExpectedGeneration *int64                           `json:"expected_generation"`
-	CurrentPassword    string                           `json:"current_password"`
-	Code               string                           `json:"code"`
+	RecoveryKey        rekeyRecoveryKeyRequest `json:"recovery_key"`
+	Blob               rekeyBlobRequest        `json:"blob"`
+	ExpectedGeneration *int64                  `json:"expected_generation"`
+	CurrentPassword    string                  `json:"current_password"`
+	Code               string                  `json:"code"`
+}
+
+// rekeyRecoveryKeyRequest omits the bridge's expected_phrase_fingerprint_hex:
+// this route does not honor it, so decodeJSON must refuse it as unknown.
+type rekeyRecoveryKeyRequest struct {
+	Algorithm            string `json:"algorithm"`
+	KDF                  string `json:"kdf"`
+	MnemonicWordCount    int    `json:"mnemonic_word_count"`
+	WrapNonceHex         string `json:"wrap_nonce_hex"`
+	WrappedMasterKeyHex  string `json:"wrapped_master_key_hex"`
+	PhraseFingerprintHex string `json:"phrase_fingerprint_hex"`
 }
 
 type rekeyBlobRequest struct {
