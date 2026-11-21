@@ -15,10 +15,15 @@ func TestRemoveDeviceUnmeteredOnAnEnrolledAccountComparesNoPassword(t *testing.T
 	ctx := context.Background()
 	f.attachDevice(t, "device-totp1111")
 
-	stepUp := f.stepUp(f.code())
-	stepUp.Unmetered = true
-	if err := f.sync.RemoveDevice(ctx, f.accountID, stepUp, "device-totp1111"); !errors.Is(err, ErrInvalidCurrentPassword) {
-		t.Fatalf("expected ErrInvalidCurrentPassword, got %v", err)
+	// An empty password would answer ErrCurrentPasswordMissing had the
+	// compare been reached.
+	for _, password := range []string{totpWindowTestPassword, ""} {
+		stepUp := f.stepUp(f.code())
+		stepUp.CurrentPassword = password
+		stepUp.Unmetered = true
+		if err := f.sync.RemoveDevice(ctx, f.accountID, stepUp, "device-totp1111"); !errors.Is(err, ErrInvalidCurrentPassword) {
+			t.Fatalf("password %q: expected ErrInvalidCurrentPassword, got %v", password, err)
+		}
 	}
 	if err := f.sync.RemoveDevice(ctx, f.accountID, f.stepUp(f.code()), "device-totp1111"); err != nil {
 		t.Fatalf("the device and the code must survive the refusal: %v", err)

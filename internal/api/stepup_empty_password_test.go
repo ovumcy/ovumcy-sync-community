@@ -35,11 +35,14 @@ func TestRemoveDeviceOnTOTPAccountWithoutBodySpendsNoSlot(t *testing.T) {
 	handler := newTestServerWithOptions(t, serverTestOptions{enableTOTP: true, authRateLimitCount: 2})
 	token, _, _ := enrollOwnerOverHTTP(t, handler)
 
-	for range 2 {
-		response := performJSONRequest(t, handler, http.MethodDelete, "/sync/devices/device-totp1111", nil,
+	for _, body := range []any{nil, map[string]string{"current_password": "", "code": "000000"}} {
+		response := performJSONRequest(t, handler, http.MethodDelete, "/sync/devices/device-totp1111", body,
 			token, http.StatusUnauthorized)
 		expectErrorKey(t, response.Body.Bytes(), "invalid_current_password")
 	}
+	response := performJSONRequest(t, handler, http.MethodPost, "/auth/totp/disable",
+		map[string]string{"current_password": "", "code": "000000"}, token, http.StatusUnauthorized)
+	expectErrorKey(t, response.Body.Bytes(), "invalid_current_password")
 	for range 2 {
 		performJSONRequest(t, handler, http.MethodDelete, "/account",
 			map[string]string{"current_password": "not the password at all"}, token, http.StatusUnauthorized)
