@@ -33,7 +33,7 @@ func lateBodyWrites(store *Store, accountID string) map[string]func(ctx context.
 			return store.StorePendingTOTPSecret(ctx, accountID, "verified-hash", tokenHash, "pending-secret")
 		},
 		"device delete": func(ctx context.Context, tokenHash string) error {
-			return store.DeleteDevice(ctx, accountID, tokenHash, "device-a")
+			return store.DeleteDevice(ctx, accountID, tokenHash, "device-a", false, "")
 		},
 		"blob upsert": func(ctx context.Context, tokenHash string) error {
 			_, err := store.UpsertEncryptedBlob(ctx, tokenHash, noGenerationCeiling, lateBodyBlob(accountID))

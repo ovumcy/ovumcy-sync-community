@@ -18,40 +18,69 @@ var ErrSessionRevoked = errors.New("session_revoked")
 // was verified.
 var ErrPasswordChanged = errors.New("password_changed")
 
+// ErrTOTPStateChanged is returned by a step-up write when the account's TOTP
+// enrollment is no longer the one its checks were decided under: a request
+// judged with no code on an account without TOTP must not write after an
+// enrollment on the same session has committed.
+var ErrTOTPStateChanged = errors.New("totp_state_changed")
+
+// stepUpState is the account row a step-up write re-reads inside its
+// transaction.
+type stepUpState struct {
+	passwordHash string
+	totpEnabled  bool
+}
+
+// readStepUpState reads the caller's account for a step-up write: ErrNotFound
+// when the account is gone, ErrSessionRevoked when only the caller's session
+// is. The store's single connection makes this read and the write after it one
+// atomic unit inside the transaction.
+func readStepUpState(ctx context.Context, tx *sql.Tx, accountID string, sessionTokenHash string) (stepUpState, error) {
+	var state stepUpState
+	var sessionLive bool
+	err := tx.QueryRowContext(
+		ctx,
+		`SELECT password_hash, totp_enabled,
+		        EXISTS (SELECT 1 FROM sessions WHERE account_id = accounts.id AND token_hash = ?)
+		 FROM accounts WHERE id = ?`,
+		sessionTokenHash,
+		accountID,
+	).Scan(&state.passwordHash, &state.totpEnabled, &sessionLive)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return stepUpState{}, ErrNotFound
+	case err != nil:
+		return stepUpState{}, fmt.Errorf("step-up state lookup: %w", err)
+	case !sessionLive:
+		return stepUpState{}, ErrSessionRevoked
+	}
+	return state, nil
+}
+
 // requireStepUpState holds a step-up write to the state its re-authentication
-// saw: the caller's session still exists and the password hash is still the one
-// the password was verified against. A password change or reset, or a session
-// revocation, landing during the bcrypt compare makes the write refuse instead
-// of running on a stale verification. ErrNotFound when the account is gone,
-// ErrSessionRevoked when only the caller's session is, ErrConflict when the
-// hash moved on. The store's single connection makes this read and the write
-// after it one atomic unit inside the transaction.
+// saw: the caller's session still exists, the password hash is still the one
+// the password was verified against, and TOTP is enabled exactly when the
+// request was judged as enrolled. A password change or reset, a TOTP
+// enrollment, or a session revocation landing during the bcrypt compare makes
+// the write refuse instead of running on a stale verification. ErrNotFound and
+// ErrSessionRevoked as readStepUpState; ErrConflict when the hash moved on,
+// ErrTOTPStateChanged when the enrollment flipped.
 func requireStepUpState(
 	ctx context.Context,
 	tx *sql.Tx,
 	accountID string,
 	verifiedHash string,
+	verifiedTOTPEnabled bool,
 	sessionTokenHash string,
 ) error {
-	var storedHash string
-	var sessionLive bool
-	err := tx.QueryRowContext(
-		ctx,
-		`SELECT password_hash,
-		        EXISTS (SELECT 1 FROM sessions WHERE account_id = accounts.id AND token_hash = ?)
-		 FROM accounts WHERE id = ?`,
-		sessionTokenHash,
-		accountID,
-	).Scan(&storedHash, &sessionLive)
+	state, err := readStepUpState(ctx, tx, accountID, sessionTokenHash)
 	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return ErrNotFound
 	case err != nil:
-		return fmt.Errorf("step-up state lookup: %w", err)
-	case !sessionLive:
-		return ErrSessionRevoked
-	case storedHash != verifiedHash:
+		return err
+	case state.passwordHash != verifiedHash:
 		return ErrConflict
+	case state.totpEnabled != verifiedTOTPEnabled:
+		return ErrTOTPStateChanged
 	}
 	return nil
 }
@@ -89,6 +118,7 @@ func (s *Store) DeleteAccountForSession(
 	ctx context.Context,
 	accountID string,
 	verifiedHash string,
+	verifiedTOTPEnabled bool,
 	sessionTokenHash string,
 ) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -99,7 +129,7 @@ func (s *Store) DeleteAccountForSession(
 		_ = tx.Rollback()
 	}()
 
-	if err := requireStepUpState(ctx, tx, accountID, verifiedHash, sessionTokenHash); err != nil {
+	if err := requireStepUpState(ctx, tx, accountID, verifiedHash, verifiedTOTPEnabled, sessionTokenHash); err != nil {
 		return err
 	}
 	if err := deleteAccountRows(ctx, tx, accountID, deleteAnyAccountSQL); err != nil {
@@ -120,6 +150,7 @@ func (s *Store) UpsertRecoveryKeyPackageForSession(
 	ctx context.Context,
 	recoveryKeyPackage models.RecoveryKeyPackage,
 	verifiedHash string,
+	verifiedTOTPEnabled bool,
 	sessionTokenHash string,
 ) (models.RecoveryKeyPackage, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -130,7 +161,7 @@ func (s *Store) UpsertRecoveryKeyPackageForSession(
 		_ = tx.Rollback()
 	}()
 
-	if err := requireStepUpState(ctx, tx, recoveryKeyPackage.AccountID, verifiedHash, sessionTokenHash); err != nil {
+	if err := requireStepUpState(ctx, tx, recoveryKeyPackage.AccountID, verifiedHash, verifiedTOTPEnabled, sessionTokenHash); err != nil {
 		return models.RecoveryKeyPackage{}, err
 	}
 	stored, err := upsertRecoveryKeyPackage(ctx, tx, recoveryKeyPackage)

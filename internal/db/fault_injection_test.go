@@ -967,7 +967,7 @@ func TestDeviceAndSessionQueriesReturnErrorWhenTablesAreDropped(t *testing.T) {
 	if _, err := store.ListDevicesForAccount(ctx, target.ID); err == nil {
 		t.Fatal("expected error listing devices after devices table is dropped")
 	}
-	if err := store.DeleteDevice(ctx, target.ID, "target-session", "device-1"); err == nil {
+	if err := store.DeleteDevice(ctx, target.ID, "target-session", "device-1", false, ""); err == nil {
 		t.Fatal("expected error deleting device after devices table is dropped")
 	} else if errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected a store-failure error, not ErrNotFound, got %v", err)

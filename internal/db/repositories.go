@@ -1245,7 +1245,7 @@ func (s *Store) DisableTOTP(
 // totp_last_used_step resets to 0) only while TOTP is still off: an enrollment
 // start that read "disabled" before a concurrent verify committed must not
 // switch the just-enabled factor back off. It also needs the caller's session
-// and the password hash the start verified (requireStepUpState): a start
+// and the password hash the start verified (readStepUpState): a start
 // verified against the old password must not leave a secret behind a password
 // change, which discards pending secrets. ErrConflict when TOTP is enabled,
 // ErrPasswordChanged when the hash moved on, ErrSessionRevoked when the
@@ -1265,11 +1265,12 @@ func (s *Store) StorePendingTOTPSecret(
 		_ = tx.Rollback()
 	}()
 
-	if err := requireStepUpState(ctx, tx, accountID, verifiedPasswordHash, sessionTokenHash); err != nil {
-		if errors.Is(err, ErrConflict) {
-			return ErrPasswordChanged
-		}
+	state, err := readStepUpState(ctx, tx, accountID, sessionTokenHash)
+	if err != nil {
 		return err
+	}
+	if state.passwordHash != verifiedPasswordHash {
+		return ErrPasswordChanged
 	}
 	result, err := tx.ExecContext(
 		ctx,
@@ -2064,9 +2065,19 @@ RETURNING device_id`,
 // DeleteDevice removes one device from the account together with every
 // session bound to it, in one transaction, so a removed device never leaves
 // a live session behind. Both DELETEs are scoped by account_id and device_id
-// (no IDOR). The caller's session must still exist (requireLiveSession;
-// ErrSessionRevoked). Returns ErrNotFound when the account has no such device.
-func (s *Store) DeleteDevice(ctx context.Context, accountID string, sessionTokenHash string, deviceID string) error {
+// (no IDOR). The caller's session must still exist (ErrSessionRevoked), and
+// TOTP must still be enabled exactly when the removal was judged as enrolled
+// (ErrTOTPStateChanged); only an enrolled removal re-checked the password, so
+// only it also holds the hash (requireStepUpState, ErrConflict). Returns
+// ErrNotFound when the account has no such device.
+func (s *Store) DeleteDevice(
+	ctx context.Context,
+	accountID string,
+	sessionTokenHash string,
+	deviceID string,
+	verifiedTOTPEnabled bool,
+	verifiedHash string,
+) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin delete device: %w", err)
@@ -2075,8 +2086,18 @@ func (s *Store) DeleteDevice(ctx context.Context, accountID string, sessionToken
 		_ = tx.Rollback()
 	}()
 
-	if err := requireLiveSession(ctx, tx, accountID, sessionTokenHash); err != nil {
-		return err
+	if verifiedTOTPEnabled {
+		if err := requireStepUpState(ctx, tx, accountID, verifiedHash, true, sessionTokenHash); err != nil {
+			return err
+		}
+	} else {
+		state, err := readStepUpState(ctx, tx, accountID, sessionTokenHash)
+		if err != nil {
+			return err
+		}
+		if state.totpEnabled {
+			return ErrTOTPStateChanged
+		}
 	}
 
 	result, err := tx.ExecContext(
