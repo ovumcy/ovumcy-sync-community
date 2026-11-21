@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`POST /auth/totp/verify`: a pending secret discarded at its lifetime cap answers `409 totp_enrollment_expired`** (formerly `429 rate_limited` with `Retry-After: 1`), so a client restarts enrollment instead of waiting; the route limiter and the rolling TOTP budget keep `429 rate_limited`. Allowed-origin responses now carry `Access-Control-Expose-Headers: Retry-After`, so a browser client can read the wait.
 - **Recovery-key writes require a wrapped master key of exactly 96 hex characters.** `PUT /sync/recovery-key` and the bridge re-key `PUT /managed/accounts/{account_id}/recovery-key` now refuse any other length (formerly: at least 64, even) with `400 invalid_recovery_package`; 96 is what the app sends (a 32-byte key plus its 16-byte tag). A package already stored under the old rule is untouched: it still reads, and its identical re-put on `PUT /sync/recovery-key` still returns it.
 
 - **Blob transfers are processed at most 4 at a time.** `PUT /sync/blob` and `GET /sync/blob` now share a server-wide limit of 4 transfers holding a blob in memory; a further transfer waits for a free slot within its HTTP read/write timeout, with no new status code. A max-size upload needs about 7× `MAX_BLOB_BYTES` of memory, so blob work stays near 28× `MAX_BLOB_BYTES` (about 450 MiB at the default) however many sessions upload at once.

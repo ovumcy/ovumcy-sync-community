@@ -62,6 +62,10 @@ func TestForeignOriginIsRefusedBeforeTheLimiters(t *testing.T) {
 	if allowed.Header().Get("Access-Control-Allow-Origin") != "https://app.example" {
 		t.Fatalf("expected the allowed origin echoed, got %q", allowed.Header().Get("Access-Control-Allow-Origin"))
 	}
+	// A browser hides Retry-After from a cross-origin caller unless exposed.
+	if got := allowed.Header().Get("Access-Control-Expose-Headers"); got != "Retry-After" {
+		t.Fatalf("expected Retry-After exposed to the allowed origin, got %q", got)
+	}
 
 	preflight := httptest.NewRequest(http.MethodOptions, "/auth/login", nil)
 	preflight.Header.Set("Origin", "https://app.example")
