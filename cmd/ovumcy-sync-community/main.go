@@ -132,18 +132,19 @@ func runServe(cfg config.Config) error {
 			managedBridgeService,
 			totpService,
 			api.ServerOptions{
-				ManagedBridgeToken:  cfg.ManagedBridgeToken,
-				MetricsEnabled:      cfg.MetricsEnabled,
-				MetricsBearerToken:  cfg.MetricsBearerToken,
-				AllowedOrigins:      cfg.AllowedOrigins,
-				AllowedHosts:        cfg.AllowedHosts,
-				AuthRateLimitCount:  cfg.AuthRateLimitCount,
-				AuthRateLimitWindow: cfg.AuthRateLimitWindow,
-				SyncRateLimitCount:  cfg.SyncRateLimitCount,  // codecov:ignore -- process wiring reached only by a full serve, same seam as ReadTimeout below; the values are covered by the config tests.
-				SyncRateLimitWindow: cfg.SyncRateLimitWindow, // codecov:ignore -- same seam as SyncRateLimitCount above.
-				MaxBlobBytes:       cfg.MaxBlobBytes,
-				ReadinessCheck:      store.CheckReady,
-				TrustedProxyCIDRs:   cfg.TrustedProxyCIDRs,
+				ManagedBridgeToken:   cfg.ManagedBridgeToken,
+				MetricsEnabled:       cfg.MetricsEnabled,
+				MetricsBearerToken:   cfg.MetricsBearerToken,
+				AllowedOrigins:       cfg.AllowedOrigins,
+				AllowedHosts:         cfg.AllowedHosts,
+				AuthRateLimitCount:   cfg.AuthRateLimitCount,
+				AuthRateLimitWindow:  cfg.AuthRateLimitWindow,
+				SyncRateLimitCount:   cfg.SyncRateLimitCount,  // codecov:ignore -- process wiring reached only by a full serve, same seam as ReadTimeout below; the values are covered by the config tests.
+				SyncRateLimitWindow:  cfg.SyncRateLimitWindow, // codecov:ignore -- same seam as SyncRateLimitCount above.
+				MaxBlobBytes:         cfg.MaxBlobBytes,
+				ReadinessCheck:       store.CheckReady,
+				TrustedProxyCIDRs:    cfg.TrustedProxyCIDRs,
+				RegistrationDisabled: !cfg.RegistrationEnabled, // codecov:ignore -- same seam as SyncRateLimitCount above; the gate is covered in internal/api and the value in the config tests.
 			},
 		),
 		ReadHeaderTimeout: 5 * time.Second,
