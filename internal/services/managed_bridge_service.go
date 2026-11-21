@@ -30,6 +30,10 @@ var ErrStaleEntitlementSignal = errors.New("stale_entitlement_signal")
 // none at all, or a self-hosted one, answered alike.
 var ErrManagedAccountNotFound = errors.New("managed_account_not_found")
 
+// ErrRecoveryKeyConflict: a bridge re-key whose expected fingerprint is not
+// the stored package's (or no package is stored); nothing was written.
+var ErrRecoveryKeyConflict = errors.New("recovery_key_conflict")
+
 // maxEntitlementSignalSkew bounds how far a signal's as-of may run ahead of
 // this server's clock: the stored ordering point only moves forward, so one
 // far-future as-of would otherwise mark every later lapse stale.
@@ -194,10 +198,18 @@ func (s *ManagedBridgeService) RevokeManagedAccountSessions(
 // An unknown account and a self-hosted one whose id matches both answer
 // ErrManagedAccountNotFound and write nothing: the bridge never writes to a
 // self-hosted account, and the answer does not tell the two apart.
+//
+// A non-nil expectedFingerprint (normalized and checked like the package's
+// phrase_fingerprint_hex, else ErrInvalidRecoveryPackage) makes the replace
+// conditional on the stored package carrying that fingerprint: otherwise
+// ErrRecoveryKeyConflict and nothing is written, unless the stored package
+// already equals the new one. nil keeps the unconditional replace, so a caller
+// that does not send it yet works unchanged.
 func (s *ManagedBridgeService) ReplaceManagedRecoveryKeyPackage(
 	ctx context.Context,
 	accountID string,
 	input PutRecoveryKeyPackageInput,
+	expectedFingerprint *string,
 ) error {
 	accountID, err := normalizeManagedAccountID(accountID)
 	if err != nil {
@@ -208,11 +220,21 @@ func (s *ManagedBridgeService) ReplaceManagedRecoveryKeyPackage(
 	if err := validateRecoveryKeyPackage(recoveryKeyPackage); err != nil {
 		return err
 	}
+	if expectedFingerprint != nil {
+		normalized := strings.TrimSpace(strings.ToLower(*expectedFingerprint))
+		if len(normalized) != 16 || !lowercaseHexPattern.MatchString(normalized) {
+			return ErrInvalidRecoveryPackage
+		}
+		expectedFingerprint = &normalized
+	}
 	recoveryKeyPackage.UpdatedAt = s.now().UTC()
 
-	err = s.store.ReplaceManagedRecoveryKeyPackage(ctx, recoveryKeyPackage)
-	if errors.Is(err, db.ErrNotFound) {
+	err = s.store.ReplaceManagedRecoveryKeyPackageExpecting(ctx, recoveryKeyPackage, expectedFingerprint)
+	switch {
+	case errors.Is(err, db.ErrNotFound):
 		return ErrManagedAccountNotFound
+	case errors.Is(err, db.ErrRecoveryKeyConflict):
+		return ErrRecoveryKeyConflict
 	}
 	return err
 }
