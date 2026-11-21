@@ -36,6 +36,7 @@ func TestNewHTTPServerRefusesAnOversizedHeaderBlock(t *testing.T) {
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() { _ = server.Shutdown(context.Background()) })
 
+	client := &http.Client{Timeout: 10 * time.Second}
 	url := "http://" + listener.Addr().String() + "/"
 	for _, c := range []struct {
 		padding int
@@ -50,7 +51,7 @@ func TestNewHTTPServerRefusesAnOversizedHeaderBlock(t *testing.T) {
 			t.Fatalf("new request: %v", err)
 		}
 		req.Header.Set("X-Padding", strings.Repeat("a", c.padding))
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatalf("padding %d: %v", c.padding, err)
 		}
