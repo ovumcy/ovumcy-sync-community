@@ -134,7 +134,7 @@ curl -fsS -X POST "${BASE_URL}/sync/devices" \
 curl -fsS -X PUT "${BASE_URL}/sync/recovery-key" \
   -H "Authorization: Bearer ${session_token}" \
   -H 'Content-Type: application/json' \
-  -d '{"algorithm":"xchacha20poly1305","kdf":"bip39_seed_hkdf_sha256","mnemonic_word_count":12,"wrap_nonce_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","wrapped_master_key_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","phrase_fingerprint_hex":"cccccccccccccccc","current_password":"'"${PASSWORD}"'"}' >/dev/null
+  -d '{"algorithm":"xchacha20poly1305","kdf":"bip39_seed_hkdf_sha256","mnemonic_word_count":12,"wrap_nonce_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","wrapped_master_key_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","phrase_fingerprint_hex":"cccccccccccccccc","current_password":"'"${PASSWORD}"'"}' >/dev/null
 
 curl -fsS "${BASE_URL}/sync/recovery-key" \
   -H "Authorization: Bearer ${session_token}" >/dev/null
