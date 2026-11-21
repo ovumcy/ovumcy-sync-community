@@ -345,6 +345,7 @@ func TestServerSyncRoutesEnforceSyncDisabled(t *testing.T) {
 		{http.MethodPut, "/sync/recovery-key", map[string]any{}},
 		{http.MethodGet, "/sync/blob", nil},
 		{http.MethodPut, "/sync/blob", map[string]any{}},
+		{http.MethodPut, "/sync/rekey", map[string]any{}},
 	}
 	for _, route := range routes {
 		response := performJSONRequest(t, handler, route.method, route.path, route.body, sessionToken, http.StatusForbidden)

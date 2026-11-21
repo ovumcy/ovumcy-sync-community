@@ -125,6 +125,7 @@ func (s *SyncService) Capabilities() models.CapabilityDocument {
 		AdvancedInsights:  false,
 		MaxDevices:        s.maxDevices,
 		MaxBlobBytes:      int64(s.maxBlobBytes),
+		AtomicRekey:       true,
 	}
 }
 
@@ -140,6 +141,7 @@ func (s *SyncService) CapabilitiesForAccount(account models.Account) models.Capa
 			AdvancedInsights:  false,
 			MaxDevices:        s.maxDevices,
 			MaxBlobBytes:      int64(s.maxBlobBytes),
+			AtomicRekey:       true,
 		}
 	}
 
@@ -288,35 +290,12 @@ func (s *SyncService) PutBlob(
 	sessionTokenHash string,
 	input PutBlobInput,
 ) (models.EncryptedBlob, error) {
-	if input.SchemaVersion <= 0 || input.Generation <= 0 || len(input.Ciphertext) == 0 {
-		return models.EncryptedBlob{}, ErrInvalidBlob
-	}
 	if input.ExpectedGeneration != nil && *input.ExpectedGeneration <= 0 {
 		return models.EncryptedBlob{}, ErrInvalidBlob
 	}
-	ceiling := maxAcceptableBlobGeneration(s.now())
-	if input.Generation > ceiling {
-		return models.EncryptedBlob{}, ErrInvalidBlob
-	}
-	if !checksumPattern.MatchString(strings.ToLower(strings.TrimSpace(input.ChecksumSHA256))) {
-		return models.EncryptedBlob{}, ErrInvalidBlob
-	}
-	if len(input.Ciphertext) > s.maxBlobBytes {
-		return models.EncryptedBlob{}, ErrInvalidBlob
-	}
-	sum := sha256.Sum256(input.Ciphertext)
-	if hex.EncodeToString(sum[:]) != strings.ToLower(strings.TrimSpace(input.ChecksumSHA256)) {
-		return models.EncryptedBlob{}, ErrInvalidBlob
-	}
-
-	blob := models.EncryptedBlob{
-		AccountID:      accountID,
-		SchemaVersion:  input.SchemaVersion,
-		Generation:     input.Generation,
-		ChecksumSHA256: strings.ToLower(strings.TrimSpace(input.ChecksumSHA256)),
-		Ciphertext:     input.Ciphertext,
-		CiphertextSize: len(input.Ciphertext),
-		UpdatedAt:      s.now().UTC(),
+	blob, ceiling, err := s.validatedBlob(accountID, input)
+	if err != nil {
+		return models.EncryptedBlob{}, err
 	}
 
 	// Atomic CAS in the repository: the WHERE excluded.generation >
@@ -335,6 +314,38 @@ func (s *SyncService) PutBlob(
 		return models.EncryptedBlob{}, err
 	}
 	return stored, nil
+}
+
+// validatedBlob runs every blob write's shape checks and returns the row to
+// store with the generation ceiling it was checked against.
+func (s *SyncService) validatedBlob(accountID string, input PutBlobInput) (models.EncryptedBlob, int64, error) {
+	if input.SchemaVersion <= 0 || input.Generation <= 0 || len(input.Ciphertext) == 0 {
+		return models.EncryptedBlob{}, 0, ErrInvalidBlob
+	}
+	ceiling := maxAcceptableBlobGeneration(s.now())
+	if input.Generation > ceiling {
+		return models.EncryptedBlob{}, 0, ErrInvalidBlob
+	}
+	checksum := strings.ToLower(strings.TrimSpace(input.ChecksumSHA256))
+	if !checksumPattern.MatchString(checksum) {
+		return models.EncryptedBlob{}, 0, ErrInvalidBlob
+	}
+	if len(input.Ciphertext) > s.maxBlobBytes {
+		return models.EncryptedBlob{}, 0, ErrInvalidBlob
+	}
+	sum := sha256.Sum256(input.Ciphertext)
+	if hex.EncodeToString(sum[:]) != checksum {
+		return models.EncryptedBlob{}, 0, ErrInvalidBlob
+	}
+	return models.EncryptedBlob{
+		AccountID:      accountID,
+		SchemaVersion:  input.SchemaVersion,
+		Generation:     input.Generation,
+		ChecksumSHA256: checksum,
+		Ciphertext:     input.Ciphertext,
+		CiphertextSize: len(input.Ciphertext),
+		UpdatedAt:      s.now().UTC(),
+	}, ceiling, nil
 }
 
 func (s *SyncService) GetBlob(ctx context.Context, accountID string) (models.EncryptedBlob, error) {

@@ -84,6 +84,7 @@ func TestSyncDisabledAnswerIsMetered(t *testing.T) {
 		{http.MethodPut, "/sync/recovery-key", 0},
 		{http.MethodGet, "/sync/blob", 1},
 		{http.MethodPut, "/sync/blob", 0},
+		{http.MethodPut, "/sync/rekey", 2},
 	}
 	for _, route := range routes {
 		for attempt := range route.refusals {

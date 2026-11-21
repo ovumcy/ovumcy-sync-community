@@ -181,6 +181,7 @@ func (s *Server) routes() {
 	s.handleRoute("PUT /sync/recovery-key", "sync_recovery_key_put", s.withAuth(s.requireSyncEnabled(s.allowSyncRequestForAccount, s.handlePutRecoveryKey)))
 	s.handleRoute("GET /sync/blob", "sync_blob_get", s.withAuth(s.requireSyncEnabled(s.allowSyncRequestForAccount, s.handleGetBlob)))
 	s.handleRoute("PUT /sync/blob", "sync_blob_put", s.withAuth(s.requireSyncEnabled(s.allowSyncRequestForAccount, s.handlePutBlob)))
+	s.handleRoute("PUT /sync/rekey", "sync_rekey_put", s.withAuth(s.requireSyncEnabled(s.allowSyncRequestForAccount, s.handlePutRekey)))
 }
 
 func (s *Server) handleRoute(pattern string, metricsRoute string, handler http.Handler) {
@@ -1379,6 +1380,91 @@ func (s *Server) handlePutRecoveryKey(
 	writeJSON(writer, http.StatusOK, recoveryKeyPackageResponseFromModel(recoveryKeyPackage))
 }
 
+// handlePutRekey implements PUT /sync/rekey: a recovery-key package and the
+// blob sealed under it, written in one transaction (services.SyncService.Rekey).
+// The blob slot is held from before the decode, as on PUT /sync/blob; the
+// step-up bucket is charged only for a package that differs from the stored
+// one, as on PUT /sync/recovery-key.
+func (s *Server) handlePutRekey(
+	writer http.ResponseWriter,
+	request *http.Request,
+	account models.Account,
+) {
+	if !s.acquireBlobSlot(request.Context()) {
+		return
+	}
+	defer s.releaseBlobSlot()
+
+	var payload rekeyRequest
+	if !decodeJSON(writer, request, &payload, s.maxBlobRequestBytes+8<<10) {
+		return
+	}
+	ciphertext, err := base64.StdEncoding.DecodeString(payload.Blob.CiphertextBase64)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, "invalid_ciphertext")
+		return
+	}
+	input := services.RekeyInput{
+		RecoveryKey: services.PutRecoveryKeyPackageInput{
+			Algorithm:            payload.RecoveryKey.Algorithm,
+			KDF:                  payload.RecoveryKey.KDF,
+			MnemonicWordCount:    payload.RecoveryKey.MnemonicWordCount,
+			WrapNonceHex:         payload.RecoveryKey.WrapNonceHex,
+			WrappedMasterKeyHex:  payload.RecoveryKey.WrappedMasterKeyHex,
+			PhraseFingerprintHex: payload.RecoveryKey.PhraseFingerprintHex,
+		},
+		Blob: services.PutBlobInput{
+			SchemaVersion:  payload.Blob.SchemaVersion,
+			Generation:     payload.Blob.Generation,
+			ChecksumSHA256: payload.Blob.ChecksumSHA256,
+			Ciphertext:     ciphertext,
+		},
+		ExpectedGeneration: payload.ExpectedGeneration,
+	}
+
+	_, isUnchanged, err := s.sync.UnchangedRecoveryKeyPackage(request.Context(), account.ID, input.RecoveryKey)
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, "internal_error")
+		return
+	}
+	checksPassword := !isUnchanged && account.Mode != "managed"
+	var stepUpSlot security.Reservation
+	if checksPassword {
+		var ok bool
+		if stepUpSlot, ok = s.allowStepUpAttempt(writer, account.ID); !ok {
+			return
+		}
+	}
+	stepUp := stepUpFromRequest(request, payload.CurrentPassword)
+	stepUp.TOTPCode = payload.Code
+	recoveryKeyPackage, blob, err := s.sync.Rekey(request.Context(), account.ID, stepUp, input)
+	if checksPassword {
+		s.settleStepUpAttempt(stepUpSlot, err)
+	}
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrInvalidRecoveryPackage):
+			writeError(writer, http.StatusBadRequest, "invalid_recovery_package")
+		case errors.Is(err, services.ErrInvalidBlob):
+			writeError(writer, http.StatusBadRequest, "invalid_blob")
+		case errors.Is(err, services.ErrStaleGeneration):
+			writeError(writer, http.StatusConflict, "stale_generation")
+		case errors.Is(err, services.ErrRecoveryKeyChanged):
+			writeError(writer, http.StatusConflict, "recovery_key_conflict")
+		case errors.Is(err, services.ErrManagedRecoveryKeyOverwrite):
+			writeError(writer, http.StatusForbidden, "managed_recovery_key_overwrite")
+		default:
+			mapTOTPError(writer, err)
+		}
+		return
+	}
+
+	writeJSON(writer, http.StatusOK, rekeyResponse{
+		RecoveryKey: recoveryKeyPackageResponseFromModel(recoveryKeyPackage),
+		Blob:        blobResponseFromModel(blob),
+	})
+}
+
 func (s *Server) handleGetBlob(
 	writer http.ResponseWriter,
 	request *http.Request,
@@ -1985,6 +2071,28 @@ type recoveryKeyPackageRequest struct {
 	PhraseFingerprintHex string `json:"phrase_fingerprint_hex"`
 	CurrentPassword      string `json:"current_password"`
 	Code                 string `json:"code"`
+}
+
+// rekeyRequest is PUT /sync/rekey's body. ExpectedGeneration is required
+// (0 = no blob stored yet).
+type rekeyRequest struct {
+	RecoveryKey        managedRecoveryKeyPackageRequest `json:"recovery_key"`
+	Blob               rekeyBlobRequest                 `json:"blob"`
+	ExpectedGeneration *int64                           `json:"expected_generation"`
+	CurrentPassword    string                           `json:"current_password"`
+	Code               string                           `json:"code"`
+}
+
+type rekeyBlobRequest struct {
+	SchemaVersion    int    `json:"schema_version"`
+	Generation       int64  `json:"generation"`
+	ChecksumSHA256   string `json:"checksum_sha256"`
+	CiphertextBase64 string `json:"ciphertext_base64"`
+}
+
+type rekeyResponse struct {
+	RecoveryKey recoveryKeyPackageResponse `json:"recovery_key"`
+	Blob        blobResponse               `json:"blob"`
 }
 
 type accountDeleteRequest struct {
