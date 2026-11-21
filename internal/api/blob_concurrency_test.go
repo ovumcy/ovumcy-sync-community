@@ -325,6 +325,18 @@ func TestBlobSlotWaitForStaysWellUnderTheHTTPTimeouts(t *testing.T) {
 	}
 }
 
+func TestFreeBlobSlotWinsOverAnExpiredWait(t *testing.T) {
+	handler := newTestServerWithOptions(t, serverTestOptions{syncRateLimitCount: 100, blobSlotWait: -time.Second})
+	token := registerForBlobTest(t, handler, "owner@example.com")
+	for range 50 {
+		transfer := startBlobTransfer(context.Background(), handler, http.MethodGet, token, nil)
+		<-transfer.done
+		if transfer.response.Code != http.StatusNotFound {
+			t.Fatalf("expected 404 with every slot free, got %d: %s", transfer.response.Code, transfer.response.Body.String())
+		}
+	}
+}
+
 func TestNewServerDefaultsTheBlobSlotWait(t *testing.T) {
 	handler := newTestServerWithOptions(t, serverTestOptions{})
 	if got := handler.(*Server).blobSlotWait; got != defaultBlobSlotWait {

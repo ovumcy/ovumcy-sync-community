@@ -1546,6 +1546,12 @@ func BlobSlotWaitFor(readTimeout, writeTimeout time.Duration) time.Duration {
 // context ends first, which without a BaseContext means the client is gone, it
 // writes nothing. Either failure takes no slot.
 func (s *Server) acquireBlobSlot(ctx context.Context, writer http.ResponseWriter) bool {
+	// A free slot must win even against an already-expired timer.
+	select {
+	case s.blobSlots <- struct{}{}:
+		return true
+	default:
+	}
 	timer := time.NewTimer(s.blobSlotWait)
 	defer timer.Stop()
 	select {
