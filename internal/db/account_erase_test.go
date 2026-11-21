@@ -21,7 +21,7 @@ var accountErases = []accountErase{
 		name: "session-authenticated delete",
 		mode: "self_hosted",
 		erase: func(ctx context.Context, store *Store, accountID string) error {
-			return store.DeleteAccountForSession(ctx, accountID, "hash", accountID+"-token-hash")
+			return store.DeleteAccountForSession(ctx, accountID, "hash", false, accountID+"-token-hash")
 		},
 	},
 	{

@@ -233,7 +233,9 @@ func (s *SyncService) ListDevices(ctx context.Context, accountID string) ([]mode
 // session alone can neither evict the owner's devices nor spend the step-up
 // TOTP budget. An account without TOTP needs only its session, as before.
 // Any credential change by another session revokes this one, which the
-// delete's session predicate catches.
+// delete's session predicate catches; one by this same session (a TOTP
+// enrollment, a password change) landing during the checks makes the delete
+// refuse as a stale verification (ErrInvalidCurrentPassword).
 func (s *SyncService) RemoveDevice(ctx context.Context, accountID string, stepUp StepUp, deviceID string) error {
 	deviceID = strings.TrimSpace(deviceID)
 	if deviceID == "" {
@@ -256,10 +258,19 @@ func (s *SyncService) RemoveDevice(ctx context.Context, accountID string, stepUp
 		}
 	}
 
-	if err := s.store.DeleteDevice(ctx, accountID, stepUp.SessionTokenHash, deviceID); err != nil {
+	if err := s.store.DeleteDevice(
+		ctx,
+		accountID,
+		stepUp.SessionTokenHash,
+		deviceID,
+		account.TOTPEnabled,
+		account.PasswordHash,
+	); err != nil {
 		switch {
 		case errors.Is(err, db.ErrSessionRevoked):
 			return ErrUnauthorized
+		case errors.Is(err, db.ErrConflict), errors.Is(err, db.ErrTOTPStateChanged):
+			return ErrInvalidCurrentPassword
 		case errors.Is(err, db.ErrNotFound):
 			return ErrDeviceNotFound
 		}
@@ -396,6 +407,7 @@ func (s *SyncService) PutRecoveryKeyPackage(
 		ctx,
 		recoveryKeyPackage,
 		account.PasswordHash,
+		account.TOTPEnabled,
 		stepUp.SessionTokenHash,
 	)
 	if err != nil {

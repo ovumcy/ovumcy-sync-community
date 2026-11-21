@@ -85,12 +85,13 @@ func checkStepUpPassword(account models.Account, currentPassword string) error {
 	return nil
 }
 
-// stepUpWriteError maps a step-up store write's refusal: a hash that moved
-// during the compare is a stale verification, a vanished session or account
-// is no longer an authenticated caller.
+// stepUpWriteError maps a step-up store write's refusal: a hash that moved, or
+// a TOTP enrollment that flipped, during the compare is a stale verification
+// (as in ChangePassword); a vanished session or account is no longer an
+// authenticated caller.
 func stepUpWriteError(err error) error {
 	switch {
-	case errors.Is(err, db.ErrConflict):
+	case errors.Is(err, db.ErrConflict), errors.Is(err, db.ErrTOTPStateChanged):
 		return ErrInvalidCurrentPassword
 	case errors.Is(err, db.ErrSessionRevoked), errors.Is(err, db.ErrNotFound):
 		return ErrUnauthorized

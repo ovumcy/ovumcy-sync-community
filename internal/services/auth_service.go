@@ -608,8 +608,8 @@ func (s *AuthService) RevokeSession(ctx context.Context, sessionToken string) er
 // and any pending TOTP login challenge — after the step-up re-authentication
 // (verifyStepUp), in a single transaction that also re-checks the verified
 // state (db.Store.DeleteAccountForSession), so a partial failure never leaves
-// the account half-erased and a password change or session revocation landing
-// during the bcrypt compare stops the erase.
+// the account half-erased and a password change, a TOTP enrollment or a
+// session revocation landing during the bcrypt compare stops the erase.
 //
 // accountID must come from the caller's own authenticated session
 // (models.Account.ID from AuthService.Authenticate), never from a
@@ -635,7 +635,7 @@ func (s *AuthService) DeleteAccount(ctx context.Context, accountID string, stepU
 		err = verifyStepUpCode(ctx, s.totpChallenges, account, stepUp.TOTPCode)
 	}
 	if err == nil {
-		err = s.store.DeleteAccountForSession(ctx, accountID, account.PasswordHash, stepUp.SessionTokenHash)
+		err = s.store.DeleteAccountForSession(ctx, accountID, account.PasswordHash, account.TOTPEnabled, stepUp.SessionTokenHash)
 	}
 	// The account gone at the read (ErrUnauthorized) or at the write
 	// (db.ErrNotFound) is the end state the caller asked for.
