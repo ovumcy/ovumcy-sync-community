@@ -71,18 +71,7 @@ func TestServerPutRekeyStoreFailureIsInternal(t *testing.T) {
 func TestServerPutRekeyWaitingForASlotEndsWithItsClient(t *testing.T) {
 	handler := newTestServerWithOptions(t, serverTestOptions{syncRateLimitCount: 100})
 	token := registerForBlobTest(t, handler, "owner@example.com")
-	payload := blobPutPayload(t)
-
-	held := make([]*pendingTransfer, 0, maxConcurrentBlobTransfers)
-	for range maxConcurrentBlobTransfers {
-		transfer := startBlobTransfer(context.Background(), handler, http.MethodPut, token, newGatedBody(t, payload))
-		select {
-		case <-transfer.body.started:
-		case <-time.After(blobSlotWait):
-			t.Fatal("a PUT under the cap never reached its body")
-		}
-		held = append(held, transfer)
-	}
+	held := holdEveryBlobSlot(t, handler, blobPutPayload(t))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	body := newGatedBody(t, []byte(`{}`))

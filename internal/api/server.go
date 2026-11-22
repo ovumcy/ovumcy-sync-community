@@ -18,6 +18,7 @@ import (
 	"net/netip"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -44,9 +45,10 @@ type Server struct {
 	trustedProxyCIDRs   []netip.Prefix
 	maxBlobRequestBytes int64
 	blobSlots           chan struct{}
+	blobAccounts        sync.Map // account IDs with a blob transfer holding or awaiting a slot
 	blobSlotWait        time.Duration
 	blobBusyRetryAfter  int64
-	readinessCheck     func(context.Context) error
+	readinessCheck      func(context.Context) error
 	mux                 *http.ServeMux
 }
 
@@ -1288,10 +1290,10 @@ func (s *Server) handlePutBlob(
 	account models.Account,
 ) {
 
-	if !s.acquireBlobSlot(request.Context(), writer) {
+	if !s.acquireBlobSlot(request.Context(), writer, account.ID) {
 		return
 	}
-	defer s.releaseBlobSlot()
+	defer s.releaseBlobSlot(account.ID)
 
 	var payload blobPutRequest
 	if !decodeJSON(writer, request, &payload, s.maxBlobRequestBytes) {
@@ -1398,10 +1400,10 @@ func (s *Server) handlePutRekey(
 	request *http.Request,
 	account models.Account,
 ) {
-	if !s.acquireBlobSlot(request.Context(), writer) {
+	if !s.acquireBlobSlot(request.Context(), writer, account.ID) {
 		return
 	}
-	defer s.releaseBlobSlot()
+	defer s.releaseBlobSlot(account.ID)
 
 	var payload rekeyRequest
 	if !decodeJSON(writer, request, &payload, s.maxBlobRequestBytes+8<<10) {
@@ -1479,10 +1481,10 @@ func (s *Server) handleGetBlob(
 	request *http.Request,
 	account models.Account,
 ) {
-	if !s.acquireBlobSlot(request.Context(), writer) {
+	if !s.acquireBlobSlot(request.Context(), writer, account.ID) {
 		return
 	}
-	defer s.releaseBlobSlot()
+	defer s.releaseBlobSlot(account.ID)
 
 	blob, err := s.sync.GetBlob(request.Context(), account.ID)
 	if err != nil {
@@ -1641,13 +1643,27 @@ func BlobSlotWaitFor(readTimeout, writeTimeout time.Duration) time.Duration {
 	return max(wait, time.Nanosecond)
 }
 
-// acquireBlobSlot waits up to blobSlotWait for a blob transfer slot. Past the
-// bound it answers 503 blob_transfer_busy with Retry-After. When the request
-// context ends first it writes nothing. Either failure takes no slot.
-func (s *Server) acquireBlobSlot(ctx context.Context, writer http.ResponseWriter) bool {
+// acquireBlobSlot admits one transfer per account: while the account's first
+// transfer holds or awaits a slot, a second answers 503 blob_transfer_busy at
+// once, so a few accounts cannot hold every slot. Otherwise it waits up to
+// blobSlotWait for a slot and past the bound answers the same 503. When the
+// request context ends first it writes nothing. A failure takes no slot and
+// leaves no account mark behind.
+func (s *Server) acquireBlobSlot(ctx context.Context, writer http.ResponseWriter, accountID string) bool {
+	if _, busy := s.blobAccounts.LoadOrStore(accountID, struct{}{}); busy {
+		s.writeBlobTransferBusy(writer)
+		return false
+	}
+	acquired := false
+	defer func() {
+		if !acquired {
+			s.blobAccounts.Delete(accountID)
+		}
+	}()
 	// A free slot must win even against an already-expired timer.
 	select {
 	case s.blobSlots <- struct{}{}:
+		acquired = true
 		return true
 	default:
 	}
@@ -1655,18 +1671,24 @@ func (s *Server) acquireBlobSlot(ctx context.Context, writer http.ResponseWriter
 	defer timer.Stop()
 	select {
 	case s.blobSlots <- struct{}{}:
+		acquired = true
 		return true
 	case <-ctx.Done():
 		return false
 	case <-timer.C:
-		writer.Header().Set("Retry-After", fmt.Sprint(s.blobBusyRetryAfter))
-		writeError(writer, http.StatusServiceUnavailable, "blob_transfer_busy")
+		s.writeBlobTransferBusy(writer)
 		return false
 	}
 }
 
-func (s *Server) releaseBlobSlot() {
+func (s *Server) writeBlobTransferBusy(writer http.ResponseWriter) {
+	writer.Header().Set("Retry-After", fmt.Sprint(s.blobBusyRetryAfter))
+	writeError(writer, http.StatusServiceUnavailable, "blob_transfer_busy")
+}
+
+func (s *Server) releaseBlobSlot(accountID string) {
 	<-s.blobSlots
+	s.blobAccounts.Delete(accountID)
 }
 
 const unauthenticatedRateLimitKeyPrefix = "unauthenticated:"

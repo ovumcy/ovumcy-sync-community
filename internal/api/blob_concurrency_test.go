@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -105,20 +106,48 @@ const blobSlotWait = 5 * time.Second
 // should not have reads its body within microseconds.
 const blobSlotSilence = 200 * time.Millisecond
 
-func TestConcurrentBlobTransfersNeverExceedTheCap(t *testing.T) {
-	handler := newTestServerWithOptions(t, serverTestOptions{syncRateLimitCount: 100, blobSlotWait: time.Minute})
-	tokens := []string{
-		registerForBlobTest(t, handler, "first@example.com"),
-		registerForBlobTest(t, handler, "second@example.com"),
+// holdEveryBlobSlot fills every slot with a gated PUT, one account per slot as
+// the per-account cap requires.
+func holdEveryBlobSlot(t *testing.T, handler http.Handler, payload []byte) []*pendingTransfer {
+	t.Helper()
+	held := make([]*pendingTransfer, 0, maxConcurrentBlobTransfers)
+	for i := range maxConcurrentBlobTransfers {
+		token := registerForBlobTest(t, handler, fmt.Sprintf("holder%d@example.com", i))
+		transfer := startBlobTransfer(context.Background(), handler, http.MethodPut, token, newGatedBody(t, payload))
+		select {
+		case <-transfer.body.started:
+		case <-time.After(blobSlotWait):
+			t.Fatal("a PUT under the cap never reached its body")
+		}
+		held = append(held, transfer)
 	}
+	return held
+}
+
+func expectBlobTransferBusy(t *testing.T, response *httptest.ResponseRecorder, retryAfter string) {
+	t.Helper()
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d: %s", response.Code, response.Body.String())
+	}
+	expectErrorKey(t, response.Body.Bytes(), "blob_transfer_busy")
+	if got := response.Header().Get("Retry-After"); got != retryAfter {
+		t.Fatalf("Retry-After = %q, want %s", got, retryAfter)
+	}
+}
+
+func TestConcurrentBlobTransfersNeverExceedTheCap(t *testing.T) {
+	handler := newTestServerWithOptions(t, serverTestOptions{authRateLimitCount: 100, syncRateLimitCount: 100, blobSlotWait: time.Minute})
 	payload := blobPutPayload(t)
 
-	// Twice the cap, across two accounts: the bound is server-wide.
-	const total = 2 * maxConcurrentBlobTransfers
+	// More transfers than slots, one account each: distinct accounts share
+	// the server-wide bound.
+	const total = maxConcurrentBlobTransfers + 2
 	transfers := make([]*pendingTransfer, 0, total)
 	for i := range total {
-		transfers = append(transfers, startBlobTransfer(context.Background(), handler, http.MethodPut, tokens[i%2], newGatedBody(t, payload)))
+		token := registerForBlobTest(t, handler, fmt.Sprintf("account%d@example.com", i))
+		transfers = append(transfers, startBlobTransfer(context.Background(), handler, http.MethodPut, token, newGatedBody(t, payload)))
 	}
+	readerToken := registerForBlobTest(t, handler, "reader@example.com")
 
 	reading := func() []*pendingTransfer {
 		var started []*pendingTransfer
@@ -143,7 +172,7 @@ func TestConcurrentBlobTransfersNeverExceedTheCap(t *testing.T) {
 	}
 
 	// A GET needs a slot too.
-	get := startBlobTransfer(context.Background(), handler, http.MethodGet, tokens[0], nil)
+	get := startBlobTransfer(context.Background(), handler, http.MethodGet, readerToken, nil)
 	select {
 	case <-get.done:
 		t.Fatalf("GET finished while every slot was held: %d", get.response.Code)
@@ -192,23 +221,14 @@ func TestConcurrentBlobTransfersNeverExceedTheCap(t *testing.T) {
 
 func TestBlobTransferWaitingForASlotEndsWithItsClient(t *testing.T) {
 	handler := newTestServerWithOptions(t, serverTestOptions{syncRateLimitCount: 100, blobSlotWait: time.Minute})
-	token := registerForBlobTest(t, handler, "owner@example.com")
 	payload := blobPutPayload(t)
-
-	held := make([]*pendingTransfer, 0, maxConcurrentBlobTransfers)
-	for range maxConcurrentBlobTransfers {
-		transfer := startBlobTransfer(context.Background(), handler, http.MethodPut, token, newGatedBody(t, payload))
-		select {
-		case <-transfer.body.started:
-		case <-time.After(blobSlotWait):
-			t.Fatal("a PUT under the cap never reached its body")
-		}
-		held = append(held, transfer)
-	}
+	held := holdEveryBlobSlot(t, handler, payload)
+	token := registerForBlobTest(t, handler, "owner@example.com")
+	readerToken := registerForBlobTest(t, handler, "reader@example.com")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	waiter := startBlobTransfer(ctx, handler, http.MethodPut, token, newGatedBody(t, payload))
-	getWaiter := startBlobTransfer(ctx, handler, http.MethodGet, token, nil)
+	getWaiter := startBlobTransfer(ctx, handler, http.MethodGet, readerToken, nil)
 	time.Sleep(blobSlotSilence)
 	select {
 	case <-getWaiter.done:
@@ -229,15 +249,15 @@ func TestBlobTransferWaitingForASlotEndsWithItsClient(t *testing.T) {
 	default:
 	}
 
-	// The abandoned wait took no slot: after one holder finishes, a new PUT
-	// still gets in.
+	// The abandoned waits took no slot and left no account mark: after one
+	// holder finishes, the waiters' accounts get in again.
 	held[0].body.release()
 	<-held[0].done
 	next := startBlobTransfer(context.Background(), handler, http.MethodPut, token, newGatedBody(t, payload))
 	select {
 	case <-next.body.started:
 	case <-time.After(blobSlotWait):
-		t.Fatal("a slot was lost to the abandoned wait")
+		t.Fatal("a slot or the account mark was lost to the abandoned wait")
 	}
 	next.body.release()
 	<-next.done
@@ -245,29 +265,22 @@ func TestBlobTransferWaitingForASlotEndsWithItsClient(t *testing.T) {
 		transfer.body.release()
 		<-transfer.done
 	}
+	performJSONRequest(t, handler, http.MethodGet, "/sync/blob", nil, readerToken, http.StatusNotFound)
 }
 
 func TestBlobTransferWaitingPastTheBoundGetsBusyNotInvalidJSON(t *testing.T) {
 	const bound = 300 * time.Millisecond
-	handler := newTestServerWithOptions(t, serverTestOptions{syncRateLimitCount: 10, syncRateLimitWindow: time.Minute, blobSlotWait: bound})
-	token := registerForBlobTest(t, handler, "owner@example.com")
+	handler := newTestServerWithOptions(t, serverTestOptions{authRateLimitCount: 100, syncRateLimitCount: 10, syncRateLimitWindow: time.Minute, blobSlotWait: bound})
 	payload := blobPutPayload(t)
-
-	held := make([]*pendingTransfer, 0, maxConcurrentBlobTransfers)
-	for range maxConcurrentBlobTransfers {
-		transfer := startBlobTransfer(context.Background(), handler, http.MethodPut, token, newGatedBody(t, payload))
-		select {
-		case <-transfer.body.started:
-		case <-time.After(blobSlotWait):
-			t.Fatal("a PUT under the cap never reached its body")
-		}
-		held = append(held, transfer)
-	}
+	held := holdEveryBlobSlot(t, handler, payload)
+	token := registerForBlobTest(t, handler, "owner@example.com")
+	getToken := registerForBlobTest(t, handler, "reader@example.com")
+	rekeyToken := registerForBlobTest(t, handler, "rekeyer@example.com")
 
 	started := time.Now()
 	putWaiter := startBlobTransfer(context.Background(), handler, http.MethodPut, token, newGatedBody(t, payload))
-	getWaiter := startBlobTransfer(context.Background(), handler, http.MethodGet, token, nil)
-	rekeyWaiter := startSlotTransfer(context.Background(), handler, http.MethodPut, "/sync/rekey", token, newGatedBody(t, payload))
+	getWaiter := startBlobTransfer(context.Background(), handler, http.MethodGet, getToken, nil)
+	rekeyWaiter := startSlotTransfer(context.Background(), handler, http.MethodPut, "/sync/rekey", rekeyToken, newGatedBody(t, payload))
 	for _, waiter := range []*pendingTransfer{putWaiter, getWaiter, rekeyWaiter} {
 		select {
 		case <-waiter.done:
@@ -277,18 +290,8 @@ func TestBlobTransferWaitingPastTheBoundGetsBusyNotInvalidJSON(t *testing.T) {
 		if elapsed := time.Since(started); elapsed < bound {
 			t.Fatalf("answered after %v, before the %v bound", elapsed, bound)
 		}
-		if waiter.response.Code != http.StatusServiceUnavailable {
-			t.Fatalf("expected 503, got %d: %s", waiter.response.Code, waiter.response.Body.String())
-		}
-		var body map[string]string
-		decodeResponse(t, waiter.response.Body.Bytes(), &body)
-		if body["error"] != "blob_transfer_busy" {
-			t.Fatalf("error key = %q, want blob_transfer_busy", body["error"])
-		}
 		// 10 per minute paces retries at one per 6 s.
-		if got := waiter.response.Header().Get("Retry-After"); got != "6" {
-			t.Fatalf("Retry-After = %q, want 6", got)
-		}
+		expectBlobTransferBusy(t, waiter.response, "6")
 	}
 	for _, refused := range []*pendingTransfer{putWaiter, rekeyWaiter} {
 		select {
@@ -298,18 +301,85 @@ func TestBlobTransferWaitingPastTheBoundGetsBusyNotInvalidJSON(t *testing.T) {
 		}
 	}
 
-	// The refused waits took no slot: a freed slot still admits a new PUT.
+	// The refused waits took no slot and left no account mark: a freed slot
+	// still admits a new PUT from a refused account.
 	held[0].body.release()
 	<-held[0].done
 	next := startBlobTransfer(context.Background(), handler, http.MethodPut, token, newGatedBody(t, payload))
 	select {
 	case <-next.body.started:
 	case <-time.After(blobSlotWait):
-		t.Fatal("a slot was lost to a refused wait")
+		t.Fatal("a slot or the account mark was lost to a refused wait")
 	}
 	next.body.release()
 	<-next.done
 	for _, transfer := range held[1:] {
+		transfer.body.release()
+		<-transfer.done
+	}
+	for _, refusedToken := range []string{getToken, rekeyToken} {
+		performJSONRequest(t, handler, http.MethodGet, "/sync/blob", nil, refusedToken, http.StatusNotFound)
+	}
+}
+
+// One account holds at most one slot: while its first transfer, a blob PUT or
+// a re-key, holds a slot, every further blob transfer of that account answers
+// 503 at once, reads no body, takes no slot and leaves the first's mark in
+// place; other accounts keep every remaining slot.
+func TestSecondBlobTransferFromOneAccountIsRefusedAtOnce(t *testing.T) {
+	handler := newTestServerWithOptions(t, serverTestOptions{syncRateLimitCount: 20, syncRateLimitWindow: time.Minute, blobSlotWait: time.Minute})
+	token := registerForBlobTest(t, handler, "owner@example.com")
+	payload := blobPutPayload(t)
+
+	for _, firstPath := range []string{"/sync/blob", "/sync/rekey"} {
+		first := startSlotTransfer(context.Background(), handler, http.MethodPut, firstPath, token, newGatedBody(t, payload))
+		select {
+		case <-first.body.started:
+		case <-time.After(blobSlotWait):
+			t.Fatalf("PUT %s never reached its body", firstPath)
+		}
+
+		seconds := []struct {
+			method, path string
+			body         *gatedBody
+		}{
+			{http.MethodPut, "/sync/blob", newGatedBody(t, payload)},
+			{http.MethodGet, "/sync/blob", nil},
+			{http.MethodPut, "/sync/rekey", newGatedBody(t, payload)},
+		}
+		for _, second := range seconds {
+			started := time.Now()
+			refused := startSlotTransfer(context.Background(), handler, second.method, second.path, token, second.body)
+			select {
+			case <-refused.done:
+			case <-time.After(blobSlotWait):
+				t.Fatalf("%s %s behind PUT %s waited for a slot instead of being refused", second.method, second.path, firstPath)
+			}
+			if elapsed := time.Since(started); elapsed >= blobSlotWait {
+				t.Fatalf("%s %s refused after %v", second.method, second.path, elapsed)
+			}
+			// 20 per minute paces retries at one per 3 s.
+			expectBlobTransferBusy(t, refused.response, "3")
+			if second.body != nil {
+				select {
+				case <-second.body.started:
+					t.Fatalf("a refused %s %s read its body", second.method, second.path)
+				default:
+				}
+			}
+		}
+
+		first.body.release()
+		<-first.done
+		if first.response.Code == http.StatusServiceUnavailable {
+			t.Fatalf("PUT %s holding the slot answered 503: %s", firstPath, first.response.Body.String())
+		}
+	}
+
+	// The finished transfers released the mark, and the six refusals took no
+	// slot: the owner gets in again and every slot is still free.
+	performJSONRequest(t, handler, http.MethodGet, "/sync/blob", nil, token, http.StatusOK)
+	for _, transfer := range holdEveryBlobSlot(t, handler, payload) {
 		transfer.body.release()
 		<-transfer.done
 	}
