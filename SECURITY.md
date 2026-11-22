@@ -59,9 +59,11 @@ snapshot.
 - **Blob slots held by four accounts.** Each account holds at most one of the
   4 server-wide blob-transfer slots, so stalling every slot takes 4 signed-in
   accounts, each sending its upload body slowly or reading its download
-  slowly. Until `HTTP_READ_TIMEOUT` / `HTTP_WRITE_TIMEOUT` ends those
-  requests, every other account's blob transfer answers `503
-  blob_transfer_busy`; nothing is lost or written. Accepted: on a host open to
+  slowly. `HTTP_READ_TIMEOUT` / `HTTP_WRITE_TIMEOUT` end each such request,
+  but the accounts can start the next at once, so the stall lasts as long as
+  they keep repeating within their per-route sync budget; meanwhile other
+  accounts' blob transfers mostly answer `503 blob_transfer_busy`. Nothing is
+  lost or written. Accepted: on a host open to
   strangers, `REGISTRATION_ENABLED=false` keeps the accounts that can do this
   to the ones the operator created.
 - **Password-guess ceiling and fixed windows.** The login-identifier bucket

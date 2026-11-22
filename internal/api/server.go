@@ -1620,9 +1620,10 @@ const defaultBlobSlotWait = 2 * time.Second
 // blob_transfer_busy: a slot frees when any transfer finishes.
 const minBlobTransferBusyRetryAfterSeconds = 2
 
-// blobTransferBusyRetryAfter paces retries at the sync budget's average rate,
-// so a client honouring Retry-After never runs the shared per-account sync
-// bucket into 429: each refused request is metered.
+// blobTransferBusyRetryAfter paces retries at the sync budget's average rate:
+// each refused request is metered against the route's per-account bucket, so
+// retries alone stay inside it, though the account's other requests on the
+// same route (another device's transfer) still draw on it.
 func blobTransferBusyRetryAfter(syncCount int, syncWindow time.Duration) int64 {
 	if syncCount <= 0 || syncWindow <= 0 {
 		return minBlobTransferBusyRetryAfterSeconds
