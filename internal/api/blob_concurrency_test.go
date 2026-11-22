@@ -68,13 +68,17 @@ type pendingTransfer struct {
 }
 
 func startBlobTransfer(ctx context.Context, handler http.Handler, method, token string, body *gatedBody) *pendingTransfer {
+	return startSlotTransfer(ctx, handler, method, "/sync/blob", token, body)
+}
+
+func startSlotTransfer(ctx context.Context, handler http.Handler, method, path, token string, body *gatedBody) *pendingTransfer {
 	transfer := &pendingTransfer{body: body, response: httptest.NewRecorder(), done: make(chan struct{})}
 	var request *http.Request
 	if body != nil {
-		request = httptest.NewRequestWithContext(ctx, method, "/sync/blob", body)
+		request = httptest.NewRequestWithContext(ctx, method, path, body)
 		request.Header.Set("Content-Type", "application/json")
 	} else {
-		request = httptest.NewRequestWithContext(ctx, method, "/sync/blob", nil)
+		request = httptest.NewRequestWithContext(ctx, method, path, nil)
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
 	go func() {
@@ -263,7 +267,8 @@ func TestBlobTransferWaitingPastTheBoundGetsBusyNotInvalidJSON(t *testing.T) {
 	started := time.Now()
 	putWaiter := startBlobTransfer(context.Background(), handler, http.MethodPut, token, newGatedBody(t, payload))
 	getWaiter := startBlobTransfer(context.Background(), handler, http.MethodGet, token, nil)
-	for _, waiter := range []*pendingTransfer{putWaiter, getWaiter} {
+	rekeyWaiter := startSlotTransfer(context.Background(), handler, http.MethodPut, "/sync/rekey", token, newGatedBody(t, payload))
+	for _, waiter := range []*pendingTransfer{putWaiter, getWaiter, rekeyWaiter} {
 		select {
 		case <-waiter.done:
 		case <-time.After(blobSlotWait):
@@ -285,10 +290,12 @@ func TestBlobTransferWaitingPastTheBoundGetsBusyNotInvalidJSON(t *testing.T) {
 			t.Fatalf("Retry-After = %q, want 6", got)
 		}
 	}
-	select {
-	case <-putWaiter.body.started:
-		t.Fatal("a refused PUT read its body")
-	default:
+	for _, refused := range []*pendingTransfer{putWaiter, rekeyWaiter} {
+		select {
+		case <-refused.body.started:
+			t.Fatal("a refused PUT read its body")
+		default:
+		}
 	}
 
 	// The refused waits took no slot: a freed slot still admits a new PUT.

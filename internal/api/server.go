@@ -1398,7 +1398,7 @@ func (s *Server) handlePutRekey(
 	request *http.Request,
 	account models.Account,
 ) {
-	if !s.acquireBlobSlot(request.Context()) {
+	if !s.acquireBlobSlot(request.Context(), writer) {
 		return
 	}
 	defer s.releaseBlobSlot()
