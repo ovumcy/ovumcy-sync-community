@@ -50,8 +50,8 @@ info:
     body is read or its blob loaded, for at most a quarter of the shorter of the
     server's HTTP read/write timeouts and never over 2 seconds; a transfer still
     waiting then answers `503 blob_transfer_busy` with `Retry-After` (the
-    `BlobTransferBusy` response) and may be retried. A refused wait reads no
-    body and takes no slot.
+    `BlobTransferBusy` response) and may be retried. A refused wait takes no
+    slot and parses no body, and still counts against the sync rate limit.
 
     Outside the JSON error envelope: an unknown path or a method the path does
     not take gets the standard library's plain-text `404` / `405` (the latter
@@ -2004,15 +2004,17 @@ components:
       description: |
         Every blob transfer slot stayed busy for the whole bounded wait (at most a
         quarter of the shorter HTTP read/write timeout, never over 2 seconds).
-        Nothing was read or written; retry after `Retry-After` seconds. Browser
+        No body was parsed and nothing was written. The refusal counts against
+        the per-account sync rate limit; retrying after `Retry-After` seconds
+        keeps a client inside it. Browser
         clients on an allowed origin can read `Retry-After`: it is listed in
         `Access-Control-Expose-Headers`.
       headers:
         Retry-After:
-          description: Seconds until the caller may retry (always 2).
+          description: Seconds until the caller may retry: SYNC_RATE_LIMIT_WINDOW / SYNC_RATE_LIMIT_COUNT rounded up, at least 2 (6 at the defaults).
           schema:
             type: string
-            example: "2"
+            example: "6"
       content:
         application/json:
           schema:
