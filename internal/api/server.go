@@ -1451,7 +1451,7 @@ func (s *Server) handlePutRekey(
 		case errors.Is(err, services.ErrStaleGeneration):
 			writeError(writer, http.StatusConflict, "stale_generation")
 		case errors.Is(err, services.ErrRecoveryKeyChanged):
-			writeError(writer, http.StatusConflict, "recovery_key_conflict")
+			writeError(writer, http.StatusConflict, "recovery_key_conflict") // codecov:ignore -- TOCTOU race: the package is replaced between this handler's unchanged read and the write's in-transaction re-check; not deterministically reachable in-process, and the refusal itself is covered by TestRekeyKeepPackageRefusesAReplacedPackage and TestReplaceRecoveryKeyAndBlobKeepModeRefusesAChangedPackage.
 		case errors.Is(err, services.ErrManagedRecoveryKeyOverwrite):
 			writeError(writer, http.StatusForbidden, "managed_recovery_key_overwrite")
 		default:
