@@ -45,7 +45,7 @@ info:
     `415 unsupported_media_type` on any route, including routes that read no
     body, before any rate limiter.
 
-    `PUT /sync/blob` and `GET /sync/blob` share a server-wide limit of 4
+    `PUT /sync/blob`, `GET /sync/blob` and `PUT /sync/rekey` share a server-wide limit of 4
     transfers in progress. A further transfer waits for a free slot before its
     body is read or its blob loaded, for at most a quarter of the shorter of the
     server's HTTP read/write timeouts and never over 2 seconds; a transfer still
@@ -1945,11 +1945,21 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
         "503":
-          description: "`totp_not_configured`: the account has TOTP enrolled, the package differs, and the server has no `FIELD_ENCRYPTION_KEY` (fails closed)."
+          description: "`totp_not_configured`: the account has TOTP enrolled, the package differs, and the server has no `FIELD_ENCRYPTION_KEY` (fails closed). `blob_transfer_busy`: every blob transfer slot stayed busy for the bounded wait; retry after `Retry-After` seconds (see the `BlobTransferBusy` response)."
+          headers:
+            Retry-After:
+              description: Sent with `blob_transfer_busy` only, as on the `BlobTransferBusy` response.
+              schema:
+                type: string
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                totpNotConfigured:
+                  value: { error: totp_not_configured }
+                blobTransferBusy:
+                  value: { error: blob_transfer_busy }
 
 components:
   securitySchemes:
