@@ -45,7 +45,8 @@ type Server struct {
 	maxBlobRequestBytes int64
 	blobSlots           chan struct{}
 	blobSlotWait        time.Duration
-	readinessCheck      func(context.Context) error
+	blobBusyRetryAfter  int64
+	readinessCheck     func(context.Context) error
 	mux                 *http.ServeMux
 }
 
@@ -119,6 +120,7 @@ func NewServer(
 		maxBlobRequestBytes: encodedBlobRequestLimit(options.MaxBlobBytes),
 		blobSlots:           make(chan struct{}, maxConcurrentBlobTransfers),
 		blobSlotWait:        cmp.Or(options.BlobSlotWait, defaultBlobSlotWait),
+		blobBusyRetryAfter:  blobTransferBusyRetryAfter(syncCount, syncWindow),
 		readinessCheck:      options.ReadinessCheck,
 		mux:                 http.NewServeMux(),
 	}
@@ -1612,12 +1614,23 @@ const maxConcurrentBlobTransfers = 4
 // still has most of the default 10 s HTTP_READ_TIMEOUT left for its body.
 const defaultBlobSlotWait = 2 * time.Second
 
-// blobTransferBusyRetryAfterSeconds is the Retry-After on 503
+// minBlobTransferBusyRetryAfterSeconds floors the Retry-After on 503
 // blob_transfer_busy: a slot frees when any transfer finishes.
-const blobTransferBusyRetryAfterSeconds = 2
+const minBlobTransferBusyRetryAfterSeconds = 2
+
+// blobTransferBusyRetryAfter paces retries at the sync budget's average rate,
+// so a client honouring Retry-After never runs the shared per-account sync
+// bucket into 429: each refused request is metered.
+func blobTransferBusyRetryAfter(syncCount int, syncWindow time.Duration) int64 {
+	if syncCount <= 0 || syncWindow <= 0 {
+		return minBlobTransferBusyRetryAfterSeconds
+	}
+	return max(int64(math.Ceil(syncWindow.Seconds()/float64(syncCount))), minBlobTransferBusyRetryAfterSeconds)
+}
 
 // BlobSlotWaitFor bounds the slot wait at a quarter of the shorter HTTP
-// timeout, at most defaultBlobSlotWait; a non-positive timeout is ignored.
+// timeout, at most defaultBlobSlotWait and at least 1ns (zero would mean the
+// default); a non-positive timeout is ignored.
 func BlobSlotWaitFor(readTimeout, writeTimeout time.Duration) time.Duration {
 	wait := defaultBlobSlotWait
 	for _, timeout := range []time.Duration{readTimeout, writeTimeout} {
@@ -1625,13 +1638,12 @@ func BlobSlotWaitFor(readTimeout, writeTimeout time.Duration) time.Duration {
 			wait = min(wait, timeout/4)
 		}
 	}
-	return wait
+	return max(wait, time.Nanosecond)
 }
 
 // acquireBlobSlot waits up to blobSlotWait for a blob transfer slot. Past the
 // bound it answers 503 blob_transfer_busy with Retry-After. When the request
-// context ends first, which without a BaseContext means the client is gone, it
-// writes nothing. Either failure takes no slot.
+// context ends first it writes nothing. Either failure takes no slot.
 func (s *Server) acquireBlobSlot(ctx context.Context, writer http.ResponseWriter) bool {
 	// A free slot must win even against an already-expired timer.
 	select {
@@ -1647,7 +1659,7 @@ func (s *Server) acquireBlobSlot(ctx context.Context, writer http.ResponseWriter
 	case <-ctx.Done():
 		return false
 	case <-timer.C:
-		writer.Header().Set("Retry-After", fmt.Sprint(blobTransferBusyRetryAfterSeconds))
+		writer.Header().Set("Retry-After", fmt.Sprint(s.blobBusyRetryAfter))
 		writeError(writer, http.StatusServiceUnavailable, "blob_transfer_busy")
 		return false
 	}

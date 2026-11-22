@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -246,7 +245,7 @@ func TestBlobTransferWaitingForASlotEndsWithItsClient(t *testing.T) {
 
 func TestBlobTransferWaitingPastTheBoundGetsBusyNotInvalidJSON(t *testing.T) {
 	const bound = 300 * time.Millisecond
-	handler := newTestServerWithOptions(t, serverTestOptions{syncRateLimitCount: 100, blobSlotWait: bound})
+	handler := newTestServerWithOptions(t, serverTestOptions{syncRateLimitCount: 10, syncRateLimitWindow: time.Minute, blobSlotWait: bound})
 	token := registerForBlobTest(t, handler, "owner@example.com")
 	payload := blobPutPayload(t)
 
@@ -281,8 +280,9 @@ func TestBlobTransferWaitingPastTheBoundGetsBusyNotInvalidJSON(t *testing.T) {
 		if body["error"] != "blob_transfer_busy" {
 			t.Fatalf("error key = %q, want blob_transfer_busy", body["error"])
 		}
-		if got := waiter.response.Header().Get("Retry-After"); got != fmt.Sprint(blobTransferBusyRetryAfterSeconds) {
-			t.Fatalf("Retry-After = %q, want %d", got, blobTransferBusyRetryAfterSeconds)
+		// 10 per minute paces retries at one per 6 s.
+		if got := waiter.response.Header().Get("Retry-After"); got != "6" {
+			t.Fatalf("Retry-After = %q, want 6", got)
 		}
 	}
 	select {
@@ -317,10 +317,31 @@ func TestBlobSlotWaitForStaysWellUnderTheHTTPTimeouts(t *testing.T) {
 		{4 * time.Second, 15 * time.Second, time.Second},
 		{10 * time.Second, 2 * time.Second, 500 * time.Millisecond},
 		{0, 0, defaultBlobSlotWait},
+		{2 * time.Nanosecond, time.Minute, time.Nanosecond},
 	}
 	for _, c := range cases {
 		if got := BlobSlotWaitFor(c.read, c.write); got != c.want {
 			t.Errorf("BlobSlotWaitFor(%v, %v) = %v, want %v", c.read, c.write, got, c.want)
+		}
+	}
+}
+
+func TestBlobTransferBusyRetryAfterKeepsRetriesInsideTheSyncBudget(t *testing.T) {
+	cases := []struct {
+		count  int
+		window time.Duration
+		want   int64
+	}{
+		{10, time.Minute, 6},
+		{100, time.Minute, 2},
+		{5, 15 * time.Minute, 180},
+		{7, time.Minute, 9},
+		{0, time.Minute, 2},
+		{10, 0, 2},
+	}
+	for _, c := range cases {
+		if got := blobTransferBusyRetryAfter(c.count, c.window); got != c.want {
+			t.Errorf("blobTransferBusyRetryAfter(%d, %v) = %d, want %d", c.count, c.window, got, c.want)
 		}
 	}
 }
