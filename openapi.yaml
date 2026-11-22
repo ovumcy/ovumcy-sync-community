@@ -2005,13 +2005,13 @@ components:
         Every blob transfer slot stayed busy for the whole bounded wait (at most a
         quarter of the shorter HTTP read/write timeout, never over 2 seconds).
         No body was parsed and nothing was written. The refusal counts against
-        the per-account sync rate limit; retrying after `Retry-After` seconds
-        keeps a client inside it. Browser
-        clients on an allowed origin can read `Retry-After`: it is listed in
-        `Access-Control-Expose-Headers`.
+        the per-account sync rate limit, which GET, PUT and every device of the
+        account share; `Retry-After` paces retries at that limit's average rate.
+        Browser clients on an allowed origin can read `Retry-After`: it is
+        listed in `Access-Control-Expose-Headers`.
       headers:
         Retry-After:
-          description: Seconds until the caller may retry: SYNC_RATE_LIMIT_WINDOW / SYNC_RATE_LIMIT_COUNT rounded up, at least 2 (6 at the defaults).
+          description: Seconds until the caller may retry, SYNC_RATE_LIMIT_WINDOW / SYNC_RATE_LIMIT_COUNT rounded up and at least 2 (6 at the defaults).
           schema:
             type: string
             example: "6"
@@ -2036,7 +2036,7 @@ components:
         it is listed in `Access-Control-Expose-Headers`.
       headers:
         Retry-After:
-          description: Seconds until the caller may retry (the rest of the request-limit window: at most 900 by default on the credential routes, 60 on the sync and read-state routes; 1 to 900 on a TOTP-budget refusal; see the response description).
+          description: Seconds until the caller may retry (the rest of the request-limit window, at most 900 by default on the credential routes, 60 on the sync and read-state routes; 1 to 900 on a TOTP-budget refusal; see the response description).
           schema:
             type: string
             example: "60"
