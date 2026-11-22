@@ -371,8 +371,11 @@ func TestSecondBlobTransferFromOneAccountIsRefusedAtOnce(t *testing.T) {
 
 		first.body.release()
 		<-first.done
-		if first.response.Code == http.StatusServiceUnavailable {
-			t.Fatalf("PUT %s holding the slot answered 503: %s", firstPath, first.response.Body.String())
+		// The re-key's blob-shaped body fails validation; only a 503 would
+		// mean the holder lost its slot.
+		if firstPath == "/sync/blob" && first.response.Code != http.StatusOK ||
+			first.response.Code == http.StatusServiceUnavailable {
+			t.Fatalf("PUT %s holding the slot answered %d: %s", firstPath, first.response.Code, first.response.Body.String())
 		}
 	}
 
