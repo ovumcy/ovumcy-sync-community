@@ -50,8 +50,11 @@ info:
     body is read or its blob loaded, for at most a quarter of the shorter of the
     server's HTTP read/write timeouts and never over 2 seconds; a transfer still
     waiting then answers `503 blob_transfer_busy` with `Retry-After` (the
-    `BlobTransferBusy` response) and may be retried. A refused wait takes no
-    slot and parses no body, and still counts against the sync rate limit.
+    `BlobTransferBusy` response) and may be retried. An account has at most
+    one of these transfers in progress or waiting: a second one answers the
+    same `503 blob_transfer_busy` at once, without waiting. A refused
+    transfer takes no slot and parses no body, and still counts against the
+    sync rate limit.
 
     Outside the JSON error envelope: an unknown path or a method the path does
     not take gets the standard library's plain-text `404` / `405` (the latter
@@ -1945,7 +1948,7 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
         "503":
-          description: "`totp_not_configured`: the account has TOTP enrolled, the package differs, and the server has no `FIELD_ENCRYPTION_KEY` (fails closed). `blob_transfer_busy`: every blob transfer slot stayed busy for the bounded wait; retry after `Retry-After` seconds (see the `BlobTransferBusy` response)."
+          description: "`totp_not_configured`: the account has TOTP enrolled, the package differs, and the server has no `FIELD_ENCRYPTION_KEY` (fails closed). `blob_transfer_busy`: every blob transfer slot stayed busy for the bounded wait, or another blob transfer of the account is still in progress; retry after `Retry-After` seconds (see the `BlobTransferBusy` response)."
           headers:
             Retry-After:
               description: Sent with `blob_transfer_busy` only, as on the `BlobTransferBusy` response.
@@ -2013,7 +2016,10 @@ components:
     BlobTransferBusy:
       description: |
         Every blob transfer slot stayed busy for the whole bounded wait (at most a
-        quarter of the shorter HTTP read/write timeout, never over 2 seconds).
+        quarter of the shorter HTTP read/write timeout, never over 2 seconds),
+        or, answered at once, another `GET` / `PUT /sync/blob` or
+        `PUT /sync/rekey` of the same account is still in progress or waiting:
+        an account holds at most one slot.
         No body was parsed and nothing was written. The refusal counts against
         the per-account sync rate limit, which GET, PUT and every device of the
         account share; `Retry-After` paces retries at that limit's average rate.
