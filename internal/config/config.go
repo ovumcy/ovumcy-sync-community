@@ -34,9 +34,10 @@ type Config struct {
 	MaxBlobBytes        int
 	AuthRateLimitCount  int
 	AuthRateLimitWindow time.Duration
-	// MaxSessionsPerAccount, from MAX_SESSIONS_PER_ACCOUNT (default 10),
-	// caps an account's live sessions: a login past it revokes the oldest.
-	// At least MAX_DEVICES, so attached devices never evict one another.
+	// MaxSessionsPerAccount, from MAX_SESSIONS_PER_ACCOUNT (default the
+	// larger of 10 and twice MAX_DEVICES), caps an account's live sessions:
+	// a sign-in past it revokes the oldest. Below MAX_DEVICES is refused, as
+	// attached devices would then evict one another on every sign-in.
 	MaxSessionsPerAccount int
 	SyncRateLimitCount    int
 	SyncRateLimitWindow   time.Duration
@@ -150,7 +151,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
-	maxSessionsPerAccount, err := intFromEnv("MAX_SESSIONS_PER_ACCOUNT", 10)
+	// Derived from MAX_DEVICES so an operator who raised it does not fail
+	// validation (and every subcommand) on upgrade.
+	maxSessionsPerAccount, err := intFromEnv("MAX_SESSIONS_PER_ACCOUNT", max(10, 2*maxDevices))
 	if err != nil {
 		return Config{}, err
 	}

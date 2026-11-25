@@ -692,21 +692,6 @@ func (s *AuthService) CreateSessionForUnlapsedManagedAccount(
 	return result, nil
 }
 
-func (s *AuthService) createSession(
-	ctx context.Context,
-	accountID string,
-	now time.Time,
-) (AuthResult, error) {
-	session, result, err := s.newSession(accountID, now)
-	if err != nil {
-		return AuthResult{}, err // codecov:ignore -- newSession fails only on a crypto-primitive error that cannot occur in practice (see its own codecov:ignore annotations).
-	}
-	if _, err := s.store.CreateSession(ctx, session); err != nil {
-		return AuthResult{}, err
-	}
-	return result, nil
-}
-
 // createSessionForVerifiedPassword mints the session only while the stored
 // password hash is still verifiedHash and TOTP is still off; otherwise
 // errLoginStateMoved.

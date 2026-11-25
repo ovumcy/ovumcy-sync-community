@@ -157,6 +157,31 @@ func TestMintPastMaxSessionsNeverRevokesTheFreshSession(t *testing.T) {
 	}
 }
 
+// An expired session holds no slot: a newer expired row (a SESSION_TTL that
+// was lowered) is revoked before an older live one.
+func TestMintPastMaxSessionsRevokesExpiredSessionsFirst(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedGuardAccount(t, store, "guard-account")
+	base := time.Now().UTC().Add(-time.Hour)
+	seedAgedSessions(t, store, "guard-account", "live-", base, 2)
+	expired := guardSession("guard-account", "expired")
+	expired.CreatedAt = base.Add(time.Minute)
+	expired.ExpiresAt = time.Now().UTC().Add(-time.Minute)
+	if _, err := store.CreateSession(ctx, expired); err != nil {
+		t.Fatalf("seed expired session: %v", err)
+	}
+
+	if err := store.CreateSessionForVerifiedPassword(ctx, guardSession("guard-account", "fresh"), "verified-hash", 3); err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+	got := accountSessionHashes(t, store, "guard-account")
+	want := map[string]bool{"live-0": true, "live-1": true, "fresh": true}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("expected the expired session revoked first, kept %v", got)
+	}
+}
+
 func TestMintRefusesANonPositiveMaxSessions(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()

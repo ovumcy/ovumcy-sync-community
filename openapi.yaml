@@ -237,9 +237,9 @@ paths:
         `totp_challenge` instead — the two response shapes are mutually
         exclusive; a session token is never returned alongside a challenge.
         The caller must then complete `POST /auth/totp/challenge`.
-        An account holds at most `MAX_SESSIONS_PER_ACCOUNT` live sessions
-        (default 10): a session minted past it revokes the account's oldest
-        session, whose token then answers 401.
+        A session minted past `MAX_SESSIONS_PER_ACCOUNT` (default the larger
+        of 10 and twice `MAX_DEVICES`) revokes the account's oldest sessions
+        beyond it, whose tokens then answer 401.
       security: []
       requestBody:
         required: true
