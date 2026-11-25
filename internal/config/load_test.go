@@ -18,6 +18,7 @@ var loadEnvVars = []string{
 	"MAX_BLOB_BYTES",
 	"AUTH_RATE_LIMIT_COUNT",
 	"AUTH_RATE_LIMIT_WINDOW",
+	"MAX_SESSIONS_PER_ACCOUNT",
 	"SYNC_RATE_LIMIT_COUNT",
 	"SYNC_RATE_LIMIT_WINDOW",
 	"MANAGED_BRIDGE_TOKEN",
@@ -98,6 +99,9 @@ func TestLoadReturnsDefaultsWhenEnvironmentIsEmpty(t *testing.T) {
 	if cfg.AuthRateLimitWindow != want.AuthRateLimitWindow {
 		t.Errorf("AuthRateLimitWindow = %s, want %s", cfg.AuthRateLimitWindow, want.AuthRateLimitWindow)
 	}
+	if cfg.MaxSessionsPerAccount != 10 {
+		t.Errorf("MaxSessionsPerAccount = %d, want 10", cfg.MaxSessionsPerAccount)
+	}
 	if cfg.SyncRateLimitCount != want.SyncRateLimitCount {
 		t.Errorf("SyncRateLimitCount = %d, want %d", cfg.SyncRateLimitCount, want.SyncRateLimitCount)
 	}
@@ -148,6 +152,7 @@ func TestLoadAppliesEveryEnvOverride(t *testing.T) {
 	t.Setenv("MAX_BLOB_BYTES", "1048576")
 	t.Setenv("AUTH_RATE_LIMIT_COUNT", "20")
 	t.Setenv("AUTH_RATE_LIMIT_WINDOW", "30s")
+	t.Setenv("MAX_SESSIONS_PER_ACCOUNT", "7")
 	t.Setenv("SYNC_RATE_LIMIT_COUNT", "40")
 	t.Setenv("SYNC_RATE_LIMIT_WINDOW", "2m")
 	t.Setenv("MANAGED_BRIDGE_TOKEN", bridgeTokenFixture)
@@ -176,6 +181,9 @@ func TestLoadAppliesEveryEnvOverride(t *testing.T) {
 	}
 	if cfg.MaxDevices != 3 {
 		t.Errorf("MaxDevices = %d, want 3", cfg.MaxDevices)
+	}
+	if cfg.MaxSessionsPerAccount != 7 {
+		t.Errorf("MaxSessionsPerAccount = %d, want 7", cfg.MaxSessionsPerAccount)
 	}
 	if cfg.MaxBlobBytes != 1048576 {
 		t.Errorf("MaxBlobBytes = %d, want 1048576", cfg.MaxBlobBytes)
@@ -253,6 +261,18 @@ func TestLoadSurfacesEveryValidationAndParseError(t *testing.T) {
 			envName: "MAX_DEVICES",
 			envValu: "0",
 			wantErr: "MAX_DEVICES",
+		},
+		{
+			name:    "malformed max sessions per account int",
+			envName: "MAX_SESSIONS_PER_ACCOUNT",
+			envValu: "not-an-int",
+			wantErr: "MAX_SESSIONS_PER_ACCOUNT",
+		},
+		{
+			name:    "max sessions per account below max devices",
+			envName: "MAX_SESSIONS_PER_ACCOUNT",
+			envValu: "4",
+			wantErr: "MAX_SESSIONS_PER_ACCOUNT",
 		},
 		{
 			name:    "malformed max blob bytes int",

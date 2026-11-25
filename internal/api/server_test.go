@@ -1702,6 +1702,9 @@ type serverTestOptions struct {
 	totpKey []byte
 	// blobSlotWait overrides the blob-slot wait bound; zero keeps the default.
 	blobSlotWait time.Duration
+	// maxSessions overrides the per-account session ceiling; zero keeps the
+	// service default.
+	maxSessions int
 }
 
 // newTestStore opens a migrated store and registers its cleanup. Tests pass
@@ -1790,6 +1793,9 @@ func newTestServerWithOptions(t *testing.T, options serverTestOptions) http.Hand
 	}
 
 	authService := services.NewAuthService(store, 24*time.Hour)
+	if options.maxSessions != 0 {
+		authService.SetMaxSessionsPerAccount(options.maxSessions)
+	}
 	syncService := services.NewSyncService(store, services.SyncOptions{
 		MaxDevices:   maxDevices,
 		MaxBlobBytes: maxBlobBytes,

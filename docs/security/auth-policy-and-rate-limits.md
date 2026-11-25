@@ -14,6 +14,7 @@ numbers at their defaults from `internal/config/config.go`. The claims are pinne
 | Read-state budget | 30 x `SYNC_RATE_LIMIT_COUNT` = 300 per 1m (`sessionReadRateLimitMultiplier`) |
 | `MAX_BLOB_BYTES` | 16 MiB (16777216) |
 | `SESSION_TTL` | 720h |
+| `MAX_SESSIONS_PER_ACCOUNT` | 10 live sessions per account, at least `MAX_DEVICES` |
 
 A throttled request gets `429` with `{"error": "rate_limited"}` and `Retry-After` set to
 the seconds left in the spent window, rounded up (`allowUnderLimiter`; at most the limiter's window: 900 by default on the credential routes,
@@ -133,6 +134,7 @@ Notes on the table:
 | TOTP disabled (needs password and current code) | all | `TOTPService.Disable` |
 | Entitlement lapse signal (`active=false`) | all | `ManagedBridgeService.SetAccountLapseSignal` |
 | Logout | the presented session | `AuthService.RevokeSession` |
+| Sign-in past `MAX_SESSIONS_PER_ACCOUNT` (password login, TOTP challenge, managed-bridge session) | the account's oldest sessions beyond the cap, never the one just minted, in the minting transaction | `Store.mintCappedSession` |
 | Account delete | everything for the account (cascade) | `AuthService.DeleteAccount` |
 
 Recovery-code regeneration and TOTP enroll-start leave sessions untouched; the revocation for enrollment

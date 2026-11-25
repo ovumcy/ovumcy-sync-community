@@ -42,9 +42,15 @@ type TOTPChallengeIssuer interface {
 	VerifyAccountCode(ctx context.Context, account models.Account, code string) error
 }
 
+// DefaultMaxSessionsPerAccount is the per-account live-session ceiling
+// (MAX_SESSIONS_PER_ACCOUNT): twice the default MAX_DEVICES, so every device
+// keeps a session with room for re-logins before the oldest is revoked.
+const DefaultMaxSessionsPerAccount = 10
+
 type AuthService struct {
 	store          *db.Store
 	sessionTTL     time.Duration
+	maxSessions    int
 	now            func() time.Time
 	hashPassword   func(string) (string, error)
 	totpChallenges TOTPChallengeIssuer
@@ -91,9 +97,19 @@ func NewAuthService(store *db.Store, sessionTTL time.Duration) *AuthService {
 	return &AuthService{
 		store:        store,
 		sessionTTL:   sessionTTL,
+		maxSessions:  DefaultMaxSessionsPerAccount,
 		now:          time.Now,
 		hashPassword: security.HashPassword,
 	}
+}
+
+// SetMaxSessionsPerAccount sets the live-session ceiling: every login,
+// TOTP-challenge completion and managed-bridge mint past it revokes the
+// account's oldest sessions in the minting transaction. A non-positive value
+// makes every mint fail (db.ErrInvalidMaxSessions); config validation keeps
+// it positive.
+func (s *AuthService) SetMaxSessionsPerAccount(maxSessions int) {
+	s.maxSessions = maxSessions
 }
 
 // AttachTOTPChallengeIssuer wires the TOTP login second-factor flow. When
@@ -667,7 +683,7 @@ func (s *AuthService) CreateSessionForUnlapsedManagedAccount(
 	if err != nil {
 		return AuthResult{}, err // codecov:ignore -- newSession fails only on a crypto-primitive error that cannot occur in practice (see its own codecov:ignore annotations).
 	}
-	if err := s.store.CreateSessionForUnlapsedManagedAccount(ctx, session); err != nil {
+	if err := s.store.CreateSessionForUnlapsedManagedAccount(ctx, session, s.maxSessions); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			return AuthResult{}, ErrManagedAccountLapsed
 		}
@@ -703,7 +719,7 @@ func (s *AuthService) createSessionForVerifiedPassword(
 	if err != nil {
 		return AuthResult{}, err // codecov:ignore -- newSession fails only on a crypto-primitive error that cannot occur in practice (see its own codecov:ignore annotations).
 	}
-	if err := s.store.CreateSessionForVerifiedPassword(ctx, session, verifiedHash); err != nil {
+	if err := s.store.CreateSessionForVerifiedPassword(ctx, session, verifiedHash, s.maxSessions); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			return AuthResult{}, errLoginStateMoved
 		}
@@ -725,7 +741,7 @@ func (s *AuthService) createSessionConsumingChallenge(
 	if err != nil {
 		return AuthResult{}, err // codecov:ignore -- newSession fails only on a crypto-primitive error that cannot occur in practice (see its own codecov:ignore annotations).
 	}
-	if err := s.store.ConsumeTOTPChallengeAndCreateSession(ctx, challengeIDHash, session); err != nil {
+	if err := s.store.ConsumeTOTPChallengeAndCreateSession(ctx, challengeIDHash, session, s.maxSessions); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			return AuthResult{}, ErrTOTPChallengeInvalid
 		}

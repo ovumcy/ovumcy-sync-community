@@ -66,6 +66,13 @@ snapshot.
   lost or written. Accepted: on a host open to
   strangers, `REGISTRATION_ENABLED=false` keeps the accounts that can do this
   to the ones the operator created.
+- **The session cap evicts by age, not by owner.** A successful sign-in is
+  not metered, but the account keeps at most `MAX_SESSIONS_PER_ACCOUNT` live
+  sessions (default 10) and each sign-in past it revokes the oldest. Whoever
+  holds the password can therefore sign the owner's devices out by signing in
+  that many times, and each device has to sign in again. Accepted: the same
+  password already changes the password and revokes every other session, and
+  the cap is what keeps repeated sign-ins from piling up session rows.
 - **Password-guess ceiling and fixed windows.** The login-identifier bucket
   and the shared `stepup:<account>` bucket use the fixed window
   `AUTH_RATE_LIMIT_COUNT` / `AUTH_RATE_LIMIT_WINDOW` (default 5 per 15 minutes),
@@ -256,6 +263,7 @@ on the account's next successful login.
 | --- | --- |
 | Session tokens are opaque; plaintext differs from the stored hash, and `HashToken` is stable SHA-256 hex | `TestTokenHelpersReturnOpaqueValues`, `TestHashTokenIsStableLowerLevelHelper` in [internal/security/security_test.go](internal/security/security_test.go) |
 | Revoked sessions are rejected | `TestAuthServiceRevokesSession` in [internal/services/auth_service_test.go](internal/services/auth_service_test.go); `TestServerRevokesSession` in [internal/api/server_test.go](internal/api/server_test.go) |
+| An account holds at most `MAX_SESSIONS_PER_ACCOUNT` live sessions (default 10, never below `MAX_DEVICES`): every mint — password login, TOTP challenge completion, managed-bridge session — revokes the account's oldest sessions past the cap in the minting transaction, so concurrent sign-ins never overrun it; the fresh session is never the one revoked, the revoked token answers 401, and other accounts' sessions are untouched | `TestMintPastMaxSessionsRevokesTheOldestOfThatAccountOnly`, `TestMintPastMaxSessionsNeverRevokesTheFreshSession`, `TestConcurrentMintsNeverExceedMaxSessions`, `TestMintRefusesANonPositiveMaxSessions` in [internal/db/session_cap_test.go](internal/db/session_cap_test.go); `TestLoginPastMaxSessionsRevokesTheOldestSession` in [internal/api/session_cap_test.go](internal/api/session_cap_test.go) |
 | Empty and expired sessions are rejected | `TestAuthServiceRejectsEmptyAndExpiredSession` in [internal/services/auth_service_test.go](internal/services/auth_service_test.go) |
 | Self-hosted registration creates `mode=self_hosted`, `premium_active=false` accounts | `TestAuthServiceRegisterAndLogin` in [internal/services/auth_service_test.go](internal/services/auth_service_test.go) |
 | Login on a TOTP-enabled account fails closed when the field key is absent — no password-only session | `TestAuthServiceLoginFailsClosedWhenTOTPEnabledButNoIssuer` in [internal/services/auth_service_test.go](internal/services/auth_service_test.go); `TestTOTPNotConfiguredWhenServerHasNoFieldKey` in [internal/api/auth_totp_test.go](internal/api/auth_totp_test.go) |

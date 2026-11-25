@@ -34,14 +34,18 @@ type Config struct {
 	MaxBlobBytes        int
 	AuthRateLimitCount  int
 	AuthRateLimitWindow time.Duration
-	SyncRateLimitCount  int
-	SyncRateLimitWindow time.Duration
-	ManagedBridgeToken  string
-	MetricsEnabled      bool
-	MetricsBearerToken  string
-	AllowedOrigins      []string
-	AllowedHosts        []string
-	TrustedProxyCIDRs   []string
+	// MaxSessionsPerAccount, from MAX_SESSIONS_PER_ACCOUNT (default 10),
+	// caps an account's live sessions: a login past it revokes the oldest.
+	// At least MAX_DEVICES, so attached devices never evict one another.
+	MaxSessionsPerAccount int
+	SyncRateLimitCount    int
+	SyncRateLimitWindow   time.Duration
+	ManagedBridgeToken    string
+	MetricsEnabled        bool
+	MetricsBearerToken    string
+	AllowedOrigins        []string
+	AllowedHosts          []string
+	TrustedProxyCIDRs     []string
 	// RegistrationEnabled, from REGISTRATION_ENABLED (default true), gates
 	// POST /auth/register. A single-user self-hosted server sets it false once
 	// its own account exists, so a public URL does not hand accounts to anyone
@@ -146,6 +150,11 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	maxSessionsPerAccount, err := intFromEnv("MAX_SESSIONS_PER_ACCOUNT", 10)
+	if err != nil {
+		return Config{}, err
+	}
+
 	syncRateLimitCount, err := intFromEnv("SYNC_RATE_LIMIT_COUNT", 10)
 	if err != nil {
 		return Config{}, err
@@ -225,6 +234,7 @@ func Load() (Config, error) {
 		MaxBlobBytes:               maxBlobBytes,
 		AuthRateLimitCount:         authRateLimitCount,
 		AuthRateLimitWindow:        authRateLimitWindow,
+		MaxSessionsPerAccount:      maxSessionsPerAccount,
 		SyncRateLimitCount:         syncRateLimitCount,
 		SyncRateLimitWindow:        syncRateLimitWindow,
 		ManagedBridgeToken:         os.Getenv("MANAGED_BRIDGE_TOKEN"),
@@ -296,6 +306,9 @@ func (c Config) Validate() error {
 	}
 	if c.AuthRateLimitWindow <= 0 {
 		return fmt.Errorf("AUTH_RATE_LIMIT_WINDOW must be positive")
+	}
+	if c.MaxSessionsPerAccount < c.MaxDevices {
+		return fmt.Errorf("MAX_SESSIONS_PER_ACCOUNT must be at least MAX_DEVICES")
 	}
 	if c.SyncRateLimitCount <= 0 {
 		return fmt.Errorf("SYNC_RATE_LIMIT_COUNT must be positive")
