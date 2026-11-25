@@ -96,6 +96,12 @@ func runMigrate(cfg config.Config) error {
 	return nil
 }
 
+func newAuthService(store *db.Store, cfg config.Config) *services.AuthService {
+	authService := services.NewAuthService(store, cfg.SessionTTL)
+	authService.SetMaxSessionsPerAccount(cfg.MaxSessionsPerAccount)
+	return authService
+}
+
 func runServe(cfg config.Config) error {
 	store, err := db.Open(cfg.DBPath)
 	if err != nil {
@@ -117,8 +123,7 @@ func runServe(cfg config.Config) error {
 		return fmt.Errorf("database schema is not initialized; run `ovumcy-sync-community migrate` first")
 	}
 
-	authService := services.NewAuthService(store, cfg.SessionTTL)
-	authService.SetMaxSessionsPerAccount(cfg.MaxSessionsPerAccount)
+	authService := newAuthService(store, cfg)
 	syncService := services.NewSyncService(store, services.SyncOptions{
 		MaxDevices:   cfg.MaxDevices,
 		MaxBlobBytes: cfg.MaxBlobBytes,

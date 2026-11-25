@@ -14,7 +14,7 @@ numbers at their defaults from `internal/config/config.go`. The claims are pinne
 | Read-state budget | 30 x `SYNC_RATE_LIMIT_COUNT` = 300 per 1m (`sessionReadRateLimitMultiplier`) |
 | `MAX_BLOB_BYTES` | 16 MiB (16777216) |
 | `SESSION_TTL` | 720h |
-| `MAX_SESSIONS_PER_ACCOUNT` | 10 live sessions per account, at least `MAX_DEVICES` |
+| `MAX_SESSIONS_PER_ACCOUNT` | the larger of 10 and 2 x `MAX_DEVICES` live sessions per account; startup refuses a value below `MAX_DEVICES` |
 
 A throttled request gets `429` with `{"error": "rate_limited"}` and `Retry-After` set to
 the seconds left in the spent window, rounded up (`allowUnderLimiter`; at most the limiter's window: 900 by default on the credential routes,
@@ -116,7 +116,7 @@ Notes on the table:
 | Request body media type | a request with a body must declare `application/json`, else 415 `unsupported_media_type` before any limiter, so a cross-site `text/plain` POST cannot spend a per-IP bucket | `Server.ServeHTTP` |
 | Request origin | a request of any method whose `Origin` is not in `ALLOWED_ORIGINS` answers 403 `origin_not_allowed` before any limiter, so a cross-site body-less no-cors POST cannot spend a per-IP bucket; a request without `Origin` passes unless its `Sec-Fetch-Site` is `cross-site` or `same-site` (a cross-site no-cors GET), which gets the same 403 except on `/healthz`, `/readyz` and `/metrics` (browsers send `Sec-Fetch-Site` only over HTTPS or to localhost, so over plain HTTP such a GET still reaches the session-lookup bucket) | `Server.ServeHTTP` |
 | Password and recovery-code hashing | bcrypt, cost 12 (`PasswordHashCost`); older lower-cost hashes are re-hashed on the next successful login | `internal/security/password.go`, `AuthService.Login` |
-| Session lifetime | `SESSION_TTL`, default 720h; stored as a hash, never in plaintext | `internal/config/config.go`, `AuthService.createSession` |
+| Session lifetime | `SESSION_TTL`, default 720h; stored as a hash, never in plaintext | `internal/config/config.go`, `AuthService.newSession` |
 | Password-reset token lifetime | 30 minutes, single use (`PasswordResetTokenTTL`) | `internal/services/auth_service.go` |
 | TOTP login challenge lifetime | 5 minutes, single use (`TOTPChallengeTTL`) | `internal/services/totp_service.go` |
 | TOTP failed attempts per challenge | 5, after which the challenge is burnt (`maxTOTPChallengeFailedAttempts`) | `internal/services/totp_service.go` |
@@ -134,7 +134,7 @@ Notes on the table:
 | TOTP disabled (needs password and current code) | all | `TOTPService.Disable` |
 | Entitlement lapse signal (`active=false`) | all | `ManagedBridgeService.SetAccountLapseSignal` |
 | Logout | the presented session | `AuthService.RevokeSession` |
-| Sign-in past `MAX_SESSIONS_PER_ACCOUNT` (password login, TOTP challenge, managed-bridge session) | the account's oldest sessions beyond the cap, never the one just minted, in the minting transaction | `Store.mintCappedSession` |
+| Sign-in past `MAX_SESSIONS_PER_ACCOUNT` (password login, TOTP challenge, managed-bridge session) | the account's sessions beyond the cap, expired ones first, then the oldest by creation (not by last use), never the one just minted, in the minting transaction | `Store.mintCappedSession` |
 | Account delete | everything for the account (cascade) | `AuthService.DeleteAccount` |
 
 Recovery-code regeneration and TOTP enroll-start leave sessions untouched; the revocation for enrollment

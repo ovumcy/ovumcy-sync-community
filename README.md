@@ -112,7 +112,7 @@ go run ./cmd/ovumcy-sync-community serve
 | `MAX_BLOB_BYTES` | `16777216` | Ciphertext size cap (16 MiB) |
 | `AUTH_RATE_LIMIT_COUNT` | `5` | Requests per window, per route, on the credential routes: anonymous auth routes count per client IP, authenticated credential routes (password change, recovery-code regeneration, TOTP, account deletion, and the shared step-up bucket) per account, and `POST /auth/login` also per login identifier across all IPs |
 | `AUTH_RATE_LIMIT_WINDOW` | `15m` | Credential rate-limit window |
-| `MAX_SESSIONS_PER_ACCOUNT` | `10` | Live sessions per account. A sign-in (login, TOTP challenge, managed-bridge session) past it revokes the account's oldest session, whose token then answers `401`. Must be at least `MAX_DEVICES` |
+| `MAX_SESSIONS_PER_ACCOUNT` | larger of `10` and 2 × `MAX_DEVICES` | Live sessions per account. A sign-in (login, TOTP challenge, managed-bridge session) past it revokes the account's oldest sessions beyond it, whose tokens then answer `401`. Must be at least `MAX_DEVICES` |
 | `SYNC_RATE_LIMIT_COUNT` | `10` | Requests per window, per route and account, on `/sync/devices`, `/sync/recovery-key` and `/sync/blob`. `GET /auth/session`, `GET /sync/capabilities`, and `GET /sync/devices` get 30× this, per account |
 | `SYNC_RATE_LIMIT_WINDOW` | `1m` | Sync rate-limit window |
 | `METRICS_ENABLED` | `false` | Enables `GET /metrics` |

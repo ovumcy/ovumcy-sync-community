@@ -951,11 +951,14 @@ func insertSession(ctx context.Context, execer accountExecer, session models.Ses
 var ErrInvalidMaxSessions = errors.New("invalid_max_sessions")
 
 // trimAccountSessionsSQL keeps the minted session plus the account's ?3
-// newest others and deletes the rest. The minted session is excluded by id,
-// so a clock that stepped back can never make the fresh mint the one revoked.
+// newest unexpired others (expired or unreadable-expiry rows go first, as
+// they authenticate nothing) and deletes the rest. The minted session is
+// excluded by id, so a clock that stepped back can never make the fresh mint
+// the one revoked.
 const trimAccountSessionsSQL = `DELETE FROM sessions WHERE rowid IN (
 	SELECT rowid FROM sessions WHERE account_id = ?1 AND id != ?2
-	ORDER BY julianday(created_at) DESC, rowid DESC LIMIT -1 OFFSET ?3)`
+	ORDER BY julianday(expires_at) > julianday(?4) DESC, julianday(created_at) DESC, rowid DESC
+	LIMIT -1 OFFSET ?3)`
 
 // mintCappedSession runs insert (which inserts the session row or reports
 // ErrNotFound) and revokes the account's oldest sessions past maxSessions in
@@ -982,7 +985,7 @@ func (s *Store) mintCappedSession(
 	if err := insert(tx); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, trimAccountSessionsSQL, session.AccountID, session.ID, maxSessions-1); err != nil {
+	if _, err := tx.ExecContext(ctx, trimAccountSessionsSQL, session.AccountID, session.ID, maxSessions-1, session.CreatedAt.UTC().Format(time.RFC3339Nano)); err != nil {
 		return fmt.Errorf("trim account sessions: %w", err) // codecov:ignore -- the trim deletes from the table the insert just wrote in the same transaction; failing it after a successful insert needs a fake driver, the same deviation as the COMMIT branch below.
 	}
 	if err := tx.Commit(); err != nil {

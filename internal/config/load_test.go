@@ -137,6 +137,21 @@ func TestLoadReturnsDefaultsWhenEnvironmentIsEmpty(t *testing.T) {
 	}
 }
 
+// An operator who raised MAX_DEVICES past the fixed default must still start
+// without setting MAX_SESSIONS_PER_ACCOUNT.
+func TestLoadDerivesTheSessionCapFromMaxDevices(t *testing.T) {
+	clearLoadEnv(t)
+	t.Setenv("MAX_DEVICES", "12")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.MaxSessionsPerAccount != 24 {
+		t.Errorf("MaxSessionsPerAccount = %d, want 24", cfg.MaxSessionsPerAccount)
+	}
+}
+
 func TestLoadAppliesEveryEnvOverride(t *testing.T) {
 	clearLoadEnv(t)
 
