@@ -123,7 +123,7 @@ func runServe(cfg config.Config) error {
 		return fmt.Errorf("database schema is not initialized; run `ovumcy-sync-community migrate` first")
 	}
 
-	authService := newAuthService(store, cfg)
+	authService := newAuthService(store, cfg) // codecov:ignore -- process wiring reached only by a full serve; newAuthService itself is covered by TestNewAuthServiceAppliesTheConfiguredSessionCap.
 	syncService := services.NewSyncService(store, services.SyncOptions{
 		MaxDevices:   cfg.MaxDevices,
 		MaxBlobBytes: cfg.MaxBlobBytes,
