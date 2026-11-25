@@ -16,6 +16,7 @@ func TestConfigLoadReturnsDefaults(t *testing.T) {
 	t.Setenv("MAX_BLOB_BYTES", "")
 	t.Setenv("AUTH_RATE_LIMIT_COUNT", "")
 	t.Setenv("AUTH_RATE_LIMIT_WINDOW", "")
+	t.Setenv("MAX_SESSIONS_PER_ACCOUNT", "")
 	t.Setenv("SYNC_RATE_LIMIT_COUNT", "")
 	t.Setenv("SYNC_RATE_LIMIT_WINDOW", "")
 	t.Setenv("METRICS_ENABLED", "")
