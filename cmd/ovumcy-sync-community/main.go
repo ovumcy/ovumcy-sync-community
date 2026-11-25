@@ -118,6 +118,7 @@ func runServe(cfg config.Config) error {
 	}
 
 	authService := services.NewAuthService(store, cfg.SessionTTL)
+	authService.SetMaxSessionsPerAccount(cfg.MaxSessionsPerAccount)
 	syncService := services.NewSyncService(store, services.SyncOptions{
 		MaxDevices:   cfg.MaxDevices,
 		MaxBlobBytes: cfg.MaxBlobBytes,

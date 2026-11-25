@@ -84,7 +84,9 @@ the strength of the phrase and the client KDF, which are client concerns and out
 
 - Mitigation: tokens are random, stored only as hashes, expire after `SESSION_TTL` (default 720 h),
   and are revoked on logout. A password change revokes every session except the current one
-  (`DeleteSessionsForAccountExcept`). A recovery-based reset revokes sessions. Devices can be listed
+  (`DeleteSessionsForAccountExcept`). A recovery-based reset revokes sessions. An account keeps at
+  most `MAX_SESSIONS_PER_ACCOUNT` live sessions (default 10); each sign-in past it revokes the
+  oldest, so an old stolen token also dies once the owner signs in that many times. Devices can be listed
   and removed. Expired rows are erased by the sweep.
 - Residual: a stolen token is valid until expiry or revocation. A session binds to the first device
   it attaches and cannot attach another, so removing that device revokes it; but the device id is

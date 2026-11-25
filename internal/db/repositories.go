@@ -946,27 +946,75 @@ func insertSession(ctx context.Context, execer accountExecer, session models.Ses
 	return nil
 }
 
+// ErrInvalidMaxSessions refuses a session mint whose per-account ceiling is
+// not positive: a zero ceiling would revoke the session it just minted.
+var ErrInvalidMaxSessions = errors.New("invalid_max_sessions")
+
+// trimAccountSessionsSQL keeps the minted session plus the account's ?3
+// newest others and deletes the rest. The minted session is excluded by id,
+// so a clock that stepped back can never make the fresh mint the one revoked.
+const trimAccountSessionsSQL = `DELETE FROM sessions WHERE rowid IN (
+	SELECT rowid FROM sessions WHERE account_id = ?1 AND id != ?2
+	ORDER BY julianday(created_at) DESC, rowid DESC LIMIT -1 OFFSET ?3)`
+
+// mintCappedSession runs insert (which inserts the session row or reports
+// ErrNotFound) and revokes the account's oldest sessions past maxSessions in
+// the same transaction, so concurrent mints serialize on the write lock and
+// never leave more than maxSessions live.
+func (s *Store) mintCappedSession(
+	ctx context.Context,
+	op string,
+	session models.Session,
+	maxSessions int,
+	insert func(tx *sql.Tx) error,
+) error {
+	if maxSessions < 1 {
+		return ErrInvalidMaxSessions
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin %s: %w", op, err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if err := insert(tx); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, trimAccountSessionsSQL, session.AccountID, session.ID, maxSessions-1); err != nil {
+		return fmt.Errorf("trim account sessions: %w", err) // codecov:ignore -- the trim deletes from the table the insert just wrote in the same transaction; failing it after a successful insert needs a fake driver, the same deviation as the COMMIT branch below.
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit %s: %w", op, err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteManagedAccount's COMMIT branch in fault_injection_test.go.
+	}
+	return nil
+}
+
 // CreateSessionForUnlapsedManagedAccount inserts a managed-bridge session only
 // while the account is still a managed account with no entitlement lapse. A
 // lapse that commits first makes it insert nothing (ErrNotFound); one that
 // commits after deletes the session with the rest. Either way no session
-// minted across a lapse survives it.
-func (s *Store) CreateSessionForUnlapsedManagedAccount(ctx context.Context, session models.Session) error {
-	result, err := s.db.ExecContext(
-		ctx,
-		`INSERT INTO sessions (id, account_id, token_hash, created_at, last_seen_at, expires_at)
-		 SELECT ?, id, ?, ?, ?, ? FROM accounts WHERE id = ? AND mode = 'managed' AND lapsed_at IS NULL`,
-		session.ID,
-		session.TokenHash,
-		session.CreatedAt.UTC().Format(time.RFC3339Nano),
-		session.LastSeenAt.UTC().Format(time.RFC3339Nano),
-		session.ExpiresAt.UTC().Format(time.RFC3339Nano),
-		session.AccountID,
-	)
-	if err != nil {
-		return fmt.Errorf("insert session for unlapsed managed account: %w", err)
-	}
-	return requireOneRow(result, "insert session for unlapsed managed account")
+// minted across a lapse survives it. The account's oldest sessions past
+// maxSessions are revoked in the same transaction.
+func (s *Store) CreateSessionForUnlapsedManagedAccount(ctx context.Context, session models.Session, maxSessions int) error {
+	return s.mintCappedSession(ctx, "insert session for unlapsed managed account", session, maxSessions, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO sessions (id, account_id, token_hash, created_at, last_seen_at, expires_at)
+			 SELECT ?, id, ?, ?, ?, ? FROM accounts WHERE id = ? AND mode = 'managed' AND lapsed_at IS NULL`,
+			session.ID,
+			session.TokenHash,
+			session.CreatedAt.UTC().Format(time.RFC3339Nano),
+			session.LastSeenAt.UTC().Format(time.RFC3339Nano),
+			session.ExpiresAt.UTC().Format(time.RFC3339Nano),
+			session.AccountID,
+		)
+		if err != nil {
+			return fmt.Errorf("insert session for unlapsed managed account: %w", err)
+		}
+		return requireOneRow(result, "insert session for unlapsed managed account")
+	})
 }
 
 // CreateSessionForVerifiedPassword inserts a password-only session only while
@@ -974,27 +1022,32 @@ func (s *Store) CreateSessionForUnlapsedManagedAccount(ctx context.Context, sess
 // off. A password change, reset or TOTP enrollment that commits first makes
 // it insert nothing (ErrNotFound); one that commits after deletes the session
 // with the rest. Either way no session minted from the old state survives.
+// The account's oldest sessions past maxSessions are revoked in the same
+// transaction.
 func (s *Store) CreateSessionForVerifiedPassword(
 	ctx context.Context,
 	session models.Session,
 	verifiedHash string,
+	maxSessions int,
 ) error {
-	result, err := s.db.ExecContext(
-		ctx,
-		`INSERT INTO sessions (id, account_id, token_hash, created_at, last_seen_at, expires_at)
-		 SELECT ?, id, ?, ?, ?, ? FROM accounts WHERE id = ? AND password_hash = ? AND totp_enabled = 0`,
-		session.ID,
-		session.TokenHash,
-		session.CreatedAt.UTC().Format(time.RFC3339Nano),
-		session.LastSeenAt.UTC().Format(time.RFC3339Nano),
-		session.ExpiresAt.UTC().Format(time.RFC3339Nano),
-		session.AccountID,
-		verifiedHash,
-	)
-	if err != nil {
-		return fmt.Errorf("insert session for verified password: %w", err)
-	}
-	return requireOneRow(result, "insert session for verified password")
+	return s.mintCappedSession(ctx, "insert session for verified password", session, maxSessions, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO sessions (id, account_id, token_hash, created_at, last_seen_at, expires_at)
+			 SELECT ?, id, ?, ?, ?, ? FROM accounts WHERE id = ? AND password_hash = ? AND totp_enabled = 0`,
+			session.ID,
+			session.TokenHash,
+			session.CreatedAt.UTC().Format(time.RFC3339Nano),
+			session.LastSeenAt.UTC().Format(time.RFC3339Nano),
+			session.ExpiresAt.UTC().Format(time.RFC3339Nano),
+			session.AccountID,
+			verifiedHash,
+		)
+		if err != nil {
+			return fmt.Errorf("insert session for verified password: %w", err)
+		}
+		return requireOneRow(result, "insert session for verified password")
+	})
 }
 
 // CreateTOTPChallengeForVerifiedPassword is the challenge counterpart of
@@ -1050,50 +1103,42 @@ func (s *Store) CreateTOTPChallengeForVerifiedPassword(
 // session in one transaction. The delete must remove exactly one row, so two
 // verifies racing on one challenge yield one session, and a password change
 // or reset that already deleted the account's challenges yields none.
-// ErrNotFound when the challenge is already gone.
+// ErrNotFound when the challenge is already gone. The account's oldest
+// sessions past maxSessions are revoked in the same transaction.
 func (s *Store) ConsumeTOTPChallengeAndCreateSession(
 	ctx context.Context,
 	challengeIDHash string,
 	session models.Session,
+	maxSessions int,
 ) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin consume totp challenge: %w", err)
-	}
-	defer func() {
-		_ = tx.Rollback()
-	}()
+	return s.mintCappedSession(ctx, "consume totp challenge", session, maxSessions, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(
+			ctx,
+			`DELETE FROM totp_challenges WHERE challenge_id_hash = ? AND account_id = ?`,
+			challengeIDHash,
+			session.AccountID,
+		)
+		if err != nil {
+			return fmt.Errorf("consume totp challenge: %w", err)
+		}
+		if err := requireOneRow(result, "consume totp challenge"); err != nil {
+			return err
+		}
 
-	result, err := tx.ExecContext(
-		ctx,
-		`DELETE FROM totp_challenges WHERE challenge_id_hash = ? AND account_id = ?`,
-		challengeIDHash,
-		session.AccountID,
-	)
-	if err != nil {
-		return fmt.Errorf("consume totp challenge: %w", err)
-	}
-	if err := requireOneRow(result, "consume totp challenge"); err != nil {
-		return err
-	}
-
-	if _, err := tx.ExecContext(
-		ctx,
-		`INSERT INTO sessions (id, account_id, token_hash, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		session.ID,
-		session.AccountID,
-		session.TokenHash,
-		session.CreatedAt.UTC().Format(time.RFC3339Nano),
-		session.LastSeenAt.UTC().Format(time.RFC3339Nano),
-		session.ExpiresAt.UTC().Format(time.RFC3339Nano),
-	); err != nil {
-		return fmt.Errorf("insert session for totp challenge: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit consume totp challenge: %w", err) // codecov:ignore -- COMMIT on a transaction whose statements all succeeded needs a fake driver, the same deviation documented for DeleteManagedAccount's COMMIT branch in fault_injection_test.go.
-	}
-	return nil
+		if _, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO sessions (id, account_id, token_hash, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)`,
+			session.ID,
+			session.AccountID,
+			session.TokenHash,
+			session.CreatedAt.UTC().Format(time.RFC3339Nano),
+			session.LastSeenAt.UTC().Format(time.RFC3339Nano),
+			session.ExpiresAt.UTC().Format(time.RFC3339Nano),
+		); err != nil {
+			return fmt.Errorf("insert session for totp challenge: %w", err)
+		}
+		return nil
+	})
 }
 
 func requireOneRow(result sql.Result, op string) error {

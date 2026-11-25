@@ -49,7 +49,7 @@ func TestCreateSessionForVerifiedPasswordRequiresUnchangedHash(t *testing.T) {
 	ctx := context.Background()
 	seedGuardAccount(t, store, "guard-account")
 
-	if err := store.CreateSessionForVerifiedPassword(ctx, guardSession("guard-account", "fresh"), "verified-hash"); err != nil {
+	if err := store.CreateSessionForVerifiedPassword(ctx, guardSession("guard-account", "fresh"), "verified-hash", testMaxSessions); err != nil {
 		t.Fatalf("insert with the current hash: %v", err)
 	}
 	if _, err := store.FindSessionByTokenHash(ctx, "fresh"); err != nil {
@@ -59,13 +59,13 @@ func TestCreateSessionForVerifiedPasswordRequiresUnchangedHash(t *testing.T) {
 	if err := store.UpdateAccountPasswordHash(ctx, "guard-account", "changed-hash"); err != nil {
 		t.Fatalf("change password: %v", err)
 	}
-	if err := store.CreateSessionForVerifiedPassword(ctx, guardSession("guard-account", "stale"), "verified-hash"); !errors.Is(err, ErrNotFound) {
+	if err := store.CreateSessionForVerifiedPassword(ctx, guardSession("guard-account", "stale"), "verified-hash", testMaxSessions); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for a stale hash, got %v", err)
 	}
 	if _, err := store.FindSessionByTokenHash(ctx, "stale"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected no session from a stale hash, got %v", err)
 	}
-	if err := store.CreateSessionForVerifiedPassword(ctx, guardSession("missing", "nobody"), "verified-hash"); !errors.Is(err, ErrNotFound) {
+	if err := store.CreateSessionForVerifiedPassword(ctx, guardSession("missing", "nobody"), "verified-hash", testMaxSessions); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for a missing account, got %v", err)
 	}
 }
@@ -78,7 +78,7 @@ func TestCreateSessionForVerifiedPasswordRefusesAnEnrolledAccount(t *testing.T) 
 		t.Fatalf("enable totp: %v", err)
 	}
 
-	if err := store.CreateSessionForVerifiedPassword(ctx, guardSession("guard-account", "single-factor"), "verified-hash"); !errors.Is(err, ErrNotFound) {
+	if err := store.CreateSessionForVerifiedPassword(ctx, guardSession("guard-account", "single-factor"), "verified-hash", testMaxSessions); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound once TOTP is on, got %v", err)
 	}
 }
@@ -128,13 +128,13 @@ func TestCreateSessionForUnlapsedManagedAccountRefusesALapse(t *testing.T) {
 		t.Fatalf("upsert managed account: %v", err)
 	}
 
-	if err := store.CreateSessionForUnlapsedManagedAccount(ctx, guardSession("managedacct1234", "live")); err != nil {
+	if err := store.CreateSessionForUnlapsedManagedAccount(ctx, guardSession("managedacct1234", "live"), testMaxSessions); err != nil {
 		t.Fatalf("insert on an unlapsed account: %v", err)
 	}
 	if _, err := store.FindSessionByTokenHash(ctx, "live"); err != nil {
 		t.Fatalf("expected the session stored: %v", err)
 	}
-	if err := store.CreateSessionForUnlapsedManagedAccount(ctx, guardSession("managedacct1234", "live")); err == nil || errors.Is(err, ErrNotFound) {
+	if err := store.CreateSessionForUnlapsedManagedAccount(ctx, guardSession("managedacct1234", "live"), testMaxSessions); err == nil || errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected a duplicate token insert to fail as a store error, got %v", err)
 	}
 
@@ -147,7 +147,7 @@ func TestCreateSessionForUnlapsedManagedAccountRefusesALapse(t *testing.T) {
 		{"selfhosted-account", "self-hosted"},
 		{"missing", "nobody"},
 	} {
-		if err := store.CreateSessionForUnlapsedManagedAccount(ctx, guardSession(tc.accountID, tc.hash)); !errors.Is(err, ErrNotFound) {
+		if err := store.CreateSessionForUnlapsedManagedAccount(ctx, guardSession(tc.accountID, tc.hash), testMaxSessions); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("%s: expected ErrNotFound, got %v", tc.accountID, err)
 		}
 		if _, err := store.FindSessionByTokenHash(ctx, tc.hash); !errors.Is(err, ErrNotFound) {
@@ -165,13 +165,13 @@ func TestConsumeTOTPChallengeAndCreateSessionYieldsOneSession(t *testing.T) {
 		t.Fatalf("seed challenge: %v", err)
 	}
 
-	if err := store.ConsumeTOTPChallengeAndCreateSession(ctx, "challenge", guardSession("other-account", "foreign")); !errors.Is(err, ErrNotFound) {
+	if err := store.ConsumeTOTPChallengeAndCreateSession(ctx, "challenge", guardSession("other-account", "foreign"), testMaxSessions); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for another account's challenge, got %v", err)
 	}
-	if err := store.ConsumeTOTPChallengeAndCreateSession(ctx, "challenge", guardSession("guard-account", "first")); err != nil {
+	if err := store.ConsumeTOTPChallengeAndCreateSession(ctx, "challenge", guardSession("guard-account", "first"), testMaxSessions); err != nil {
 		t.Fatalf("first consume: %v", err)
 	}
-	if err := store.ConsumeTOTPChallengeAndCreateSession(ctx, "challenge", guardSession("guard-account", "second")); !errors.Is(err, ErrNotFound) {
+	if err := store.ConsumeTOTPChallengeAndCreateSession(ctx, "challenge", guardSession("guard-account", "second"), testMaxSessions); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound on a consumed challenge, got %v", err)
 	}
 
@@ -201,7 +201,7 @@ func TestConsumeTOTPChallengeAndCreateSessionRollsBackOnInsertFailure(t *testing
 
 	duplicate := guardSession("guard-account", "taken")
 	duplicate.ID = "another-id"
-	if err := store.ConsumeTOTPChallengeAndCreateSession(ctx, "challenge", duplicate); err == nil || errors.Is(err, ErrNotFound) {
+	if err := store.ConsumeTOTPChallengeAndCreateSession(ctx, "challenge", duplicate, testMaxSessions); err == nil || errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected the duplicate token insert to fail, got %v", err)
 	}
 	if _, err := store.FindTOTPChallengeByHash(ctx, "challenge"); err != nil {

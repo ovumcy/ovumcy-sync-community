@@ -237,6 +237,9 @@ paths:
         `totp_challenge` instead — the two response shapes are mutually
         exclusive; a session token is never returned alongside a challenge.
         The caller must then complete `POST /auth/totp/challenge`.
+        An account holds at most `MAX_SESSIONS_PER_ACCOUNT` live sessions
+        (default 10): a session minted past it revokes the account's oldest
+        session, whose token then answers 401.
       security: []
       requestBody:
         required: true
@@ -774,7 +777,8 @@ paths:
       description: |
         Consumes the `totp_challenge.challenge_id` returned by
         `POST /auth/login` plus a current authenticator code, and issues a
-        session on success. Each challenge allows a bounded number of failed
+        session on success; past `MAX_SESSIONS_PER_ACCOUNT` that mint revokes
+        the account's oldest session, as on `POST /auth/login`. Each challenge allows a bounded number of failed
         code attempts before it is burnt and the caller must restart from
         password login. Code attempts also draw the sign-in TOTP budget
         across all challenges: 5 per 15-minute window per client address and
@@ -991,7 +995,8 @@ paths:
         (503) whenever that token is not configured on this server. Provisions
         or reuses a `mode=managed` account for the given opaque
         `account_id` and returns a session for it, without any login/password
-        exchange. A mint never reverses an entitlement lapse: a lapsed
+        exchange. Each mint counts toward `MAX_SESSIONS_PER_ACCOUNT`; past it
+        the account's oldest sync session is revoked. A mint never reverses an entitlement lapse: a lapsed
         account answers 409 until a reactivation signal
         (`POST /managed/accounts/{account_id}/premium` with `active: true`)
         clears the lapse or the account is erased; the next mint then

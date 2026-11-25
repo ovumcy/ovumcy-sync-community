@@ -12,6 +12,7 @@ func validBase() Config {
 		DBPath:                   "./data.sqlite",
 		SessionTTL:               time.Hour,
 		MaxDevices:               1,
+		MaxSessionsPerAccount:    1,
 		MaxBlobBytes:             1,
 		AuthRateLimitCount:       1,
 		AuthRateLimitWindow:      time.Minute,
