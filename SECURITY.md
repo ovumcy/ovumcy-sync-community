@@ -13,7 +13,7 @@ Security fixes are provided for the `main` branch only.
 
 Please report security issues privately.
 
-- Email: `contact@ovumcy.com`
+- Email: `security@ovumcy.app`
 - Subject: `SECURITY: <short summary>`
 - Include: impact, reproduction steps, affected endpoints/files, and suggested fix if available
 
